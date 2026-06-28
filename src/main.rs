@@ -3,6 +3,8 @@ mod landlock;
 mod sandbox;
 
 use clap::{Parser, Subcommand};
+use nix::sys::signal::{kill, Signal};
+use nix::unistd::{fork, ForkResult};
 
 #[derive(Parser)]
 #[command(name = "vajra", about = "A lightweight Linux sandbox for AI agents")]
@@ -22,10 +24,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match cli.command {
         Some(Commands::Launch) => {
+            let gui_pid = match unsafe { fork() }? {
+                ForkResult::Child => {
+                    app::run_gui()?;
+                    std::process::exit(0);
+                }
+                ForkResult::Parent { child } => child,
+            };
+
             let config = sandbox::SandboxConfig {
                 project_dir: std::env::current_dir()?.to_string_lossy().to_string(),
             };
-            sandbox::launch_sandbox(config).map_err(|e| e.into())
+
+            let result = sandbox::launch_sandbox(config);
+            let _ = kill(gui_pid, Signal::SIGTERM);
+            result.map_err(|e| e.into())
         }
         None => {
             app::run_gui()?;
