@@ -25,3 +25,8 @@ vendor/
 # Misc
 *.log
 *.tmp
+
+
+# Added by cargo
+
+/target

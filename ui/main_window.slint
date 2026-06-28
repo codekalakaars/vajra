@@ -1,0 +1,55 @@
+import { VerticalBox, HorizontalBox, Button, LineEdit } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    in-out property <string> env-text: "";
+    in-out property <string> project-dir: "";
+    in-out property <string> status-text: "Ready";
+    callback launch-sandbox();
+    callback quit();
+
+    VerticalBox {
+        spacing: 10px;
+
+        Text {
+            text: "Vajra Sandbox";
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        Text {
+            text: "Directory: " + root.project-dir;
+            font-size: 14px;
+            color: #666;
+        }
+
+        Text {
+            text: "Environment Variables (KEY=VALUE, one per line):";
+            font-size: 14px;
+        }
+
+        LineEdit {
+            text <=> root.env-text;
+            font-size: 14px;
+        }
+
+        Text {
+            text: root.status-text;
+            font-size: 12px;
+            color: #888;
+        }
+
+        HorizontalBox {
+            spacing: 10px;
+
+            Button {
+                text: "Launch Sandbox";
+                clicked => { root.launch-sandbox(); }
+            }
+
+            Button {
+                text: "Quit";
+                clicked => { root.quit(); }
+            }
+        }
+    }
+}
