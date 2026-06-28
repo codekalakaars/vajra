@@ -1,14 +1,12 @@
-use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 
 use nix::mount::{mount, umount, MsFlags};
 use nix::sched::{unshare, CloneFlags};
 use nix::sys::wait::waitpid;
-use nix::unistd::{execve, fork, ForkResult};
+use nix::unistd::{execvp, fork, ForkResult};
 
 pub struct SandboxConfig {
     pub project_dir: String,
-    pub env_vars: HashMap<String, String>,
 }
 
 fn mount_new_proc() -> Result<(), String> {
@@ -36,42 +34,23 @@ fn mount_new_proc() -> Result<(), String> {
 }
 
 pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-
-    unsafe {
-        nix::env::clearenv().map_err(|e| format!("clearenv failed: {}", e))?;
-    }
-
-    for (key, value) in &config.env_vars {
-        unsafe {
-            std::env::set_var(key, value);
-        }
-    }
-
-    crate::landlock::restrict_filesystem(&config.project_dir)?;
-
-    let mut envp: Vec<CString> = Vec::new();
-    for (key, value) in &config.env_vars {
-        let entry =
-            CString::new(format!("{}={}", key, value)).map_err(|_| "Invalid env var".to_string())?;
-        envp.push(entry);
-    }
-    let env_refs: Vec<&CStr> = envp.iter().map(|c| c.as_c_str()).collect();
-
     unshare(CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNS)
         .map_err(|e| format!("unshare failed: {}", e))?;
 
+    mount_new_proc()?;
+
+    crate::landlock::restrict_filesystem(&config.project_dir)?;
+
     match unsafe { fork() }.map_err(|e| format!("fork failed: {}", e))? {
         ForkResult::Child => {
-            mount_new_proc()?;
-
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
             let shell_c = CString::new(shell).map_err(|_| "Invalid shell path".to_string())?;
             let arg_i = CString::new("-i").map_err(|_| "Invalid arg".to_string())?;
             let args = [arg_i.as_c_str()];
 
-            return match execve(&shell_c, &args, &env_refs) {
+            return match execvp(&shell_c, &args) {
                 Ok(_) => unreachable!(),
-                Err(e) => Err(format!("execve failed: {}", e)),
+                Err(e) => Err(format!("execvp failed: {}", e)),
             };
         }
         ForkResult::Parent { child } => match waitpid(child, None)
