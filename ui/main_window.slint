@@ -1,7 +1,6 @@
-import { VerticalBox, HorizontalBox, Button, LineEdit } from "std-widgets.slint";
+import { VerticalBox, HorizontalBox, Button } from "std-widgets.slint";
 
 export component AppWindow inherits Window {
-    in-out property <string> env-text: "";
     in-out property <string> project-dir: "";
     in-out property <string> status-text: "Ready";
     callback launch-sandbox();
@@ -20,16 +19,6 @@ export component AppWindow inherits Window {
             text: "Directory: " + root.project-dir;
             font-size: 14px;
             color: #666;
-        }
-
-        Text {
-            text: "Environment Variables (KEY=VALUE, one per line):";
-            font-size: 14px;
-        }
-
-        LineEdit {
-            text <=> root.env-text;
-            font-size: 14px;
         }
 
         Text {
