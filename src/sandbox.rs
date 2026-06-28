@@ -33,42 +33,9 @@ fn mount_new_proc() -> Result<(), String> {
     Ok(())
 }
 
-fn setup_user_ns() -> Result<(), String> {
-    unshare(CloneFlags::CLONE_NEWUSER)
-        .map_err(|e| format!("user namespace failed: {}", e))?;
-
-    let pid = std::process::id();
-    let uid = nix::unistd::Uid::current().as_raw();
-    let gid = nix::unistd::Gid::current().as_raw();
-
-    let map_err = || "Install uidmap package: sudo apt install uidmap".to_string();
-
-    std::process::Command::new("newuidmap")
-        .arg(pid.to_string())
-        .arg("0")
-        .arg(uid.to_string())
-        .arg("1")
-        .status()
-        .map_err(|_| map_err())?
-        .success()
-        .then_some(())
-        .ok_or_else(map_err)?;
-
-    let _ = std::process::Command::new("newgidmap")
-        .arg(pid.to_string())
-        .arg("0")
-        .arg(gid.to_string())
-        .arg("1")
-        .status();
-
-    Ok(())
-}
-
 pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
-    setup_user_ns()?;
-
     unshare(CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNS)
-        .map_err(|e| format!("ns unshare failed: {}", e))?;
+        .map_err(|e| format!("unshare failed: {}. Try: sudo setcap cap_sys_admin+ep target/debug/vajra", e))?;
 
     mount_new_proc()?;
 
