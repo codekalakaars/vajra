@@ -1,0 +1,27 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build
+dist/
+build/
+target/
+
+# Dependencies
+node_modules/
+vendor/
+.cache/
+
+# Env
+.env
+.env.local
+
+# Misc
+*.log
+*.tmp
