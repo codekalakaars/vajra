@@ -3,7 +3,6 @@ import { VerticalBox, HorizontalBox, Button } from "std-widgets.slint";
 export component AppWindow inherits Window {
     in-out property <string> project-dir: "";
     in-out property <string> status-text: "Ready";
-    callback launch-sandbox();
     callback quit();
 
     VerticalBox {
@@ -22,18 +21,13 @@ export component AppWindow inherits Window {
         }
 
         Text {
-            text: root.status-text;
-            font-size: 12px;
+            text: "Status: " + root.status-text;
+            font-size: 14px;
             color: #888;
         }
 
         HorizontalBox {
             spacing: 10px;
-
-            Button {
-                text: "Launch Sandbox";
-                clicked => { root.launch-sandbox(); }
-            }
 
             Button {
                 text: "Quit";
