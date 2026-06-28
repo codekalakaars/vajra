@@ -45,10 +45,15 @@ pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
         ForkResult::Child => {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
             let shell_c = CString::new(shell).map_err(|_| "Invalid shell path".to_string())?;
+            let shell_name = std::path::Path::new(shell_c.to_str().unwrap_or("bash"))
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("bash");
+            let shell_name_c = CString::new(shell_name).map_err(|_| "Invalid arg".to_string())?;
             let arg_noprofile = CString::new("--noprofile").map_err(|_| "Invalid arg".to_string())?;
             let arg_norc = CString::new("--norc").map_err(|_| "Invalid arg".to_string())?;
             let arg_i = CString::new("-i").map_err(|_| "Invalid arg".to_string())?;
-            let args = [arg_noprofile.as_c_str(), arg_norc.as_c_str(), arg_i.as_c_str()];
+            let args = [shell_name_c.as_c_str(), arg_noprofile.as_c_str(), arg_norc.as_c_str(), arg_i.as_c_str()];
 
             return match execvp(&shell_c, &args) {
                 Ok(_) => unreachable!(),
