@@ -8,19 +8,7 @@ pub fn run_gui() -> Result<(), slint::PlatformError> {
         .to_string_lossy()
         .to_string();
     ui.set_project_dir(dir.into());
-
-    let ui_handle = ui.as_weak();
-    ui.on_launch_sandbox(move || {
-        let ui = ui_handle.unwrap();
-        let config = crate::sandbox::SandboxConfig {
-            project_dir: ui.get_project_dir().to_string(),
-        };
-        ui.set_status_text("Launching sandbox...".into());
-        match crate::sandbox::launch_sandbox(config) {
-            Ok(()) => ui.set_status_text("Sandbox exited".into()),
-            Err(e) => ui.set_status_text(format!("Error: {}", e).into()),
-        }
-    });
+    ui.set_status_text("Running".into());
 
     let ui_handle = ui.as_weak();
     ui.on_quit(move || {
