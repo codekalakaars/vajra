@@ -1,3 +1,4 @@
+pub mod allow;
 pub mod envfile;
 pub mod envpick;
 pub mod landlock;
