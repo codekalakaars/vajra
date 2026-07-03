@@ -40,6 +40,25 @@ fn mount_new_proc() -> Result<(), String> {
     Ok(())
 }
 
+/// Give the sandbox its own empty /tmp so it cannot read other processes'
+/// temp files or tamper with other sockets. Skipped (shared /tmp kept) when
+/// the supervisor socket itself lives in /tmp, i.e. no XDG_RUNTIME_DIR.
+fn mount_private_tmp(sock_path: &Option<String>) -> Result<(), String> {
+    if let Some(sock) = sock_path
+        && sock.starts_with("/tmp/") {
+            eprintln!("vajra: no user runtime dir; keeping host /tmp shared in the sandbox");
+            return Ok(());
+        }
+    mount::<str, str, str, str>(
+        Some("tmpfs"),
+        "/tmp",
+        Some("tmpfs"),
+        MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
+        Some("mode=1777"),
+    )
+    .map_err(|e| format!("mount private /tmp failed: {}", e))
+}
+
 /// Hide each masked file by bind-mounting an empty read-only file over it.
 /// Must run inside the private mount namespace, before Landlock is applied.
 fn mask_env_files(masked: &[PathBuf]) -> Result<(), String> {
@@ -101,6 +120,8 @@ pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
         .map_err(|e| format!("unshare failed: {}. Try: sudo setcap cap_sys_admin+ep target/debug/vajra", e))?;
 
     mount_new_proc()?;
+
+    mount_private_tmp(&config.sock_path)?;
 
     mask_env_files(&config.masked_files)?;
 

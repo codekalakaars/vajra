@@ -9,10 +9,16 @@ use std::sync::{Arc, Mutex};
 /// Separates the app's raw output from the exit-code trailer on the socket.
 pub const TRAILER: u8 = 0x1E;
 
-/// Socket lives in /tmp (rw inside the sandbox) rather than the project dir:
-/// deep project paths would exceed the unix socket path limit (SUN_LEN).
+/// The socket lives in the user runtime dir (/run/user/<uid>), which stays
+/// reachable inside the sandbox after /tmp is made private, and is short
+/// enough for the unix socket path limit (SUN_LEN) — project dirs are not.
+/// Without a runtime dir it falls back to /tmp, and the sandbox then keeps
+/// the host /tmp shared so the socket remains reachable.
 pub fn socket_path() -> PathBuf {
-    std::env::temp_dir().join(format!("vajra-{}.sock", std::process::id()))
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    dir.join(format!("vajra-{}.sock", std::process::id()))
 }
 
 struct RunningApp {
