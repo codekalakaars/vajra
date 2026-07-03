@@ -155,6 +155,15 @@ fn build_clean_env(sock_path: &Option<String>) -> Vec<CString> {
         }
     }
 
+    // Privacy-reducing defaults (e.g. disable telemetry): host value wins if
+    // already set, otherwise apply the default.
+    for (key, default) in crate::allow::AGENT_ENV_DEFAULTS {
+        let value = std::env::var(key).unwrap_or_else(|_| default.to_string());
+        if let Ok(entry) = CString::new(format!("{}={}", key, value)) {
+            env.push(entry);
+        }
+    }
+
     env
 }
 
