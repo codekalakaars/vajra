@@ -1,4 +1,4 @@
-.PHONY: build run
+.PHONY: build run demo
 
 build:
 	cargo build
@@ -7,3 +7,6 @@ build:
 
 run: build
 	./target/debug/vajra launch
+
+demo:
+	./scripts/demo.sh
