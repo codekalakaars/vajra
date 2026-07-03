@@ -55,7 +55,7 @@ is the sample (Enter accepts the detected defaults); choices are saved to
 `.vajra.toml` so later launches go straight in. Then, inside the sandbox:
 
 ```bash
-opencode                  # or any agent — toolchain dirs are auto-allowed
+opencode                  # or `claude` — toolchain + state dirs are auto-allowed
 vajra-run                 # run the app (dev script, falls back to start)
 vajra-run build           # any package.json script
 vajra-run --stop          # stop a running dev server
@@ -91,6 +91,11 @@ credentials (`ANTHROPIC_API_KEY`, `auth.json`, and similar — see
 sandbox, since the agent can't function without them. These are the
 developer's own credentials, not the project's secrets — the `.env` masking
 above is unaffected.
+
+Vajra also sets a few privacy-reducing defaults inside the sandbox unless
+you've already set them yourself (`allow::AGENT_ENV_DEFAULTS`): telemetry and
+error-reporting are disabled by default, since the sandboxed agent doesn't
+need that egress to function.
 
 ## Development
 
