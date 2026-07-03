@@ -31,13 +31,44 @@ pub struct Supervisor {
     running: Arc<Mutex<Option<RunningApp>>>,
 }
 
-fn default_script(project_dir: &Path) -> String {
-    let pkg = std::fs::read_to_string(project_dir.join("package.json")).unwrap_or_default();
-    if pkg.contains("\"dev\"") {
-        "dev".to_string()
-    } else {
-        "start".to_string()
+/// Package manager to run scripts with, detected from the lockfile.
+fn detect_runner(project_dir: &Path) -> &'static str {
+    const LOCKFILES: &[(&str, &str)] = &[
+        ("bun.lockb", "bun"),
+        ("bun.lock", "bun"),
+        ("pnpm-lock.yaml", "pnpm"),
+        ("yarn.lock", "yarn"),
+    ];
+    for (lockfile, runner) in LOCKFILES {
+        if project_dir.join(lockfile).exists() {
+            return runner;
+        }
     }
+    "npm"
+}
+
+/// Script names defined in package.json's "scripts" object.
+fn package_scripts(project_dir: &Path) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(project_dir.join("package.json")) else {
+        return Vec::new();
+    };
+    let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return Vec::new();
+    };
+    pkg.get("scripts")
+        .and_then(|s| s.as_object())
+        .map(|scripts| scripts.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+fn default_script(project_dir: &Path) -> String {
+    let scripts = package_scripts(project_dir);
+    for preferred in ["dev", "start"] {
+        if scripts.iter().any(|s| s == preferred) {
+            return preferred.to_string();
+        }
+    }
+    "start".to_string()
 }
 
 /// Replace every occurrence of a secret value with [REDACTED:<KEY>].
@@ -173,7 +204,8 @@ impl Supervisor {
             _ => Vec::new(),
         };
 
-        let mut cmd = Command::new("npm");
+        let runner = detect_runner(&self.project_dir);
+        let mut cmd = Command::new(runner);
         cmd.arg("run")
             .arg(&script)
             .current_dir(&self.project_dir)
@@ -185,12 +217,12 @@ impl Supervisor {
             cmd.env(key, value);
         }
 
-        let _ = stream.write_all(format!("vajra: running `npm run {}`\n", script).as_bytes());
+        let _ = stream.write_all(format!("vajra: running `{} run {}`\n", runner, script).as_bytes());
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
-                let _ = stream.write_all(format!("vajra: failed to start npm: {}\n", e).as_bytes());
+                let _ = stream.write_all(format!("vajra: failed to start {}: {}\n", runner, e).as_bytes());
                 send_trailer(&mut stream, 1);
                 return;
             }
@@ -296,7 +328,53 @@ pub fn run_client(script: Option<String>, stop: bool) -> Result<i32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::redact;
+    use super::{default_script, detect_runner, package_scripts, redact};
+
+    fn temp_project(files: &[(&str, &str)]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "vajra-sup-test-{}-{}",
+            std::process::id(),
+            files.len()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, content) in files {
+            std::fs::write(dir.join(name), content).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn runner_detected_from_lockfile() {
+        let dir = temp_project(&[("pnpm-lock.yaml", "")]);
+        assert_eq!(detect_runner(&dir), "pnpm");
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let dir = temp_project(&[("yarn.lock", ""), ("x", "")]);
+        assert_eq!(detect_runner(&dir), "yarn");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn runner_defaults_to_npm() {
+        let dir = temp_project(&[]);
+        assert_eq!(detect_runner(&dir), "npm");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn scripts_parsed_from_package_json() {
+        let dir = temp_project(&[(
+            "package.json",
+            r#"{"devDependencies": {"a": "1"}, "scripts": {"build": "x", "start": "y"}}"#,
+        )]);
+        let mut scripts = package_scripts(&dir);
+        scripts.sort();
+        assert_eq!(scripts, vec!["build".to_string(), "start".to_string()]);
+        // "devDependencies" must not be mistaken for a dev script.
+        assert_eq!(default_script(&dir), "start");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn secrets() -> Vec<(String, String)> {
         vec![
