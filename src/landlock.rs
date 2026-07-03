@@ -127,8 +127,36 @@ fn enforce(ruleset_fd: i32) -> Result<(), String> {
     }
 }
 
+/// Access bits the detected kernel ABI can enforce. Rights the kernel does
+/// not know cannot go into a ruleset (it would be rejected), so on older
+/// kernels those operations are left unrestricted rather than failing launch:
+/// ABI 1 (5.13) lacks REFER (cross-directory move/link), ABI 2 (5.19) lacks
+/// TRUNCATE (6.2+).
+fn supported_bits(abi: i32) -> u64 {
+    let mut mask = u64::MAX;
+    if abi < 2 {
+        mask &= !access::REFER;
+    }
+    if abi < 3 {
+        mask &= !access::TRUNCATE;
+    }
+    mask
+}
+
+fn warn_degraded(abi: i32) {
+    if abi < 3 {
+        let missing = if abi < 2 { "file-move and truncate" } else { "truncate" };
+        eprintln!(
+            "vajra: kernel supports Landlock ABI {} only; {} restrictions unavailable",
+            abi, missing
+        );
+    }
+}
+
 pub fn restrict_filesystem(project_dir: &str, extra_rx: &[String]) -> Result<(), String> {
-    let _abi = detect_abi()?;
+    let abi = detect_abi()?;
+    warn_degraded(abi);
+    let supported = supported_bits(abi);
 
     let rw_all = access::EXECUTE
         | access::WRITE_FILE
@@ -145,10 +173,11 @@ pub fn restrict_filesystem(project_dir: &str, extra_rx: &[String]) -> Result<(),
         | access::MAKE_SYM
         | access::REFER
         | access::TRUNCATE;
+    let rw_all = rw_all & supported;
 
     let rx = access::EXECUTE | access::READ_FILE | access::READ_DIR;
 
-    let rw = access::READ_FILE | access::WRITE_FILE | access::READ_DIR | access::REMOVE_DIR | access::REMOVE_FILE | access::MAKE_DIR | access::MAKE_REG | access::TRUNCATE;
+    let rw = (access::READ_FILE | access::WRITE_FILE | access::READ_DIR | access::REMOVE_DIR | access::REMOVE_FILE | access::MAKE_DIR | access::MAKE_REG | access::TRUNCATE) & supported;
 
     let ro = access::READ_FILE | access::READ_DIR;
 
@@ -182,4 +211,31 @@ pub fn restrict_filesystem(project_dir: &str, extra_rx: &[String]) -> Result<(),
     }
 
     enforce(ruleset_fd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn abi1_drops_refer_and_truncate() {
+        let mask = supported_bits(1);
+        assert_eq!(mask & access::REFER, 0);
+        assert_eq!(mask & access::TRUNCATE, 0);
+        assert_ne!(mask & access::READ_FILE, 0);
+        assert_ne!(mask & access::EXECUTE, 0);
+    }
+
+    #[test]
+    fn abi2_drops_truncate_only() {
+        let mask = supported_bits(2);
+        assert_ne!(mask & access::REFER, 0);
+        assert_eq!(mask & access::TRUNCATE, 0);
+    }
+
+    #[test]
+    fn abi3_and_later_keep_everything() {
+        assert_eq!(supported_bits(3), u64::MAX);
+        assert_eq!(supported_bits(7), u64::MAX);
+    }
 }
