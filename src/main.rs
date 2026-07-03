@@ -92,6 +92,12 @@ fn launch(
         println!("vajra: allowing read+write: {}", allowed.rw.join(", "));
     }
 
+    let forwarded_env = allow::present(allow::AGENT_ENV_PASSTHROUGH, |name| std::env::var(name).ok());
+    if !forwarded_env.is_empty() {
+        let names: Vec<&str> = forwarded_env.iter().map(|(k, _)| k.as_str()).collect();
+        println!("vajra: forwarding agent credentials: {}", names.join(", "));
+    }
+
     if let (Some(original), Some(sample)) = (&selection.original, &selection.sample)
         && envfile::ensure_sample(original, sample)? {
             println!("vajra: generated {} from {} keys", sample.display(), original.display());

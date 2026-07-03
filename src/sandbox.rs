@@ -127,6 +127,34 @@ fn build_clean_env(sock_path: &Option<String>) -> Vec<CString> {
     if let Some(sock) = sock_path {
         env.push(CString::new(format!("VAJRA_SOCK={}", sock)).unwrap());
     }
+
+    // Export the XDG base dirs explicitly (host value if set, else the
+    // standard $HOME-relative default) so tools resolving them can't drift
+    // from what we allowlisted via allow::detect_agent_state_dirs.
+    if let Ok(home) = std::env::var("HOME") {
+        for (var, default_suffix) in [
+            ("XDG_DATA_HOME", ".local/share"),
+            ("XDG_CONFIG_HOME", ".config"),
+            ("XDG_CACHE_HOME", ".cache"),
+            ("XDG_STATE_HOME", ".local/state"),
+        ] {
+            let value = std::env::var(var)
+                .unwrap_or_else(|_| format!("{}/{}", home.trim_end_matches('/'), default_suffix));
+            env.push(CString::new(format!("{}={}", var, value)).unwrap());
+        }
+    }
+
+    // The agent's own LLM/tool credentials, distinct from the project's
+    // .env secrets: these belong to the developer's host environment and
+    // must pass through for the agent to function at all.
+    for (key, value) in crate::allow::present(crate::allow::AGENT_ENV_PASSTHROUGH, |name| {
+        std::env::var(name).ok()
+    }) {
+        if let Ok(entry) = CString::new(format!("{}={}", key, value)) {
+            env.push(entry);
+        }
+    }
+
     env
 }
 

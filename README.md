@@ -85,6 +85,13 @@ printing them) — the same limitation CI log masking has. Network access is
 currently unrestricted (agents need their LLM APIs). Review what the agent
 commits.
 
+One deliberate exception to "host env is stripped": the agent's *own* LLM/tool
+credentials (`ANTHROPIC_API_KEY`, `auth.json`, and similar — see
+`allow::AGENT_ENV_PASSTHROUGH` for the full list) are forwarded into the
+sandbox, since the agent can't function without them. These are the
+developer's own credentials, not the project's secrets — the `.env` masking
+above is unaffected.
+
 ## Development
 
 ```bash

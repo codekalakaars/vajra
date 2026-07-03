@@ -66,12 +66,16 @@ pub fn detect_toolchain_dirs() -> Vec<String> {
 }
 
 /// Candidate state dirs a CLI tool might use under a home directory, checked
-/// for existence — only dirs that are actually there get allowed.
+/// for existence — only dirs that are actually there get allowed. Follows
+/// the XDG base dirs (data/config/cache/state) plus the common non-XDG
+/// `~/.<tool>` convention; opencode specifically keeps file locks under
+/// `$XDG_STATE_HOME/opencode`, distinct from its data/config/cache dirs.
 fn candidate_state_dirs(home: &Path, tool: &str) -> Vec<PathBuf> {
     vec![
         home.join(".local/share").join(tool),
         home.join(".config").join(tool),
         home.join(".cache").join(tool),
+        home.join(".local/state").join(tool),
         home.join(format!(".{}", tool)),
     ]
 }
@@ -98,6 +102,80 @@ pub fn detect_agent_state_dirs() -> Vec<String> {
         }
     }
     dirs
+}
+
+/// Env vars carrying an AI agent's *own* credentials or behavior flags —
+/// distinct from a project's `.env` secrets. Sandboxed shells strip the host
+/// environment to protect project secrets, but that also strips the
+/// developer's own LLM API keys, which the agent legitimately needs to
+/// function. This is a bounded, explicit list (not "anything named
+/// *_API_KEY") so passthrough stays a deliberate choice, not a blanket leak
+/// of whatever happens to be in the host shell.
+pub const AGENT_ENV_PASSTHROUGH: &[&str] = &[
+    // opencode / generic agent behavior + auth
+    "OPENCODE_CONFIG",
+    "OPENCODE_CONFIG_DIR",
+    "OPENCODE_CONFIG_CONTENT",
+    "OPENCODE_TUI_CONFIG",
+    "OPENCODE_AUTH_CONTENT",
+    "OPENCODE_MODELS_URL",
+    "OPENCODE_MODELS_PATH",
+    "OPENCODE_DISABLE_AUTOUPDATE",
+    "OPENCODE_DISABLE_MODELS_FETCH",
+    "OPENCODE_DISABLE_PROJECT_CONFIG",
+    "OPENCODE_DISABLE_PRUNE",
+    "OPENCODE_DB",
+    // Common LLM providers
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GROQ_API_KEY",
+    "NVIDIA_API_KEY",
+    "DIGITALOCEAN_ACCESS_TOKEN",
+    // AWS Bedrock
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_ROLE_ARN",
+    // Azure
+    "AZURE_RESOURCE_NAME",
+    "AZURE_COGNITIVE_SERVICES_RESOURCE_NAME",
+    // Google Vertex
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT",
+    "VERTEX_LOCATION",
+    // Cloudflare AI Gateway
+    "CLOUDFLARE_ACCOUNT_ID",
+    "CLOUDFLARE_GATEWAY_ID",
+    "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_API_KEY",
+    // GitLab Duo
+    "GITLAB_TOKEN",
+    "GITLAB_INSTANCE_URL",
+    "GITLAB_AI_GATEWAY_URL",
+    "GITLAB_OAUTH_CLIENT_ID",
+    // Snowflake Cortex
+    "SNOWFLAKE_ACCOUNT",
+    "SNOWFLAKE_CORTEX_TOKEN",
+    "SNOWFLAKE_CORTEX_PAT",
+    // SAP AI Core
+    "AICORE_SERVICE_KEY",
+    "AICORE_DEPLOYMENT_ID",
+    "AICORE_RESOURCE_GROUP",
+];
+
+/// Which of `names` are set in the host environment, as (name, value) pairs.
+/// Takes a lookup function rather than reading `std::env` directly so the
+/// selection logic is unit-testable without touching real process env.
+pub fn present(names: &[&str], get: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
+    names
+        .iter()
+        .filter_map(|name| get(name).map(|value| (name.to_string(), value)))
+        .collect()
 }
 
 fn canonicalize_existing(dir: &str, flag: &str) -> Option<String> {
@@ -170,7 +248,24 @@ mod tests {
         assert!(candidates.contains(&PathBuf::from("/home/u/.local/share/opencode")));
         assert!(candidates.contains(&PathBuf::from("/home/u/.config/opencode")));
         assert!(candidates.contains(&PathBuf::from("/home/u/.cache/opencode")));
+        assert!(candidates.contains(&PathBuf::from("/home/u/.local/state/opencode")));
         assert!(candidates.contains(&PathBuf::from("/home/u/.opencode")));
+    }
+
+    #[test]
+    fn present_returns_only_set_vars() {
+        let names = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "UNSET_VAR"];
+        let get = |name: &str| match name {
+            "ANTHROPIC_API_KEY" => Some("sk-test".to_string()),
+            _ => None,
+        };
+        let found = present(&names, get);
+        assert_eq!(found, vec![("ANTHROPIC_API_KEY".to_string(), "sk-test".to_string())]);
+    }
+
+    #[test]
+    fn present_is_empty_when_nothing_set() {
+        assert!(present(&["ANTHROPIC_API_KEY"], |_| None).is_empty());
     }
 
     #[test]
