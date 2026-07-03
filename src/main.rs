@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use vajra::{allow, envfile, envpick, sandbox, supervisor};
+use vajra::{allow, config, envfile, envpick, sandbox, supervisor};
 
 use clap::{Parser, Subcommand};
 use nix::sys::wait::waitpid;
@@ -27,6 +27,9 @@ enum Commands {
         /// Toolchain dirs (node, npm, opencode, ...) are detected automatically.
         #[arg(long)]
         allow: Vec<String>,
+        /// Re-run the env file picker even if .vajra.toml exists
+        #[arg(long)]
+        reconfigure: bool,
     },
     /// Run the project app via the supervisor (use inside the sandbox)
     Run {
@@ -42,11 +45,38 @@ fn launch(
     env: Option<String>,
     sample: Option<String>,
     allow_flags: Vec<String>,
+    reconfigure: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = std::env::current_dir()?;
 
-    let selection = envpick::select(&project_dir, env, sample)?;
-    let allowed_paths = allow::collect(&allow_flags);
+    let saved = if reconfigure { None } else { config::load(&project_dir)? };
+    let picker_ran = saved.is_none() && (env.is_none() || sample.is_none());
+
+    let (env_choice, sample_choice, mut allow_dirs) = match saved {
+        Some(cfg) => {
+            println!("vajra: using {} (run with --reconfigure to change)", config::FILE_NAME);
+            (env.or(cfg.env), sample.or(cfg.sample), cfg.allow)
+        }
+        None => (env, sample, Vec::new()),
+    };
+    allow_dirs.extend(allow_flags);
+
+    let selection = envpick::select(&project_dir, env_choice, sample_choice)?;
+
+    if picker_ran {
+        let file_name = |p: &std::path::PathBuf| {
+            p.file_name().map(|n| n.to_string_lossy().to_string())
+        };
+        let cfg = config::Config {
+            env: selection.original.as_ref().and_then(&file_name),
+            sample: selection.sample.as_ref().and_then(&file_name),
+            allow: allow_dirs.clone(),
+        };
+        config::save(&project_dir, &cfg)?;
+        println!("vajra: saved choices to {}", config::FILE_NAME);
+    }
+
+    let allowed_paths = allow::collect(&allow_dirs);
     if !allowed_paths.is_empty() {
         println!("vajra: allowing read+execute: {}", allowed_paths.join(", "));
     }
@@ -106,7 +136,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Launch { env, sample, allow } => launch(env, sample, allow),
+        Commands::Launch { env, sample, allow, reconfigure } => {
+            launch(env, sample, allow, reconfigure)
+        }
         Commands::Run { script, stop } => {
             let code = supervisor::run_client(script, stop)?;
             std::process::exit(code);
