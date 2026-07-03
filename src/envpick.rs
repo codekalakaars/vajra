@@ -94,11 +94,10 @@ fn prompt_choice(role: &str, names: &[String], default: Option<&str>) -> Option<
         }
         return default.map(String::from);
     }
-    if let Ok(idx) = input.parse::<usize>() {
-        if idx >= 1 && idx <= names.len() {
+    if let Ok(idx) = input.parse::<usize>()
+        && idx >= 1 && idx <= names.len() {
             return Some(names[idx - 1].clone());
         }
-    }
     // Anything else: treat the input itself as a custom file name.
     Some(input.to_string())
 }
