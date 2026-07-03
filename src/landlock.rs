@@ -153,7 +153,11 @@ fn warn_degraded(abi: i32) {
     }
 }
 
-pub fn restrict_filesystem(project_dir: &str, extra_rx: &[String]) -> Result<(), String> {
+pub fn restrict_filesystem(
+    project_dir: &str,
+    extra_rx: &[String],
+    extra_rw: &[String],
+) -> Result<(), String> {
     let abi = detect_abi()?;
     warn_degraded(abi);
     let supported = supported_bits(abi);
@@ -204,6 +208,12 @@ pub fn restrict_filesystem(project_dir: &str, extra_rx: &[String]) -> Result<(),
     // Toolchain and user-allowed dirs (--allow): read+execute only.
     for dir in extra_rx {
         add_path_rule(ruleset_fd, dir, rx)?;
+    }
+
+    // Agent state dirs and user-allowed dirs (--allow-rw): read+write, no
+    // execute — these hold logs, auth tokens, and session history, not binaries.
+    for dir in extra_rw {
+        add_path_rule(ruleset_fd, dir, rw)?;
     }
 
     unsafe {

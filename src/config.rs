@@ -17,6 +17,9 @@ pub struct Config {
     /// Extra read+execute dirs, same meaning as repeated --allow flags.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
+    /// Extra read+write dirs, same meaning as repeated --allow-rw flags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_rw: Vec<String>,
 }
 
 fn path_in(project_dir: &Path) -> PathBuf {
@@ -59,6 +62,7 @@ mod tests {
             env: Some(".env".into()),
             sample: Some(".sample.env".into()),
             allow: vec!["/opt/tools".into()],
+            allow_rw: vec!["/opt/state".into()],
         };
         save(&dir, &config).unwrap();
         assert_eq!(load(&dir).unwrap(), Some(config));
@@ -87,5 +91,6 @@ mod tests {
         let config: Config = toml::from_str("env = \".env\"").unwrap();
         assert_eq!(config.env.as_deref(), Some(".env"));
         assert!(config.allow.is_empty());
+        assert!(config.allow_rw.is_empty());
     }
 }

@@ -331,10 +331,13 @@ mod tests {
     use super::{default_script, detect_runner, package_scripts, redact};
 
     fn temp_project(files: &[(&str, &str)]) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
             "vajra-sup-test-{}-{}",
             std::process::id(),
-            files.len()
+            unique
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
