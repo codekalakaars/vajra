@@ -81,12 +81,31 @@ fn create_ruleset(handled: u64) -> Result<i32, String> {
     }
 }
 
+/// Directory-only rights: the kernel rejects a rule on a non-directory
+/// target if any of these are present (EINVAL) — e.g. READ_DIR makes no
+/// sense on a regular file like an allowlisted single config file.
+const DIR_ONLY_ACCESS: u64 = access::READ_DIR
+    | access::REMOVE_DIR
+    | access::REMOVE_FILE
+    | access::MAKE_CHAR
+    | access::MAKE_DIR
+    | access::MAKE_REG
+    | access::MAKE_SOCK
+    | access::MAKE_FIFO
+    | access::MAKE_BLOCK
+    | access::MAKE_SYM
+    | access::REFER;
+
 fn add_path_rule(ruleset_fd: i32, path: &str, allowed: u64) -> Result<(), String> {
     let cpath = CString::new(path).map_err(|_| "Invalid path")?;
     let fd = unsafe { libc::open(cpath.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
     if fd < 0 {
         return Err(format!("Failed to open path '{}'", path));
     }
+
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    let is_dir = unsafe { libc::fstat(fd, &mut stat) } == 0 && (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
+    let allowed = if is_dir { allowed } else { allowed & !DIR_ONLY_ACCESS };
 
     let attr = LandlockPathBeneathAttr {
         allowed_access: allowed,
