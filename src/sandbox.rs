@@ -80,11 +80,10 @@ fn build_clean_env(sock_path: &Option<String>) -> Vec<CString> {
         if let Ok(mut val) = std::env::var(key) {
             if key == "PATH" {
                 // Make the sibling vajra-run client resolvable inside the sandbox.
-                if let Ok(exe) = std::fs::read_link("/proc/self/exe") {
-                    if let Some(dir) = exe.parent().and_then(|d| d.to_str()) {
+                if let Ok(exe) = std::fs::read_link("/proc/self/exe")
+                    && let Some(dir) = exe.parent().and_then(|d| d.to_str()) {
                         val = format!("{}:{}", dir, val);
                     }
-                }
             }
             env.push(CString::new(format!("{}={}", key, val)).unwrap());
         }
@@ -126,10 +125,10 @@ pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
             let env = build_clean_env(&config.sock_path);
             let env_refs: Vec<&std::ffi::CStr> = env.iter().map(|e| e.as_c_str()).collect();
 
-            return match execve(&shell_c, &args, &env_refs) {
+            match execve(&shell_c, &args, &env_refs) {
                 Ok(_) => unreachable!(),
                 Err(e) => Err(format!("execve failed: {}", e)),
-            };
+            }
         }
         ForkResult::Parent { child } => match waitpid(child, None)
             .map_err(|e| format!("waitpid failed: {}", e))?

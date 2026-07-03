@@ -164,11 +164,10 @@ pub fn restrict_filesystem(project_dir: &str) -> Result<(), String> {
 
     // Allow executing the sibling vajra-run client from inside the sandbox
     // even when the install dir lives outside the paths above.
-    if let Ok(exe) = std::fs::read_link("/proc/self/exe") {
-        if let Some(dir) = exe.parent().and_then(|d| d.to_str()) {
+    if let Ok(exe) = std::fs::read_link("/proc/self/exe")
+        && let Some(dir) = exe.parent().and_then(|d| d.to_str()) {
             let _ = add_path_rule(ruleset_fd, dir, rx);
         }
-    }
 
     unsafe {
         libc::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
