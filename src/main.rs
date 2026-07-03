@@ -39,11 +39,10 @@ fn launch(env: Option<String>, sample: Option<String>) -> Result<(), Box<dyn std
 
     let selection = envpick::select(&project_dir, env, sample)?;
 
-    if let (Some(original), Some(sample)) = (&selection.original, &selection.sample) {
-        if envfile::ensure_sample(original, sample)? {
+    if let (Some(original), Some(sample)) = (&selection.original, &selection.sample)
+        && envfile::ensure_sample(original, sample)? {
             println!("vajra: generated {} from {} keys", sample.display(), original.display());
         }
-    }
 
     let sup = Arc::new(supervisor::Supervisor::new(
         project_dir.clone(),
