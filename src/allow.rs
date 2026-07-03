@@ -80,6 +80,37 @@ fn candidate_state_dirs(home: &Path, tool: &str) -> Vec<PathBuf> {
     ]
 }
 
+/// Single files some tools keep directly in `$HOME`, outside their main
+/// state directory — e.g. Claude Code's `~/.claude.json` holds MCP server
+/// config and OAuth cache, separate from `~/.claude/`.
+const EXTRA_STATE_FILES: &[(&str, &str)] = &[("claude", ".claude.json")];
+
+/// Env var a tool respects to relocate its entire state dir away from the
+/// default `$HOME/.<tool>` convention.
+const CONFIG_DIR_OVERRIDE_ENV: &[(&str, &str)] = &[("claude", "CLAUDE_CONFIG_DIR")];
+
+fn extra_state_file(home: &Path, tool: &str) -> Option<PathBuf> {
+    EXTRA_STATE_FILES
+        .iter()
+        .find(|(t, _)| *t == tool)
+        .map(|(_, file)| home.join(file))
+}
+
+fn config_dir_override(tool: &str, get: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    CONFIG_DIR_OVERRIDE_ENV
+        .iter()
+        .find(|(t, _)| *t == tool)
+        .and_then(|(_, var)| get(var))
+        .map(PathBuf::from)
+}
+
+fn push_unique(dirs: &mut Vec<String>, path: &Path) {
+    let s = path.to_string_lossy().to_string();
+    if !dirs.contains(&s) {
+        dirs.push(s);
+    }
+}
+
 /// Auto-detect writable state dirs for AI agents found on PATH (logs, auth,
 /// session history) — these need read+write, not execute.
 pub fn detect_agent_state_dirs() -> Vec<String> {
@@ -92,13 +123,19 @@ pub fn detect_agent_state_dirs() -> Vec<String> {
             continue;
         }
         for candidate in candidate_state_dirs(&home, tool) {
-            if !candidate.is_dir() {
-                continue;
+            if candidate.is_dir() {
+                push_unique(&mut dirs, &candidate);
             }
-            let path = candidate.to_string_lossy().to_string();
-            if !dirs.contains(&path) {
-                dirs.push(path);
-            }
+        }
+        if let Some(file) = extra_state_file(&home, tool)
+            && file.is_file()
+        {
+            push_unique(&mut dirs, &file);
+        }
+        if let Some(dir) = config_dir_override(tool, |name| std::env::var(name).ok())
+            && dir.is_dir()
+        {
+            push_unique(&mut dirs, &dir);
         }
     }
     dirs
@@ -151,6 +188,23 @@ pub const AGENT_ENV_PASSTHROUGH: &[&str] = &[
     "OPENCODE_DISABLE_PROJECT_CONFIG",
     "OPENCODE_DISABLE_PRUNE",
     "OPENCODE_DB",
+    // Claude Code behavior + auth
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    // Network (generic: proxies and custom CA bundles, useful to any agent)
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "NODE_EXTRA_CA_CERTS",
     // Common LLM providers
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
@@ -192,6 +246,17 @@ pub const AGENT_ENV_PASSTHROUGH: &[&str] = &[
     "AICORE_SERVICE_KEY",
     "AICORE_DEPLOYMENT_ID",
     "AICORE_RESOURCE_GROUP",
+];
+
+/// Privacy-reducing defaults applied inside the sandbox unless the user has
+/// already set one explicitly on the host. These cut off telemetry/error-
+/// reporting egress to endpoints Anthropic doesn't publish exact addresses
+/// for (Sentry, a GCS feedback bucket) — the sandboxed agent doesn't need
+/// them to function, so there's no reason to open that egress by default.
+pub const AGENT_ENV_DEFAULTS: &[(&str, &str)] = &[
+    ("DISABLE_TELEMETRY", "1"),
+    ("DISABLE_ERROR_REPORTING", "1"),
+    ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1"),
 ];
 
 /// Which of `names` are set in the host environment, as (name, value) pairs.
@@ -326,6 +391,25 @@ mod tests {
         assert!(existing[0].ends_with(".gitconfig"));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn extra_state_file_maps_claude_json() {
+        let home = Path::new("/home/u");
+        assert_eq!(extra_state_file(home, "claude"), Some(PathBuf::from("/home/u/.claude.json")));
+        assert_eq!(extra_state_file(home, "opencode"), None);
+    }
+
+    #[test]
+    fn config_dir_override_reads_mapped_env_var() {
+        let get = |name: &str| (name == "CLAUDE_CONFIG_DIR").then(|| "/custom/claude".to_string());
+        assert_eq!(config_dir_override("claude", get), Some(PathBuf::from("/custom/claude")));
+        assert_eq!(config_dir_override("opencode", get), None);
+    }
+
+    #[test]
+    fn config_dir_override_none_when_unset() {
+        assert_eq!(config_dir_override("claude", |_| None), None);
     }
 
     #[test]
