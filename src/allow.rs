@@ -104,6 +104,32 @@ pub fn detect_agent_state_dirs() -> Vec<String> {
     dirs
 }
 
+/// git config paths worth exposing read-only so git works inside the sandbox
+/// (coding agents run `git status`/`log`/`commit`, and opencode specifically
+/// resolves its per-project session id via `git rev-parse`, which git refuses
+/// to run at all — "detected dubious ownership" — unless a `safe.directory`
+/// exception in a *readable* config file covers the repo). Deliberately
+/// excludes `~/.git-credentials`: plaintext stored tokens are more sensitive
+/// than an API key, so that one stays opt-in via `--allow`.
+fn git_config_candidates(home: &Path, config_home: &Path) -> Vec<PathBuf> {
+    vec![home.join(".gitconfig"), config_home.join("git")]
+}
+
+pub fn detect_git_config_paths() -> Vec<String> {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+
+    git_config_candidates(&home, &config_home)
+        .into_iter()
+        .filter(|p| p.exists())
+        .map(|p| p.to_string_lossy().to_string())
+        .collect()
+}
+
 /// Env vars carrying an AI agent's *own* credentials or behavior flags —
 /// distinct from a project's `.env` secrets. Sandboxed shells strip the host
 /// environment to protect project secrets, but that also strips the
@@ -193,6 +219,7 @@ fn canonicalize_existing(dir: &str, flag: &str) -> Option<String> {
 /// within each list, existing paths only.
 pub fn collect(user_allowed: &[String], user_allowed_rw: &[String]) -> AllowedPaths {
     let mut rx = detect_toolchain_dirs();
+    rx.extend(detect_git_config_paths());
     for dir in user_allowed {
         if let Some(canonical) = canonicalize_existing(dir, "--allow")
             && !rx.contains(&canonical)
@@ -266,6 +293,39 @@ mod tests {
     #[test]
     fn present_is_empty_when_nothing_set() {
         assert!(present(&["ANTHROPIC_API_KEY"], |_| None).is_empty());
+    }
+
+    #[test]
+    fn git_config_candidates_cover_gitconfig_and_xdg_git_dir() {
+        let home = Path::new("/home/u");
+        let config_home = Path::new("/home/u/.config");
+        let candidates = git_config_candidates(home, config_home);
+        assert!(candidates.contains(&PathBuf::from("/home/u/.gitconfig")));
+        assert!(candidates.contains(&PathBuf::from("/home/u/.config/git")));
+    }
+
+    #[test]
+    fn git_config_candidates_exclude_credentials_file() {
+        let home = Path::new("/home/u");
+        let config_home = Path::new("/home/u/.config");
+        let candidates = git_config_candidates(home, config_home);
+        assert!(!candidates.iter().any(|p| p.ends_with(".git-credentials")));
+    }
+
+    #[test]
+    fn only_existing_git_config_candidates_are_allowed() {
+        let dir = std::env::temp_dir().join(format!("vajra-gitcfg-test-{}", std::process::id()));
+        let home = dir.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".gitconfig"), "[user]\n").unwrap();
+        // $XDG_CONFIG_HOME/git intentionally not created.
+
+        let candidates = git_config_candidates(&home, &home.join(".config"));
+        let existing: Vec<_> = candidates.iter().filter(|p| p.exists()).collect();
+        assert_eq!(existing.len(), 1);
+        assert!(existing[0].ends_with(".gitconfig"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
