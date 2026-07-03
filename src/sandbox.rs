@@ -12,6 +12,8 @@ pub struct SandboxConfig {
     pub masked_files: Vec<PathBuf>,
     /// Path to the supervisor's run socket, exported as VAJRA_SOCK.
     pub sock_path: Option<String>,
+    /// Extra read+execute dirs (toolchains, --allow flags).
+    pub allowed_paths: Vec<String>,
 }
 
 fn mount_new_proc() -> Result<(), String> {
@@ -102,7 +104,7 @@ pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
 
     mask_env_files(&config.masked_files)?;
 
-    crate::landlock::restrict_filesystem(&config.project_dir)?;
+    crate::landlock::restrict_filesystem(&config.project_dir, &config.allowed_paths)?;
 
     match unsafe { fork() }.map_err(|e| format!("fork failed: {}", e))? {
         ForkResult::Child => {

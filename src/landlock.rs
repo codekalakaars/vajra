@@ -127,7 +127,7 @@ fn enforce(ruleset_fd: i32) -> Result<(), String> {
     }
 }
 
-pub fn restrict_filesystem(project_dir: &str) -> Result<(), String> {
+pub fn restrict_filesystem(project_dir: &str, extra_rx: &[String]) -> Result<(), String> {
     let _abi = detect_abi()?;
 
     let rw_all = access::EXECUTE
@@ -159,6 +159,9 @@ pub fn restrict_filesystem(project_dir: &str) -> Result<(), String> {
     add_path_rule(ruleset_fd, "/lib", rx)?;
     add_path_rule(ruleset_fd, "/lib64", rx)?;
     add_path_rule(ruleset_fd, "/proc", ro)?;
+    // System config: OpenSSL config, CA certs, resolv.conf, timezone data.
+    // Read-only; root-only files inside stay protected by file permissions.
+    add_path_rule(ruleset_fd, "/etc", ro)?;
     add_path_rule(ruleset_fd, "/dev", rw)?;
     add_path_rule(ruleset_fd, "/tmp", rw)?;
 
@@ -168,6 +171,11 @@ pub fn restrict_filesystem(project_dir: &str) -> Result<(), String> {
         && let Some(dir) = exe.parent().and_then(|d| d.to_str()) {
             let _ = add_path_rule(ruleset_fd, dir, rx);
         }
+
+    // Toolchain and user-allowed dirs (--allow): read+execute only.
+    for dir in extra_rx {
+        add_path_rule(ruleset_fd, dir, rx)?;
+    }
 
     unsafe {
         libc::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);

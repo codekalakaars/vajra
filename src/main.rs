@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use vajra::{envfile, envpick, sandbox, supervisor};
+use vajra::{allow, envfile, envpick, sandbox, supervisor};
 
 use clap::{Parser, Subcommand};
 use nix::sys::wait::waitpid;
@@ -23,6 +23,10 @@ enum Commands {
         /// Sample env file left visible to the agent (skips the picker)
         #[arg(long)]
         sample: Option<String>,
+        /// Extra directory the sandbox may read+execute (repeatable).
+        /// Toolchain dirs (node, npm, opencode, ...) are detected automatically.
+        #[arg(long)]
+        allow: Vec<String>,
     },
     /// Run the project app via the supervisor (use inside the sandbox)
     Run {
@@ -34,10 +38,18 @@ enum Commands {
     },
 }
 
-fn launch(env: Option<String>, sample: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+fn launch(
+    env: Option<String>,
+    sample: Option<String>,
+    allow_flags: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = std::env::current_dir()?;
 
     let selection = envpick::select(&project_dir, env, sample)?;
+    let allowed_paths = allow::collect(&allow_flags);
+    if !allowed_paths.is_empty() {
+        println!("vajra: allowing read+execute: {}", allowed_paths.join(", "));
+    }
 
     if let (Some(original), Some(sample)) = (&selection.original, &selection.sample)
         && envfile::ensure_sample(original, sample)? {
@@ -58,6 +70,7 @@ fn launch(env: Option<String>, sample: Option<String>) -> Result<(), Box<dyn std
                 project_dir: project_dir.to_string_lossy().to_string(),
                 masked_files: selection.masked,
                 sock_path: Some(sock_path.to_string_lossy().to_string()),
+                allowed_paths,
             };
             let code = match sandbox::launch_sandbox(config) {
                 Ok(()) => 0,
@@ -93,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Launch { env, sample } => launch(env, sample),
+        Commands::Launch { env, sample, allow } => launch(env, sample, allow),
         Commands::Run { script, stop } => {
             let code = supervisor::run_client(script, stop)?;
             std::process::exit(code);
