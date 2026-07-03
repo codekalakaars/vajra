@@ -1,4 +1,4 @@
-.PHONY: build run demo
+.PHONY: build run demo install
 
 build:
 	cargo build
@@ -10,3 +10,10 @@ run: build
 
 demo:
 	./scripts/demo.sh
+
+# vajra needs CAP_SYS_ADMIN for namespaces; vajra-run must stay uncapped
+# (the kernel refuses to exec setcap binaries under NO_NEW_PRIVS).
+install:
+	cargo build --release
+	sudo install -m755 target/release/vajra target/release/vajra-run /usr/local/bin/
+	sudo setcap cap_sys_admin+ep /usr/local/bin/vajra
