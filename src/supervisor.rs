@@ -1,5 +1,4 @@
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::fd::OwnedFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -32,6 +31,44 @@ fn default_script(project_dir: &Path) -> String {
         "dev".to_string()
     } else {
         "start".to_string()
+    }
+}
+
+/// Replace every occurrence of a secret value with [REDACTED:<KEY>].
+/// Values shorter than 4 chars are skipped: they are too common in ordinary
+/// output to match reliably and too weak to matter.
+fn redact(line: &str, secrets: &[(String, String)]) -> String {
+    let mut out = line.to_string();
+    for (key, value) in secrets {
+        if value.len() >= 4 && out.contains(value.as_str()) {
+            out = out.replace(value.as_str(), &format!("[REDACTED:{}]", key));
+        }
+    }
+    out
+}
+
+/// Copy app output to the client line by line, scrubbing secret values.
+/// Line-buffering also prevents a secret from slipping through split across
+/// two read chunks.
+fn pump_redacted(
+    pipe: Box<dyn Read + Send>,
+    sink: Arc<Mutex<UnixStream>>,
+    secrets: Arc<Vec<(String, String)>>,
+) {
+    let mut reader = BufReader::new(pipe);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let line = redact(&String::from_utf8_lossy(&buf), &secrets);
+                let mut sink = sink.lock().unwrap();
+                if sink.write_all(line.as_bytes()).is_err() {
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -130,19 +167,15 @@ impl Supervisor {
             _ => Vec::new(),
         };
 
-        let out = match (stream.try_clone(), stream.try_clone()) {
-            (Ok(o), Ok(e)) => (o, e),
-            _ => return,
-        };
         let mut cmd = Command::new("npm");
         cmd.arg("run")
             .arg(&script)
             .current_dir(&self.project_dir)
             .stdin(Stdio::null())
-            .stdout(Stdio::from(OwnedFd::from(out.0)))
-            .stderr(Stdio::from(OwnedFd::from(out.1)))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .process_group(0);
-        for (key, value) in env_vars {
+        for (key, value) in &env_vars {
             cmd.env(key, value);
         }
 
@@ -156,6 +189,26 @@ impl Supervisor {
                 return;
             }
         };
+
+        // The app's output never reaches the sandbox directly: it is pumped
+        // through the supervisor, which redacts secret values first.
+        let secrets = Arc::new(env_vars);
+        let sink = Arc::new(Mutex::new(match stream.try_clone() {
+            Ok(s) => s,
+            Err(_) => return,
+        }));
+        let pumps: Vec<_> = [
+            child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
+            child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|pipe| {
+            let sink = Arc::clone(&sink);
+            let secrets = Arc::clone(&secrets);
+            std::thread::spawn(move || pump_redacted(pipe, sink, secrets))
+        })
+        .collect();
         let pgid = child.id() as i32;
         *self.running.lock().unwrap() = Some(RunningApp { pgid });
 
@@ -181,6 +234,9 @@ impl Supervisor {
         }
 
         let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(1);
+        for pump in pumps {
+            let _ = pump.join();
+        }
         done.store(true, Ordering::SeqCst);
         self.running.lock().unwrap().take();
         send_trailer(&mut stream, code);
@@ -230,4 +286,46 @@ pub fn run_client(script: Option<String>, stop: bool) -> Result<i32, String> {
 
     let code = String::from_utf8_lossy(&trailer).trim().parse::<i32>().unwrap_or(1);
     Ok(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact;
+
+    fn secrets() -> Vec<(String, String)> {
+        vec![
+            ("SECRET".into(), "hunter2".into()),
+            ("API_KEY".into(), "sk-abc123def".into()),
+            ("PORT".into(), "80".into()),
+        ]
+    }
+
+    #[test]
+    fn redacts_secret_values() {
+        let line = "connecting with token sk-abc123def and password hunter2\n";
+        assert_eq!(
+            redact(line, &secrets()),
+            "connecting with token [REDACTED:API_KEY] and password [REDACTED:SECRET]\n"
+        );
+    }
+
+    #[test]
+    fn skips_short_values() {
+        // "80" is too short to redact; matching it would mangle ordinary output.
+        assert_eq!(redact("listening on port 80\n", &secrets()), "listening on port 80\n");
+    }
+
+    #[test]
+    fn redacts_repeated_occurrences() {
+        assert_eq!(
+            redact("hunter2 hunter2", &secrets()),
+            "[REDACTED:SECRET] [REDACTED:SECRET]"
+        );
+    }
+
+    #[test]
+    fn leaves_clean_lines_untouched(){
+        let line = "server started on :3000\n";
+        assert_eq!(redact(line, &secrets()), line);
+    }
 }
