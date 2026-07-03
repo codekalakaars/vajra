@@ -27,6 +27,11 @@ enum Commands {
         /// Toolchain dirs (node, npm, opencode, ...) are detected automatically.
         #[arg(long)]
         allow: Vec<String>,
+        /// Extra directory the sandbox may read+write (repeatable).
+        /// Agent state dirs (opencode/claude/codex logs, auth, ...) are
+        /// detected automatically under $HOME.
+        #[arg(long = "allow-rw")]
+        allow_rw: Vec<String>,
         /// Re-run the env file picker even if .vajra.toml exists
         #[arg(long)]
         reconfigure: bool,
@@ -45,6 +50,7 @@ fn launch(
     env: Option<String>,
     sample: Option<String>,
     allow_flags: Vec<String>,
+    allow_rw_flags: Vec<String>,
     reconfigure: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = std::env::current_dir()?;
@@ -52,14 +58,15 @@ fn launch(
     let saved = if reconfigure { None } else { config::load(&project_dir)? };
     let picker_ran = saved.is_none() && (env.is_none() || sample.is_none());
 
-    let (env_choice, sample_choice, mut allow_dirs) = match saved {
+    let (env_choice, sample_choice, mut allow_dirs, mut allow_rw_dirs) = match saved {
         Some(cfg) => {
             println!("vajra: using {} (run with --reconfigure to change)", config::FILE_NAME);
-            (env.or(cfg.env), sample.or(cfg.sample), cfg.allow)
+            (env.or(cfg.env), sample.or(cfg.sample), cfg.allow, cfg.allow_rw)
         }
-        None => (env, sample, Vec::new()),
+        None => (env, sample, Vec::new(), Vec::new()),
     };
     allow_dirs.extend(allow_flags);
+    allow_rw_dirs.extend(allow_rw_flags);
 
     let selection = envpick::select(&project_dir, env_choice, sample_choice)?;
 
@@ -71,14 +78,18 @@ fn launch(
             env: selection.original.as_ref().and_then(&file_name),
             sample: selection.sample.as_ref().and_then(&file_name),
             allow: allow_dirs.clone(),
+            allow_rw: allow_rw_dirs.clone(),
         };
         config::save(&project_dir, &cfg)?;
         println!("vajra: saved choices to {}", config::FILE_NAME);
     }
 
-    let allowed_paths = allow::collect(&allow_dirs);
-    if !allowed_paths.is_empty() {
-        println!("vajra: allowing read+execute: {}", allowed_paths.join(", "));
+    let allowed = allow::collect(&allow_dirs, &allow_rw_dirs);
+    if !allowed.rx.is_empty() {
+        println!("vajra: allowing read+execute: {}", allowed.rx.join(", "));
+    }
+    if !allowed.rw.is_empty() {
+        println!("vajra: allowing read+write: {}", allowed.rw.join(", "));
     }
 
     if let (Some(original), Some(sample)) = (&selection.original, &selection.sample)
@@ -100,7 +111,8 @@ fn launch(
                 project_dir: project_dir.to_string_lossy().to_string(),
                 masked_files: selection.masked,
                 sock_path: Some(sock_path.to_string_lossy().to_string()),
-                allowed_paths,
+                allowed_paths: allowed.rx,
+                allowed_rw_paths: allowed.rw,
             };
             let code = match sandbox::launch_sandbox(config) {
                 Ok(()) => 0,
@@ -136,8 +148,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Launch { env, sample, allow, reconfigure } => {
-            launch(env, sample, allow, reconfigure)
+        Commands::Launch { env, sample, allow, allow_rw, reconfigure } => {
+            launch(env, sample, allow, allow_rw, reconfigure)
         }
         Commands::Run { script, stop } => {
             let code = supervisor::run_client(script, stop)?;
