@@ -14,6 +14,8 @@ pub struct SandboxConfig {
     pub sock_path: Option<String>,
     /// Extra read+execute dirs (toolchains, --allow flags).
     pub allowed_paths: Vec<String>,
+    /// Extra read+write dirs (agent state, --allow-rw flags).
+    pub allowed_rw_paths: Vec<String>,
 }
 
 fn mount_new_proc() -> Result<(), String> {
@@ -95,9 +97,22 @@ fn mask_env_files(masked: &[PathBuf]) -> Result<(), String> {
 
 /// Minimal environment for the sandboxed shell: host env vars are stripped,
 /// only these pass through (plus VAJRA_SOCK for the run client).
+/// TERM_PROGRAM/TERM_PROGRAM_VERSION are display metadata (which terminal
+/// emulator is hosting the shell) rather than secrets, and terminals like
+/// Warp use them to detect their own subshells and re-enable integrations
+/// (autosuggestions, blocks) once the shell sources the rc file we provide.
 fn build_clean_env(sock_path: &Option<String>) -> Vec<CString> {
     let mut env = Vec::new();
-    for key in ["PATH", "HOME", "TERM", "SHELL", "LANG", "USER"] {
+    for key in [
+        "PATH",
+        "HOME",
+        "TERM",
+        "SHELL",
+        "LANG",
+        "USER",
+        "TERM_PROGRAM",
+        "TERM_PROGRAM_VERSION",
+    ] {
         if let Ok(mut val) = std::env::var(key) {
             if key == "PATH" {
                 // Make the sibling vajra-run client resolvable inside the sandbox.
@@ -115,6 +130,37 @@ fn build_clean_env(sock_path: &Option<String>) -> Vec<CString> {
     env
 }
 
+/// Bash rc content for the sandboxed shell: a distinct prompt so it's
+/// obvious the shell is sandboxed, plus Warp's documented "warpify" hook so
+/// Warp's subshell integration (autosuggestions, command blocks) re-attaches
+/// to this shell. Harmless no-op in any other terminal since it's gated on
+/// TERM_PROGRAM.
+const SANDBOX_RC: &str = r#"PS1='[vajra] \w \$ '
+if [ "$TERM_PROGRAM" = "WarpTerminal" ]; then
+    printf '\eP$f{"hook": "SourcedRcFileForWarp", "value": { "shell": "bash" }}\x9c'
+fi
+"#;
+
+/// Write the sandbox rc file into the (already private) /tmp and return the
+/// bash args to use it, falling back to --norc if it can't be written.
+fn shell_rc_args(shell_name: &str) -> Vec<CString> {
+    let rc_path = format!("/tmp/.vajra-rc-{}", std::process::id());
+    let use_rc = std::fs::write(&rc_path, SANDBOX_RC).is_ok();
+
+    let mut args = vec![
+        CString::new(shell_name).unwrap(),
+        CString::new("--noprofile").unwrap(),
+    ];
+    if use_rc {
+        args.push(CString::new("--rcfile").unwrap());
+        args.push(CString::new(rc_path).unwrap());
+    } else {
+        args.push(CString::new("--norc").unwrap());
+    }
+    args.push(CString::new("-i").unwrap());
+    args
+}
+
 pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
     unshare(CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNS)
         .map_err(|e| format!("unshare failed: {}. Try: sudo setcap cap_sys_admin+ep target/debug/vajra", e))?;
@@ -125,7 +171,11 @@ pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
 
     mask_env_files(&config.masked_files)?;
 
-    crate::landlock::restrict_filesystem(&config.project_dir, &config.allowed_paths)?;
+    crate::landlock::restrict_filesystem(
+        &config.project_dir,
+        &config.allowed_paths,
+        &config.allowed_rw_paths,
+    )?;
 
     match unsafe { fork() }.map_err(|e| format!("fork failed: {}", e))? {
         ForkResult::Child => {
@@ -135,20 +185,12 @@ pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or("bash");
-            let shell_name_c = CString::new(shell_name).map_err(|_| "Invalid arg".to_string())?;
-            let arg_noprofile = CString::new("--noprofile").map_err(|_| "Invalid arg".to_string())?;
-            let arg_norc = CString::new("--norc").map_err(|_| "Invalid arg".to_string())?;
-            let arg_i = CString::new("-i").map_err(|_| "Invalid arg".to_string())?;
-            let args = [
-                shell_name_c.as_c_str(),
-                arg_noprofile.as_c_str(),
-                arg_norc.as_c_str(),
-                arg_i.as_c_str(),
-            ];
+            let args = shell_rc_args(shell_name);
+            let arg_refs: Vec<&std::ffi::CStr> = args.iter().map(|a| a.as_c_str()).collect();
             let env = build_clean_env(&config.sock_path);
             let env_refs: Vec<&std::ffi::CStr> = env.iter().map(|e| e.as_c_str()).collect();
 
-            match execve(&shell_c, &args, &env_refs) {
+            match execve(&shell_c, &arg_refs, &env_refs) {
                 Ok(_) => unreachable!(),
                 Err(e) => Err(format!("execve failed: {}", e)),
             }
