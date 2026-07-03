@@ -21,6 +21,9 @@ vendor/
 # Env
 .env
 .env.local
+# demo app ships a fake .env on purpose; its generated sample stays out
+!examples/demo-app/.env
+examples/demo-app/.sample.env
 
 # Misc
 *.log
