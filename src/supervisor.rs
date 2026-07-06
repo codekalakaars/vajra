@@ -164,7 +164,11 @@ impl Supervisor {
         let request = line.trim();
 
         if request == "stop" {
-            let msg = if self.stop_app() { "stopped\n" } else { "no app running\n" };
+            let msg = if self.stop_app() {
+                "stopped\n"
+            } else {
+                "no app running\n"
+            };
             let _ = stream.write_all(msg.as_bytes());
             send_trailer(&mut stream, 0);
             return;
@@ -187,7 +191,8 @@ impl Supervisor {
         };
 
         if self.running.lock().unwrap().is_some() {
-            let _ = stream.write_all(b"vajra: an app is already running (use `vajra run --stop` first)\n");
+            let _ = stream
+                .write_all(b"vajra: an app is already running (use `vajra run --stop` first)\n");
             send_trailer(&mut stream, 1);
             return;
         }
@@ -217,12 +222,14 @@ impl Supervisor {
             cmd.env(key, value);
         }
 
-        let _ = stream.write_all(format!("vajra: running `{} run {}`\n", runner, script).as_bytes());
+        let _ =
+            stream.write_all(format!("vajra: running `{} run {}`\n", runner, script).as_bytes());
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
-                let _ = stream.write_all(format!("vajra: failed to start {}: {}\n", runner, e).as_bytes());
+                let _ = stream
+                    .write_all(format!("vajra: failed to start {}: {}\n", runner, e).as_bytes());
                 send_trailer(&mut stream, 1);
                 return;
             }
@@ -236,8 +243,14 @@ impl Supervisor {
             Err(_) => return,
         }));
         let pumps: Vec<_> = [
-            child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
-            child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>),
+            child
+                .stdout
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+            child
+                .stderr
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
         ]
         .into_iter()
         .flatten()
@@ -283,10 +296,11 @@ impl Supervisor {
 
 /// Client side of the protocol: used by `vajra run` inside the sandbox.
 pub fn run_client(script: Option<String>, stop: bool) -> Result<i32, String> {
-    let sock = std::env::var("VAJRA_SOCK")
-        .map_err(|_| "VAJRA_SOCK is not set — `vajra run` only works inside a `vajra launch` shell".to_string())?;
-    let mut stream =
-        UnixStream::connect(&sock).map_err(|e| format!("Failed to connect to supervisor at {}: {}", sock, e))?;
+    let sock = std::env::var("VAJRA_SOCK").map_err(|_| {
+        "VAJRA_SOCK is not set — `vajra run` only works inside a `vajra launch` shell".to_string()
+    })?;
+    let mut stream = UnixStream::connect(&sock)
+        .map_err(|e| format!("Failed to connect to supervisor at {}: {}", sock, e))?;
 
     let request = if stop {
         "stop\n".to_string()
@@ -305,7 +319,9 @@ pub fn run_client(script: Option<String>, stop: bool) -> Result<i32, String> {
     let mut trailer = Vec::new();
     let mut in_trailer = false;
     loop {
-        let n = stream.read(&mut buf).map_err(|e| format!("Read failed: {}", e))?;
+        let n = stream
+            .read(&mut buf)
+            .map_err(|e| format!("Read failed: {}", e))?;
         if n == 0 {
             break;
         }
@@ -322,7 +338,10 @@ pub fn run_client(script: Option<String>, stop: bool) -> Result<i32, String> {
         let _ = stdout.flush();
     }
 
-    let code = String::from_utf8_lossy(&trailer).trim().parse::<i32>().unwrap_or(1);
+    let code = String::from_utf8_lossy(&trailer)
+        .trim()
+        .parse::<i32>()
+        .unwrap_or(1);
     Ok(code)
 }
 
@@ -334,11 +353,8 @@ mod tests {
         use std::sync::atomic::{AtomicU32, Ordering};
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "vajra-sup-test-{}-{}",
-            std::process::id(),
-            unique
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("vajra-sup-test-{}-{}", std::process::id(), unique));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         for (name, content) in files {
@@ -399,7 +415,10 @@ mod tests {
     #[test]
     fn skips_short_values() {
         // "80" is too short to redact; matching it would mangle ordinary output.
-        assert_eq!(redact("listening on port 80\n", &secrets()), "listening on port 80\n");
+        assert_eq!(
+            redact("listening on port 80\n", &secrets()),
+            "listening on port 80\n"
+        );
     }
 
     #[test]
@@ -411,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn leaves_clean_lines_untouched(){
+    fn leaves_clean_lines_untouched() {
         let line = "server started on :3000\n";
         assert_eq!(redact(line, &secrets()), line);
     }

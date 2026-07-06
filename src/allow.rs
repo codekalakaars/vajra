@@ -51,9 +51,13 @@ fn covered_by_defaults(dir: &Path) -> bool {
 pub fn detect_toolchain_dirs() -> Vec<String> {
     let mut dirs = Vec::new();
     for tool in AUTO_TOOLS {
-        let Some(found) = find_on_path(tool) else { continue };
+        let Some(found) = find_on_path(tool) else {
+            continue;
+        };
         let resolved = std::fs::canonicalize(&found).unwrap_or(found);
-        let Some(prefix) = install_prefix(&resolved) else { continue };
+        let Some(prefix) = install_prefix(&resolved) else {
+            continue;
+        };
         if covered_by_defaults(&prefix) {
             continue;
         }
@@ -352,7 +356,10 @@ mod tests {
             _ => None,
         };
         let found = present(&names, get);
-        assert_eq!(found, vec![("ANTHROPIC_API_KEY".to_string(), "sk-test".to_string())]);
+        assert_eq!(
+            found,
+            vec![("ANTHROPIC_API_KEY".to_string(), "sk-test".to_string())]
+        );
     }
 
     #[test]
@@ -396,14 +403,20 @@ mod tests {
     #[test]
     fn extra_state_file_maps_claude_json() {
         let home = Path::new("/home/u");
-        assert_eq!(extra_state_file(home, "claude"), Some(PathBuf::from("/home/u/.claude.json")));
+        assert_eq!(
+            extra_state_file(home, "claude"),
+            Some(PathBuf::from("/home/u/.claude.json"))
+        );
         assert_eq!(extra_state_file(home, "opencode"), None);
     }
 
     #[test]
     fn config_dir_override_reads_mapped_env_var() {
         let get = |name: &str| (name == "CLAUDE_CONFIG_DIR").then(|| "/custom/claude".to_string());
-        assert_eq!(config_dir_override("claude", get), Some(PathBuf::from("/custom/claude")));
+        assert_eq!(
+            config_dir_override("claude", get),
+            Some(PathBuf::from("/custom/claude"))
+        );
         assert_eq!(config_dir_override("opencode", get), None);
     }
 

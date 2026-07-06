@@ -70,7 +70,8 @@ vajra --version
 ```
 
 Flags: `--env <file>` / `--sample <file>` (skip the picker), `--allow <dir>`
-(extra read+execute dir, repeatable), `--reconfigure` (re-run the picker).
+(extra read+execute dir, repeatable), `--reconfigure` (re-run the picker),
+`--dry-run` (show what would happen without launching).
 
 Edit your real `.env` normally from outside the sandbox — the supervisor
 re-reads it on every `vajra-run`. bun / pnpm / yarn are detected from the
