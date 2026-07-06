@@ -80,6 +80,65 @@ sudo setcap cap_sys_admin+ep target/debug/vajra
 - **Inspect allowed paths**: Use `--allow` and `--allow-rw` flags to grant
   additional access if your app needs it
 
+## Integration Tests
+
+Vajra uses a two-tier integration testing approach:
+
+### Tier 1: Automated Tests (CI)
+
+These tests run automatically in CI and don't require special capabilities:
+
+```bash
+# Run all tests (unit + integration)
+cargo test
+
+# Run only integration tests
+cargo test --test integration_tests
+```
+
+**What they test:**
+- Supervisor protocol communication
+- CLI commands (`status`, `validate`, `--dry-run`)
+- Configuration validation
+- Dry-run summary output
+
+### Tier 2: Capability Tests (Manual)
+
+These tests require `CAP_SYS_ADMIN` and are marked with `#[ignore]`:
+
+```bash
+# Run capability-required tests locally
+cargo test -- --ignored
+```
+
+**What they test:**
+- Full sandbox launch with namespace isolation
+- Environment file masking inside sandbox
+- Landlock filesystem restrictions
+
+### Manual End-to-End Test
+
+For comprehensive manual testing, use the integration test script:
+
+```bash
+# Build with capabilities
+make build
+
+# Run manual integration test
+./scripts/integration-test.sh
+```
+
+This script:
+1. Validates the demo app configuration
+2. Tests dry-run launch
+3. Checks status outside sandbox
+4. Launches an interactive sandbox for manual verification
+
+**When to run:**
+- Before submitting PRs that modify sandbox behavior
+- When debugging namespace/mount/Landlock issues
+- To verify end-to-end functionality after major changes
+
 ## Commit Convention
 
 This project follows **Conventional Commits**:
