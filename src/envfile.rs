@@ -66,7 +66,10 @@ mod tests {
     #[test]
     fn parses_basic_pairs() {
         let vars = parse("FOO=bar\nBAZ=qux");
-        assert_eq!(vars, vec![("FOO".into(), "bar".into()), ("BAZ".into(), "qux".into())]);
+        assert_eq!(
+            vars,
+            vec![("FOO".into(), "bar".into()), ("BAZ".into(), "qux".into())]
+        );
     }
 
     #[test]
@@ -80,7 +83,10 @@ mod tests {
         let vars = parse("export FOO=\"bar baz\"\nBAR='single'\n");
         assert_eq!(
             vars,
-            vec![("FOO".into(), "bar baz".into()), ("BAR".into(), "single".into())]
+            vec![
+                ("FOO".into(), "bar baz".into()),
+                ("BAR".into(), "single".into())
+            ]
         );
     }
 

@@ -121,6 +121,38 @@ Breaking changes use `!` before the colon: `feat!: drop Windows 10 support`
 - Follow existing conventions in the codebase
 - Run the formatter before committing
 
+### Pre-commit Hooks
+
+This project uses [pre-commit](https://pre-commit.com/) to automatically run
+formatting, linting, and tests before each commit.
+
+**Install pre-commit:**
+
+```bash
+pip install pre-commit
+# or
+pipx install pre-commit
+```
+
+**Install the git hooks:**
+
+```bash
+pre-commit install
+```
+
+This will run `cargo fmt`, `cargo clippy`, and `cargo test` automatically on
+every commit. You can also run all hooks manually:
+
+```bash
+pre-commit run --all-files
+```
+
+To skip hooks for a specific commit (not recommended):
+
+```bash
+git commit --no-verify
+```
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under [Apache 2.0](LICENSE).

@@ -1,10 +1,10 @@
 use std::ffi::CString;
 use std::path::PathBuf;
 
-use nix::mount::{mount, umount, MsFlags};
-use nix::sched::{unshare, CloneFlags};
+use nix::mount::{MsFlags, mount, umount};
+use nix::sched::{CloneFlags, unshare};
 use nix::sys::wait::waitpid;
-use nix::unistd::{execve, fork, ForkResult};
+use nix::unistd::{ForkResult, execve, fork};
 
 pub struct SandboxConfig {
     pub project_dir: String,
@@ -47,10 +47,11 @@ fn mount_new_proc() -> Result<(), String> {
 /// the supervisor socket itself lives in /tmp, i.e. no XDG_RUNTIME_DIR.
 fn mount_private_tmp(sock_path: &Option<String>) -> Result<(), String> {
     if let Some(sock) = sock_path
-        && sock.starts_with("/tmp/") {
-            eprintln!("vajra: no user runtime dir; keeping host /tmp shared in the sandbox");
-            return Ok(());
-        }
+        && sock.starts_with("/tmp/")
+    {
+        eprintln!("vajra: no user runtime dir; keeping host /tmp shared in the sandbox");
+        return Ok(());
+    }
     mount::<str, str, str, str>(
         Some("tmpfs"),
         "/tmp",
@@ -144,9 +145,10 @@ fn build_clean_env(sock_path: &Option<String>) -> Vec<CString> {
             if key == "PATH" {
                 // Make the sibling vajra-run client resolvable inside the sandbox.
                 if let Ok(exe) = std::fs::read_link("/proc/self/exe")
-                    && let Some(dir) = exe.parent().and_then(|d| d.to_str()) {
-                        val = format!("{}:{}", dir, val);
-                    }
+                    && let Some(dir) = exe.parent().and_then(|d| d.to_str())
+                {
+                    val = format!("{}:{}", dir, val);
+                }
             }
             env.push(CString::new(format!("{}={}", key, val)).unwrap());
         }
@@ -226,8 +228,12 @@ fn shell_rc_args(shell_name: &str) -> Vec<CString> {
 }
 
 pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
-    unshare(CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNS)
-        .map_err(|e| format!("unshare failed: {}. Try: sudo setcap cap_sys_admin+ep target/debug/vajra", e))?;
+    unshare(CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNS).map_err(|e| {
+        format!(
+            "unshare failed: {}. Try: sudo setcap cap_sys_admin+ep target/debug/vajra",
+            e
+        )
+    })?;
 
     mount_new_proc()?;
 
@@ -244,7 +250,8 @@ pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
     match unsafe { fork() }.map_err(|e| format!("fork failed: {}", e))? {
         ForkResult::Child => {
             let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
-            let shell_c = CString::new(shell.clone()).map_err(|_| "Invalid shell path".to_string())?;
+            let shell_c =
+                CString::new(shell.clone()).map_err(|_| "Invalid shell path".to_string())?;
             let shell_name = std::path::Path::new(&shell)
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -259,18 +266,18 @@ pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
                 Err(e) => Err(format!("execve failed: {}", e)),
             }
         }
-        ForkResult::Parent { child } => match waitpid(child, None)
-            .map_err(|e| format!("waitpid failed: {}", e))?
-        {
-            nix::sys::wait::WaitStatus::Exited(_, 0) => Ok(()),
-            nix::sys::wait::WaitStatus::Exited(_, code) => {
-                Err(format!("Sandbox exited with code {}", code))
+        ForkResult::Parent { child } => {
+            match waitpid(child, None).map_err(|e| format!("waitpid failed: {}", e))? {
+                nix::sys::wait::WaitStatus::Exited(_, 0) => Ok(()),
+                nix::sys::wait::WaitStatus::Exited(_, code) => {
+                    Err(format!("Sandbox exited with code {}", code))
+                }
+                nix::sys::wait::WaitStatus::Signaled(_, sig, _) => {
+                    Err(format!("Sandbox killed by signal {:?}", sig))
+                }
+                _ => Ok(()),
             }
-            nix::sys::wait::WaitStatus::Signaled(_, sig, _) => {
-                Err(format!("Sandbox killed by signal {:?}", sig))
-            }
-            _ => Ok(()),
-        },
+        }
     }
 }
 
