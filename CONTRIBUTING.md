@@ -2,8 +2,83 @@
 
 ## Getting Started
 
-- Prerequisites (TBD once stack is chosen)
-- `git clone`, install deps, run dev server
+### Prerequisites
+
+- **Rust toolchain** (stable): Install via [rustup](https://rustup.rs/)
+- **Linux kernel 5.13+** with Landlock support (6.2+ recommended)
+- **sudo access**: Required for `setcap` to grant namespace capabilities
+- **Node.js** (optional): For testing with the demo app
+
+### Build and Test
+
+```bash
+# Build debug binary and set capabilities
+make build
+
+# Run tests
+cargo test
+
+# Run linter (must pass with zero warnings)
+cargo clippy --all-targets -- -D warnings
+
+# Format code
+cargo fmt
+```
+
+### Try the Demo
+
+```bash
+make build
+cd examples/demo-app
+../../target/debug/vajra launch
+```
+
+## Development Workflow
+
+### Testing Changes Locally
+
+After making code changes:
+
+```bash
+# Rebuild (required after every change)
+make build
+
+# Run tests to verify nothing broke
+cargo test
+
+# Check for linting issues
+cargo clippy --all-targets -- -D warnings
+```
+
+### Verifying Capabilities
+
+The `vajra` binary needs `CAP_SYS_ADMIN` to create namespaces. This capability
+is lost every time you rebuild, which is why `make build` runs `setcap` after
+compilation.
+
+To check if capabilities are set:
+
+```bash
+getcap target/debug/vajra
+# Should show: target/debug/vajra cap_sys_admin=ep
+```
+
+If missing, run `make build` again or manually:
+
+```bash
+sudo setcap cap_sys_admin+ep target/debug/vajra
+```
+
+### Common Debugging Tips
+
+- **Kernel support**: Verify with `uname -r` (need 5.13+) and check
+  `/sys/kernel/security/landlock/` exists
+- **Test without sandbox**: Run your app normally first to ensure it works
+  before testing under vajra
+- **Check socket communication**: The supervisor socket lives in
+  `$XDG_RUNTIME_DIR` (usually `/run/user/$UID/`) as `vajra-<pid>.sock`
+- **Inspect allowed paths**: Use `--allow` and `--allow-rw` flags to grant
+  additional access if your app needs it
 
 ## Commit Convention
 

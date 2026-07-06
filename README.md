@@ -63,6 +63,12 @@ vajra-run --stop          # stop a running dev server
 exit                      # leave; vajra cleans up
 ```
 
+Check your version:
+
+```bash
+vajra --version
+```
+
 Flags: `--env <file>` / `--sample <file>` (skip the picker), `--allow <dir>`
 (extra read+execute dir, repeatable), `--reconfigure` (re-run the picker).
 
