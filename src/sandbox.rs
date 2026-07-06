@@ -61,21 +61,46 @@ fn mount_private_tmp(sock_path: &Option<String>) -> Result<(), String> {
     .map_err(|e| format!("mount private /tmp failed: {}", e))
 }
 
-/// Hide each masked file by bind-mounting an empty read-only file over it.
+/// Generate a human-readable warning message for a masked env file.
+/// Shown when the agent does `cat .env` inside the sandbox.
+pub(crate) fn mask_message(file_name: &str) -> String {
+    format!(
+        "# [vajra sandbox] \"{file}\" is hidden for security — its real values\n\
+         # are not available to you inside this sandbox.\n\
+         #\n\
+         # What you CAN do:\n\
+         #   - See variable names: cat .sample.env\n\
+         #   - Run the app (real values injected automatically): vajra-run\n\
+         #   - Run a specific script: vajra-run <script-name>\n\
+         #   - Stop the app: vajra-run --stop\n\
+         #\n\
+         # Do NOT attempt to read, recover, or bypass these values.\n",
+        file = file_name
+    )
+}
+
+/// Hide each masked file by bind-mounting a warning message over it.
 /// Must run inside the private mount namespace, before Landlock is applied.
 fn mask_env_files(masked: &[PathBuf]) -> Result<(), String> {
     if masked.is_empty() {
         return Ok(());
     }
-    let empty = format!("/tmp/.vajra-empty-{}", std::process::id());
-    std::fs::write(&empty, b"").map_err(|e| format!("Failed to create mask file: {}", e))?;
+    let pid = std::process::id();
 
-    for target in masked {
+    for (i, target) in masked.iter().enumerate() {
         if !target.exists() {
             continue;
         }
+        let file_name = target
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("this file");
+        let src = format!("/tmp/.vajra-mask-{}-{}", pid, i);
+        std::fs::write(&src, mask_message(file_name))
+            .map_err(|e| format!("Failed to create mask file: {}", e))?;
+
         mount::<str, PathBuf, str, str>(
-            Some(empty.as_str()),
+            Some(src.as_str()),
             target,
             None::<&str>,
             MsFlags::MS_BIND,
@@ -91,6 +116,8 @@ fn mask_env_files(masked: &[PathBuf]) -> Result<(), String> {
             None::<&str>,
         )
         .map_err(|e| format!("mask RO remount for {} failed: {}", target.display(), e))?;
+
+        let _ = std::fs::remove_file(&src);
     }
     Ok(())
 }
@@ -244,5 +271,28 @@ pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
             }
             _ => Ok(()),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mask_message;
+
+    #[test]
+    fn mask_message_contains_file_name_and_vajra_run() {
+        let msg = mask_message(".env.local");
+        assert!(msg.contains(".env.local"));
+        assert!(msg.contains("vajra-run"));
+        assert!(msg.contains("hidden"));
+        assert!(msg.contains(".sample.env"));
+        assert!(msg.contains("Do NOT"));
+    }
+
+    #[test]
+    fn mask_message_handles_generic_name() {
+        let msg = mask_message(".env");
+        assert!(msg.contains(".env"));
+        assert!(msg.contains("vajra-run"));
+        assert!(msg.contains("hidden"));
     }
 }

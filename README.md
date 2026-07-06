@@ -8,8 +8,9 @@ agent:
 
 - sees **only the project directory** (Landlock LSM) — your home dir and the
   rest of the filesystem are blocked;
-- reads **empty `.env` files** — every env-like file is masked with a read-only
-  bind mount, and a generated `.sample.env` shows the variable *names* only;
+- reads **placeholder `.env` files** — every env-like file is masked with a
+  read-only bind mount showing an explanatory message (not empty), and a
+  generated `.sample.env` shows the variable *names* only;
 - starts with a **clean environment** — host env vars (and the API keys in
   them) are stripped;
 - gets a **private `/tmp`** and its own PID namespace;
@@ -72,7 +73,8 @@ lockfile.
 ## Try it
 
 ```bash
-make demo     # sandbox around examples/demo-app, fake secrets included
+cd examples/demo-app
+vajra launch
 ```
 
 ## Security model
@@ -102,7 +104,6 @@ need that egress to function.
 ```bash
 make build    # debug build + setcap (needed after every rebuild)
 cargo test    # unit tests
-make demo     # end-to-end check
 ```
 
 CI runs build, clippy (deny warnings), and tests on every push and PR.
