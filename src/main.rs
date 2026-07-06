@@ -33,6 +33,10 @@ Inside the sandbox:
   exit                                  # Leave sandbox"#
 )]
 struct Cli {
+    /// Enable verbose logging
+    #[arg(short, long, global = true)]
+    verbose: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -68,6 +72,10 @@ enum Commands {
         #[arg(long)]
         stop: bool,
     },
+    /// Check if currently running inside a vajra sandbox
+    Status,
+    /// Validate .vajra.toml configuration without launching
+    Validate,
 }
 
 fn launch(
@@ -76,8 +84,13 @@ fn launch(
     allow_flags: Vec<String>,
     allow_rw_flags: Vec<String>,
     reconfigure: bool,
+    verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = std::env::current_dir()?;
+
+    if verbose {
+        eprintln!("vajra: project directory: {}", project_dir.display());
+    }
 
     let saved = if reconfigure { None } else { config::load(&project_dir)? };
     let picker_ran = saved.is_none() && (env.is_none() || sample.is_none());
@@ -92,7 +105,21 @@ fn launch(
     allow_dirs.extend(allow_flags);
     allow_rw_dirs.extend(allow_rw_flags);
 
+    if verbose {
+        eprintln!("vajra: scanning for env files...");
+    }
+
     let selection = envpick::select(&project_dir, env_choice, sample_choice)?;
+
+    if verbose {
+        if let Some(ref orig) = selection.original {
+            eprintln!("vajra: original env file: {}", orig.display());
+        }
+        if let Some(ref samp) = selection.sample {
+            eprintln!("vajra: sample env file: {}", samp.display());
+        }
+        eprintln!("vajra: masking {} env file(s)", selection.masked.len());
+    }
 
     if picker_ran {
         let file_name = |p: &std::path::PathBuf| {
@@ -134,6 +161,11 @@ fn launch(
     let listener = sup.bind()?;
     let sock_path = supervisor::socket_path();
 
+    if verbose {
+        eprintln!("vajra: supervisor socket: {}", sock_path.display());
+        eprintln!("vajra: forking sandbox...");
+    }
+
     match unsafe { fork() }? {
         ForkResult::Child => {
             drop(listener);
@@ -148,6 +180,14 @@ fn launch(
                 Ok(()) => 0,
                 Err(e) => {
                     eprintln!("vajra: {}", e);
+                    if e.contains("EPERM") || e.contains("Operation not permitted") {
+                        eprintln!("vajra: hint: run 'sudo setcap cap_sys_admin+ep target/debug/vajra'");
+                        eprintln!("vajra: hint: or use 'make build' which does this automatically");
+                    }
+                    if e.contains("Landlock not supported") {
+                        eprintln!("vajra: hint: check kernel version with 'uname -r' (need 5.13+)");
+                        eprintln!("vajra: hint: verify Landlock support: ls /sys/kernel/security/landlock/");
+                    }
                     1
                 }
             };
@@ -174,16 +214,125 @@ fn launch(
     }
 }
 
+fn validate(verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let project_dir = std::env::current_dir()?;
+    let config_path = project_dir.join(config::FILE_NAME);
+
+    if verbose {
+        eprintln!("vajra: checking for {} in {}", config::FILE_NAME, project_dir.display());
+    }
+
+    if !config_path.exists() {
+        eprintln!("vajra: no {} found in {}", config::FILE_NAME, project_dir.display());
+        eprintln!("vajra: run 'vajra launch' to create one");
+        std::process::exit(1);
+    }
+
+    let cfg = match config::load(&project_dir)? {
+        Some(cfg) => cfg,
+        None => {
+            eprintln!("vajra: {} exists but could not be loaded", config::FILE_NAME);
+            std::process::exit(1);
+        }
+    };
+
+    if verbose {
+        eprintln!("vajra: loaded configuration successfully");
+    }
+
+    let mut errors = Vec::new();
+
+    if let Some(ref env_file) = cfg.env {
+        let env_path = project_dir.join(env_file);
+        if !env_path.exists() {
+            errors.push(format!("env file '{}' does not exist", env_file));
+        } else if verbose {
+            eprintln!("vajra: env file '{}' exists", env_file);
+        }
+    }
+
+    if let Some(ref sample_file) = cfg.sample {
+        let sample_path = project_dir.join(sample_file);
+        if !sample_path.exists() {
+            if verbose {
+                eprintln!("vajra: sample file '{}' does not exist (will be generated)", sample_file);
+            }
+        } else if verbose {
+            eprintln!("vajra: sample file '{}' exists", sample_file);
+        }
+    }
+
+    for path in &cfg.allow {
+        if !std::path::Path::new(path).exists() {
+            errors.push(format!("allow path '{}' does not exist", path));
+        } else if verbose {
+            eprintln!("vajra: allow path '{}' exists", path);
+        }
+    }
+
+    for path in &cfg.allow_rw {
+        if !std::path::Path::new(path).exists() {
+            errors.push(format!("allow-rw path '{}' does not exist", path));
+        } else if verbose {
+            eprintln!("vajra: allow-rw path '{}' exists", path);
+        }
+    }
+
+    if !errors.is_empty() {
+        eprintln!("vajra: validation failed:");
+        for error in errors {
+            eprintln!("  - {}", error);
+        }
+        std::process::exit(1);
+    }
+
+    println!("vajra: {} is valid", config::FILE_NAME);
+    Ok(())
+}
+
+fn status(verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let sock_env = std::env::var("VAJRA_SOCK");
+
+    match sock_env {
+        Ok(sock_path) => {
+            let path = std::path::Path::new(&sock_path);
+            if path.exists() {
+                println!("vajra: running inside sandbox");
+                if verbose {
+                    println!("  socket: {}", sock_path);
+                }
+                std::process::exit(0);
+            } else {
+                println!("vajra: VAJRA_SOCK set but socket not found");
+                if verbose {
+                    println!("  socket path: {}", sock_path);
+                }
+                std::process::exit(1);
+            }
+        }
+        Err(_) => {
+            println!("vajra: not running inside sandbox");
+            if verbose {
+                println!("  VAJRA_SOCK environment variable not set");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+    let verbose = cli.verbose;
 
     match cli.command {
         Commands::Launch { env, sample, allow, allow_rw, reconfigure } => {
-            launch(env, sample, allow, allow_rw, reconfigure)
+            launch(env, sample, allow, allow_rw, reconfigure, verbose)
         }
         Commands::Run { script, stop } => {
             let code = supervisor::run_client(script, stop)?;
             std::process::exit(code);
         }
+        Commands::Status => status(verbose),
+        Commands::Validate => validate(verbose),
     }
 }
