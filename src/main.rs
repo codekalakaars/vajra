@@ -7,7 +7,31 @@ use nix::sys::wait::waitpid;
 use nix::unistd::{fork, ForkResult};
 
 #[derive(Parser)]
-#[command(name = "vajra", about = "A lightweight Linux sandbox for AI agents")]
+#[command(
+    name = "vajra",
+    version,
+    about = "A lightweight Linux sandbox for AI agents",
+    long_about = r#"A lightweight Linux sandbox for AI agents.
+
+Run `vajra launch` in a project directory to start a sandboxed shell where:
+  • Env files are masked (showing only a security warning)
+  • Filesystem access is restricted to the project directory
+  • Host environment variables are stripped
+  • The app can be run via `vajra-run` with secrets injected safely
+
+Examples:
+  vajra launch                          # Interactive env file selection
+  vajra launch --env .env.production    # Skip picker, use specific file
+  vajra launch --allow /opt/tools       # Allow extra read+execute directory
+  vajra launch --allow-rw /tmp/cache    # Allow extra read+write directory
+  vajra launch --reconfigure            # Re-run env file picker
+
+Inside the sandbox:
+  vajra-run                             # Run default script (dev or start)
+  vajra-run build                       # Run specific package.json script
+  vajra-run --stop                      # Stop running app
+  exit                                  # Leave sandbox"#
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
