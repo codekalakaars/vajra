@@ -18,7 +18,9 @@ pub fn is_env_like(name: &str) -> bool {
 
 fn looks_like_sample(name: &str) -> bool {
     let lower = name.to_lowercase();
-    ["sample", "example", "template"].iter().any(|w| lower.contains(w))
+    ["sample", "example", "template"]
+        .iter()
+        .any(|w| lower.contains(w))
 }
 
 /// Find all env-like file names directly inside the project dir, sorted.
@@ -65,7 +67,11 @@ fn read_line_unbuffered() -> String {
 fn prompt_choice(role: &str, names: &[String], default: Option<&str>) -> Option<String> {
     println!("\nSelect the {} env file:", role);
     for (i, name) in names.iter().enumerate() {
-        let marker = if Some(name.as_str()) == default { " (default)" } else { "" };
+        let marker = if Some(name.as_str()) == default {
+            " (default)"
+        } else {
+            ""
+        };
         println!("  {}. {}{}", i + 1, name, marker);
     }
     println!("  c. custom name");
@@ -95,9 +101,11 @@ fn prompt_choice(role: &str, names: &[String], default: Option<&str>) -> Option<
         return default.map(String::from);
     }
     if let Ok(idx) = input.parse::<usize>()
-        && idx >= 1 && idx <= names.len() {
-            return Some(names[idx - 1].clone());
-        }
+        && idx >= 1
+        && idx <= names.len()
+    {
+        return Some(names[idx - 1].clone());
+    }
     // Anything else: treat the input itself as a custom file name.
     Some(input.to_string())
 }
@@ -112,8 +120,15 @@ pub fn select(
     let names = scan(project_dir)?;
 
     if names.is_empty() && env_flag.is_none() {
-        eprintln!("vajra: no env files detected in {}; launching without env masking", project_dir.display());
-        return Ok(EnvSelection { original: None, sample: None, masked: Vec::new() });
+        eprintln!(
+            "vajra: no env files detected in {}; launching without env masking",
+            project_dir.display()
+        );
+        return Ok(EnvSelection {
+            original: None,
+            sample: None,
+            masked: Vec::new(),
+        });
     }
 
     let (default_original, default_sample) = classify(&names);
@@ -125,7 +140,11 @@ pub fn select(
     };
     let sample = match sample_flag {
         Some(name) => Some(name),
-        None => prompt_choice("sample (visible to the agent)", &names, default_sample.as_deref()),
+        None => prompt_choice(
+            "sample (visible to the agent)",
+            &names,
+            default_sample.as_deref(),
+        ),
     };
 
     let masked = names
@@ -159,8 +178,10 @@ mod tests {
 
     #[test]
     fn classify_prefers_dot_env_and_sample_names() {
-        let names: Vec<String> =
-            [".env", ".env.local", ".env.example"].iter().map(|s| s.to_string()).collect();
+        let names: Vec<String> = [".env", ".env.local", ".env.example"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let (original, sample) = classify(&names);
         assert_eq!(original.as_deref(), Some(".env"));
         assert_eq!(sample.as_deref(), Some(".env.example"));

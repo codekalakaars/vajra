@@ -5,7 +5,10 @@
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "vajra-run", about = "Run the project app via the vajra supervisor")]
+#[command(
+    name = "vajra-run",
+    about = "Run the project app via the vajra supervisor"
+)]
 struct Cli {
     /// package.json script to run (default: dev, falling back to start)
     script: Option<String>,
