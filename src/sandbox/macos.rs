@@ -9,7 +9,7 @@
 //! neither, and the SPI remains functional and is what `sandbox-exec` itself
 //! uses. The deprecation is acknowledged rather than worked around.
 
-use crate::permissions::{effective, PermissionsConfig};
+use crate::permissions::effective;
 use crate::sandbox::{SandboxConfig, MAX_DEPTH};
 use std::ffi::{c_char, CStr, CString};
 use std::path::{Path, PathBuf};

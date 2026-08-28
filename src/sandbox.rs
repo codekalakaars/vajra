@@ -17,6 +17,10 @@ use napi::Error;
 /// Walk depth for building rules. Matches `file::list_files` and
 /// `permissions::scan_project` so the config, the scan and the enforced rules
 /// all describe the same tree.
+///
+/// Only the platforms that build rules consume this; on Windows there is no
+/// backend to read it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub const MAX_DEPTH: u32 = 8;
 
 /// How well this platform can confine the filesystem.
@@ -25,6 +29,7 @@ pub const MAX_DEPTH: u32 = 8;
 /// `partial`  — enforced, but an older kernel cannot honour every restriction.
 /// `unsupported` — nothing is enforced. Not a degraded mode: no confinement.
 #[napi(object)]
+#[derive(Debug)]
 pub struct SandboxCapabilities {
     pub platform: String,
     pub filesystem: String,
@@ -53,6 +58,7 @@ pub struct SandboxConfig {
 }
 
 #[napi(object)]
+#[derive(Debug)]
 pub struct SandboxResult {
     /// Whether the kernel is now actually enforcing a policy. False only when
     /// the caller opted in via `allowUnenforced`.

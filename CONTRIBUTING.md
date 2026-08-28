@@ -80,6 +80,25 @@ and Windows. A passing local build proves one of the three.
 CI runs clippy, both test suites, and a build on ubuntu, macos and windows.
 That matrix is the actual gate.
 
+You do not have to push to find a compile break on another platform. `clippy`
+only needs the target's standard library, not a linker, so the other targets
+can be checked from here:
+
+```bash
+rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
+cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings
+cargo clippy --target aarch64-apple-darwin  --all-targets -- -D warnings
+```
+
+Run these whenever you touch `#[cfg]`-gated code — `src/sandbox/` especially.
+Code behind a `cfg` for another platform is never compiled by a plain
+`cargo clippy`, so an unused import or a missing derive there is invisible
+locally and only surfaces in CI.
+
+What this does *not* cover is behaviour: it type-checks the other platforms, it
+does not run them. Landlock and Seatbelt enforcement can only be observed on a
+real runner.
+
 ## Commit Convention
 
 This project follows **Conventional Commits**:
