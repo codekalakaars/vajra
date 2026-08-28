@@ -19,7 +19,6 @@ vendor/
 .cache/
 
 # napi build artifacts
-native/
 *.node
 
 # Env
