@@ -1,7 +1,19 @@
 import { createServer as createHttpServer } from 'node:http'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import dotenv from 'dotenv'
 import { openDb } from './db/client.js'
 import { createAppServer } from './ws/server.js'
 import type { SessionLauncher } from './session/manager.js'
+
+// Load .env before reading process.env. Existing env vars win — dotenv never
+// overrides by default. Try CWD first, then repo root (so `pnpm --filter`
+// from packages/server still finds the root .env).
+dotenv.config()
+if (!process.env.OPENROUTER_API_KEY) {
+  const repoRootEnv = resolve(dirname(fileURLToPath(import.meta.url)), '../../..', '.env')
+  dotenv.config({ path: repoRootEnv })
+}
 
 export interface StartOptions {
   port?: number
@@ -59,7 +71,8 @@ if (isMain) {
   const port = Number(process.env.PORT) || 4820
   const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) {
-    console.error('OPENROUTER_API_KEY environment variable is required')
+    console.error('OPENROUTER_API_KEY is required (set in .env or environment)')
+    console.error('  See .env.example at the repo root')
     process.exit(1)
   }
   startServer({ port, apiKey }).then((server) => {

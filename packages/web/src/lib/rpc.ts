@@ -5,7 +5,6 @@ import type { VajraSocket } from './ws.js'
 let nextId = 0
 
 type RpcMethodMap = {
-  'project.scan': { params: { projectDir: string }; result: Array<{ name: string; isDir: boolean; masked: boolean }> }
   'project.loadPermissions': { params: { projectDir: string }; result: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> }
   'project.savePermissions': { params: { projectDir: string; permissions: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> }; result: { ok: true } }
   'session.list': { params: Record<string, never>; result: Array<{ sessionId: string; projectDir: string; task: string; status: string; createdAt: string }> }

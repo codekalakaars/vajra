@@ -37,11 +37,6 @@ export type SessionStatus = 'starting' | 'planning' | 'executing' | 'done' | 'fa
 
 // ---- RPC method params/results ----
 
-export interface ProjectScanParams {
-  projectDir: string
-}
-export type ProjectScanResult = ProjectFileEntry[]
-
 export interface ProjectLoadPermissionsParams {
   projectDir: string
 }

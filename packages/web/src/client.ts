@@ -58,6 +58,6 @@ export class VajraClient {
   }
 
   on<E extends EventName>(event: E, handler: (payload: unknown) => void): () => void {
-    return this.events.on(event, handler as (payload: never) => void)
+    return this.events.on(event, handler)
   }
 }

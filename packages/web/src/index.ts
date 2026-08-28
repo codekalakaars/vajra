@@ -2,12 +2,15 @@
 
 import { VajraClient } from './client.js'
 import { Router } from './router.js'
-import { scanView } from './views/scan.js'
 import { permissionsView } from './views/permissions.js'
 import { sessionsView } from './views/sessions.js'
 import { sessionDetailView } from './views/session-detail.js'
 
-const WS_URL = `ws://${window.location.hostname}:${window.location.port || '4820'}`
+// Option A: explicit WS port for split dev (web :8080, server :4820).
+// When served via esbuild on 8080, window.location.port is 8080 — would try
+// ws://:8080 and fail (no WS there). Always use server port 4820 in dev.
+// When unified on 4820 later, this still works (same port).
+const WS_URL = `ws://${window.location.hostname}:4820`
 
 const client = new VajraClient(WS_URL)
 const router = new Router()
@@ -28,13 +31,6 @@ client.onStateChange((state) => {
 client.onStateChange(() => {})
 
 // Route handlers
-router.on('/scan', () => {
-  currentCleanup?.()
-  currentCleanup = null
-  appRoot.innerHTML = ''
-  appRoot.appendChild(scanView(client))
-})
-
 router.on('/permissions', (params) => {
   currentCleanup?.()
   currentCleanup = null
