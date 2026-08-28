@@ -52,6 +52,11 @@ export declare function deleteFile(path: string): void
  * directory rather than destroying its contents.
  */
 export declare function deleteDir(path: string, recursive?: boolean | undefined | null): void
+/**
+ * Create a directory, creating any missing parents. Idempotent: succeeds
+ * silently if the directory already exists, rather than treating that as an
+ * error the way a bare `mkdir` would.
+ */
 export declare function createDir(path: string): void
 export interface FileEntry {
   name: string
@@ -72,11 +77,28 @@ export declare function listFiles(path: string, recursive?: boolean | undefined 
 export declare function fileExists(path: string): boolean
 export declare function isFile(path: string): boolean
 export declare function isDir(path: string): boolean
-export declare function copyFile(source: string, destination: string): void
-export declare function renameFile(source: string, destination: string): void
+/**
+ * Copy a file. Refuses when `destination` already exists unless `overwrite`
+ * is set — `fs::copy` replaces silently by default, which is exactly the kind
+ * of surprise `editFile` and `deleteFile` already refuse elsewhere in this
+ * module.
+ */
+export declare function copyFile(source: string, destination: string, overwrite?: boolean | undefined | null): void
+/**
+ * Rename (move) a file. Refuses when `destination` already exists unless
+ * `overwrite` is set.
+ *
+ * This matters more than the same guard on `copyFile`: `std::fs::rename`
+ * delegates to the OS, and POSIX and Windows have historically differed on
+ * whether an existing destination is silently replaced or the call fails.
+ * Checking explicitly here means the behavior is this function's choice, not
+ * whatever the underlying platform happens to do.
+ */
+export declare function renameFile(source: string, destination: string, overwrite?: boolean | undefined | null): void
 export declare function fileSize(path: string): number
 export declare function readFileAsync(path: string): Promise<string>
 export declare function writeFileAsync(path: string, content: string): Promise<void>
+export declare function copyFileAsync(source: string, destination: string, overwrite?: boolean | undefined | null): Promise<void>
 export declare function listFilesAsync(path: string, recursive?: boolean | undefined | null): Promise<Array<FileEntry>>
 /**
  * Make a path absolute against the current working directory and normalize it.
