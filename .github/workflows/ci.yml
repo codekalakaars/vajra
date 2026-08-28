@@ -31,7 +31,9 @@ jobs:
         with:
           node-version: 22
 
-      - uses: pnpm/action-setup@v4
+      # v6 runs on node24; v4 targeted node20, which GitHub has deprecated and
+      # was force-running on node24 with a warning on every job.
+      - uses: pnpm/action-setup@v6
         with:
           version: 10
 
