@@ -1,11 +1,14 @@
-# vajra demo app
+# vajra demo app (legacy)
 
-A dependency-free Node app for testing vajra locally. The committed `.env`
-contains fake values on purpose — it exists to exercise the masking.
+A dependency-free Node app for testing the legacy vajra CLI. The committed
+`.env` contains fake values on purpose — it exists to exercise the masking.
+
+This drives the old sandbox under [`legacy/`](../../), which is no longer built
+by default. See [`legacy/README.md`](../../README.md).
 
 ## Quick Start
 
-From the repo root:
+From `legacy/`:
 
 ```bash
 make build                    # build and set capabilities

@@ -4,9 +4,18 @@ version = "0.1.0"
 edition = "2021"
 description = "Cross-platform native operations for Vajra"
 authors = ["Vajra Contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/codekalakaars/vajra"
+readme = "README.md"
 
 [lib]
 crate-type = ["cdylib"]
+
+# legacy/ is the previous CLI, kept for reference only. Excluding it keeps
+# cargo from trying to build it as part of this crate's directory tree.
+[workspace]
+members = []
+exclude = ["legacy"]
 
 [dependencies]
 napi = { version = "2", features = ["async"] }

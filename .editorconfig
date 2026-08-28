@@ -7,3 +7,11 @@ end_of_line = lf
 charset = utf-8
 trim_trailing_whitespace = true
 insert_final_newline = true
+
+# rustfmt uses 4 spaces; the 2-space default above would fight it.
+[*.rs]
+indent_size = 4
+
+# Trailing whitespace is significant in Markdown (line break).
+[*.md]
+trim_trailing_whitespace = false

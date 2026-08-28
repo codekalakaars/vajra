@@ -20,8 +20,30 @@ body:
     id: os
     attributes:
       label: Operating System
-      description: What OS are you on?
-      placeholder: e.g., macOS 15, Ubuntu 24.04, Windows 11
+      description: What OS and architecture are you on?
+      placeholder: e.g., macOS 15 (arm64), Ubuntu 24.04 (x64), Windows 11 (x64)
+    validations:
+      required: true
+
+  - type: input
+    id: runtime
+    attributes:
+      label: Node and Rust versions
+      description: Output of `node --version` and `rustc --version`.
+      placeholder: e.g., v22.11.0 / rustc 1.83.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the project?
+      options:
+        - Native core (file / process / env / path)
+        - Build or packaging (napi, loader, typings)
+        - Legacy CLI (legacy/ — reference only, not maintained)
+        - Not sure
     validations:
       required: true
 
@@ -31,8 +53,9 @@ body:
       label: Steps to Reproduce
       description: How can we reproduce this bug?
       placeholder: |
-        1. Run `vajra --sandbox my-agent`
-        2. See error...
+        1. `pnpm install && pnpm build`
+        2. `node -e "require('./').listFiles('.', true)"`
+        3. See error...
     validations:
       required: true
 
