@@ -1,0 +1,18 @@
+{
+  "name": "@vajra/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs --prod",
+    "dev": "node esbuild.config.mjs --watch",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@vajra/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.4"
+  }
+}
