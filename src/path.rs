@@ -193,9 +193,21 @@ mod tests {
 
     #[test]
     fn parent_of_root_is_root() {
-        let root = Path::new("/").to_string_lossy().to_string();
-        assert_eq!(normalize_path("/..".into()), root);
-        assert_eq!(normalize_path("/../..".into()), root);
+        // Assert the shape rather than a literal: the root renders as "/" on
+        // unix and "\" on Windows, so comparing against a hardcoded string
+        // tests the platform, not the behaviour.
+        for input in ["/..", "/../.."] {
+            let normalized = normalize_path(input.into());
+            let as_path = Path::new(&normalized);
+
+            assert!(as_path.has_root(), "{} should stay rooted", input);
+            assert!(
+                as_path.parent().is_none(),
+                "{} should normalize to the root itself, got {}",
+                input,
+                normalized
+            );
+        }
     }
 
     #[test]
