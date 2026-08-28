@@ -21,6 +21,16 @@ export declare function currentDir(): string
 export declare function setCurrentDir(path: string): void
 export declare function homeDir(): string | null
 export declare function tempDir(): string
+export declare function parseEnv(content: string): Array<EnvVar>
+export declare function loadEnvFile(path: string): Array<EnvVar>
+export declare function renderSampleEnv(content: string): string
+/**
+ * Write the sample file if it does not exist yet. Returns true if it created one.
+ *
+ * Deliberately refuses to overwrite: the sample may have been edited by hand,
+ * and clobbering it on every run would discard that.
+ */
+export declare function ensureSampleEnv(original: string, sample: string): boolean
 export declare function readFile(path: string): string
 export declare function writeFile(path: string, content: string): void
 /**
@@ -89,6 +99,58 @@ export declare function pathExists(path: string): boolean
 export declare function parentPath(path: string): string | null
 /** Append `ext` unless the path already has an extension. */
 export declare function ensureExt(path: string, ext: string): string
+export interface FilePermissions {
+  read: boolean
+  write: boolean
+  edit: boolean
+  delete: boolean
+}
+export interface PermissionsConfig {
+  version: number
+  /** Applied to any path without an entry in `files`. */
+  default: FilePermissions
+  /** Per-path overrides, keyed by project-relative path with `/` separators. */
+  files: Record<string, FilePermissions>
+}
+export interface ProjectFileEntry {
+  name: string
+  /**
+   * Project-relative, always `/`-separated so a config written on one
+   * platform still resolves on another.
+   */
+  path: string
+  isDir: boolean
+  /** True for env files whose contents the agent must not see. */
+  isMasked: boolean
+}
+export declare function defaultPermissions(): PermissionsConfig
+/**
+ * Load `.vajra-perms.json` from a project. Returns null when absent or
+ * unparseable, so a corrupt file falls back to the safe default rather than
+ * failing the caller.
+ */
+export declare function loadPermissions(projectDir: string): PermissionsConfig | null
+export declare function savePermissions(projectDir: string, config: PermissionsConfig): void
+/**
+ * Resolve the effective permissions for a project-relative path.
+ *
+ * Takes the config by value: napi object types cross the boundary as data, not
+ * as a reference to a live JS object.
+ */
+export declare function permissionsFor(config: PermissionsConfig, path: string): FilePermissions
+/**
+ * List the project's files as permission targets.
+ *
+ * Returns a flat list rather than a nested tree: it keeps the binding free of
+ * a self-referential type, and a caller that wants a tree can rebuild one from
+ * the relative paths.
+ *
+ * Skips `.git`, `node_modules` and `target`, and hidden files other than
+ * `.sample.env`. Symlinks are never followed and depth is capped, for the same
+ * reason as `file::list_files` — a link to an ancestor would otherwise recurse
+ * without end.
+ */
+export declare function scanProject(projectDir: string): Array<ProjectFileEntry>
 export interface CommandResult {
   stdout: string
   stderr: string
@@ -117,4 +179,17 @@ export declare function runShellAsync(command: string, cwd?: string | undefined 
  * separate lines, so treating its whole output as one path is wrong.
  */
 export declare function which(command: string): string | null
+/**
+ * Replace every occurrence of each secret value with `[REDACTED:<KEY>]`.
+ *
+ * When streaming process output, redact whole lines rather than raw read
+ * chunks: a secret split across two chunk boundaries would otherwise slip
+ * through unmatched.
+ */
+export declare function redact(text: string, secrets: Array<EnvVar>): string
+/**
+ * The shortest secret value that `redact` will act on. Exposed so a caller can
+ * warn that a given variable will not be scrubbed, rather than assuming it was.
+ */
+export declare function minRedactableLength(): number
 export declare function version(): string

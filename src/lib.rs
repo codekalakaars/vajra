@@ -4,9 +4,12 @@
 #![cfg_attr(test, allow(dead_code))]
 
 mod env;
+mod envfile;
 mod file;
 mod path;
+mod permissions;
 mod process;
+mod secret;
 
 #[macro_use]
 extern crate napi_derive;
