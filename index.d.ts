@@ -65,6 +65,9 @@ export declare function isDir(path: string): boolean
 export declare function copyFile(source: string, destination: string): void
 export declare function renameFile(source: string, destination: string): void
 export declare function fileSize(path: string): number
+export declare function readFileAsync(path: string): Promise<string>
+export declare function writeFileAsync(path: string, content: string): Promise<void>
+export declare function listFilesAsync(path: string, recursive?: boolean | undefined | null): Promise<Array<FileEntry>>
 /**
  * Make a path absolute against the current working directory and normalize it.
  * Does not require the path to exist.
@@ -104,6 +107,8 @@ export declare function runCommand(command: string, args?: Array<string> | undef
  * executed as code. Prefer `runCommand` for anything built from untrusted input.
  */
 export declare function runShell(command: string, cwd?: string | undefined | null): CommandResult
+export declare function runCommandAsync(command: string, args?: Array<string> | undefined | null, cwd?: string | undefined | null): Promise<CommandResult>
+export declare function runShellAsync(command: string, cwd?: string | undefined | null): Promise<CommandResult>
 /**
  * Locate an executable on PATH, returning its full path.
  *
