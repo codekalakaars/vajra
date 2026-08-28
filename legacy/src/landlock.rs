@@ -136,6 +136,98 @@ fn add_path_rule(ruleset_fd: i32, path: &str, allowed: u64) -> Result<(), String
     }
 }
 
+fn perms_to_bits(perm: &crate::permissions::FilePermissions, is_dir: bool, supported: u64) -> u64 {
+    let mut bits = access::EXECUTE; // traversal
+    if perm.read {
+        bits |= access::READ_FILE | access::READ_DIR;
+    }
+    if is_dir {
+        bits |= access::READ_DIR;
+        if perm.write {
+            bits |= access::MAKE_DIR | access::MAKE_REG | access::MAKE_SYM;
+        }
+        if perm.delete {
+            bits |= access::REMOVE_DIR | access::REMOVE_FILE;
+        }
+    } else {
+        if perm.write {
+            bits |= access::WRITE_FILE | access::MAKE_REG;
+        }
+        if perm.edit {
+            bits |= access::TRUNCATE;
+        }
+        if perm.delete {
+            bits |= access::REMOVE_FILE;
+        }
+    }
+    bits & supported
+}
+
+fn should_skip_dir(name: &str) -> bool {
+    matches!(name, ".git" | "node_modules" | "target")
+}
+
+fn apply_per_file_rules(
+    ruleset_fd: i32,
+    project_dir: &str,
+    perms: &crate::permissions::PermissionsConfig,
+    supported: &u64,
+) -> Result<(), String> {
+    let root = std::path::Path::new(project_dir);
+
+    let mut stack: Vec<(std::path::PathBuf, u32)> = vec![(root.to_path_buf(), 0)];
+
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > 8 {
+            continue;
+        }
+        let read_dir = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(_) => continue,
+        };
+
+        for entry in read_dir.flatten() {
+            let name = match entry.file_name().to_str() {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+
+            if name.starts_with('.') && name != ".sample.env" {
+                continue;
+            }
+
+            let path = entry.path();
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string()
+                .replace('\\', "/");
+
+            let ft = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            if ft.is_dir() {
+                if should_skip_dir(&name) {
+                    continue;
+                }
+                let file_perm = perms.files.get(&rel).unwrap_or(&perms.default);
+                let bits = perms_to_bits(file_perm, true, *supported);
+                let _ = add_path_rule(ruleset_fd, &rel, bits);
+                stack.push((path, depth + 1));
+            } else if ft.is_file() {
+                let file_perm = perms.files.get(&rel).unwrap_or(&perms.default);
+                let bits = perms_to_bits(file_perm, false, *supported);
+                let _ = add_path_rule(ruleset_fd, &rel, bits);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn enforce(ruleset_fd: i32) -> Result<(), String> {
     let ret = unsafe { libc::syscall(LANDLOCK_RESTRICT_SELF, ruleset_fd as i64, 0u32) };
     if ret != 0 {
@@ -179,6 +271,7 @@ pub fn restrict_filesystem(
     project_dir: &str,
     extra_rx: &[String],
     extra_rw: &[String],
+    file_perms: Option<&crate::permissions::PermissionsConfig>,
 ) -> Result<(), String> {
     let abi = detect_abi()?;
     warn_degraded(abi);
@@ -217,7 +310,11 @@ pub fn restrict_filesystem(
 
     let ruleset_fd = create_ruleset(rw_all)?;
 
-    add_path_rule(ruleset_fd, project_dir, rw_all)?;
+    if let Some(perms) = file_perms {
+        apply_per_file_rules(ruleset_fd, project_dir, perms, &supported)?;
+    } else {
+        add_path_rule(ruleset_fd, project_dir, rw_all)?;
+    }
     add_path_rule(ruleset_fd, "/usr", rx)?;
     add_path_rule(ruleset_fd, "/lib", rx)?;
     add_path_rule(ruleset_fd, "/lib64", rx)?;
