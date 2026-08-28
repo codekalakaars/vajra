@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { getEnv, envExists, getAllEnv, getEnvFiltered, currentDir, setCurrentDir, homeDir, tempDir, readFile, writeFile, editFile, deleteFile, deleteDir, createDir, listFiles, fileExists, isFile, isDir, copyFile, renameFile, fileSize, resolvePath, normalizePath, realPath, joinPaths, dirname, basename, extension, isAbsolute, pathExists, parentPath, ensureExt, runCommand, runShell, which, version } = nativeBinding
+const { getEnv, envExists, getAllEnv, getEnvFiltered, currentDir, setCurrentDir, homeDir, tempDir, readFile, writeFile, editFile, deleteFile, deleteDir, createDir, listFiles, fileExists, isFile, isDir, copyFile, renameFile, fileSize, readFileAsync, writeFileAsync, listFilesAsync, resolvePath, normalizePath, realPath, joinPaths, dirname, basename, extension, isAbsolute, pathExists, parentPath, ensureExt, runCommand, runShell, runCommandAsync, runShellAsync, which, version } = nativeBinding
 
 module.exports.getEnv = getEnv
 module.exports.envExists = envExists
@@ -333,6 +333,9 @@ module.exports.isDir = isDir
 module.exports.copyFile = copyFile
 module.exports.renameFile = renameFile
 module.exports.fileSize = fileSize
+module.exports.readFileAsync = readFileAsync
+module.exports.writeFileAsync = writeFileAsync
+module.exports.listFilesAsync = listFilesAsync
 module.exports.resolvePath = resolvePath
 module.exports.normalizePath = normalizePath
 module.exports.realPath = realPath
@@ -346,5 +349,7 @@ module.exports.parentPath = parentPath
 module.exports.ensureExt = ensureExt
 module.exports.runCommand = runCommand
 module.exports.runShell = runShell
+module.exports.runCommandAsync = runCommandAsync
+module.exports.runShellAsync = runShellAsync
 module.exports.which = which
 module.exports.version = version

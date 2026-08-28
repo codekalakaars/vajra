@@ -1,4 +1,5 @@
-use napi::Error;
+use napi::bindgen_prelude::AsyncTask;
+use napi::{Env, Error, Task};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -64,6 +65,59 @@ pub fn run_shell(command: String, cwd: Option<String>) -> Result<CommandResult, 
     }
 
     finish(&command, cmd.output())
+}
+
+/// Async counterparts.
+///
+/// The sync versions above block the calling thread for as long as the child
+/// process runs, which in Node means blocking the event loop. Anything that
+/// waits on a subprocess should use these; they run on the libuv threadpool.
+pub struct RunTask {
+    command: String,
+    args: Option<Vec<String>>,
+    cwd: Option<String>,
+    shell: bool,
+}
+
+impl Task for RunTask {
+    type Output = CommandResult;
+    type JsValue = CommandResult;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        if self.shell {
+            run_shell(self.command.clone(), self.cwd.clone())
+        } else {
+            run_command(self.command.clone(), self.args.clone(), self.cwd.clone())
+        }
+    }
+
+    fn resolve(&mut self, _env: Env, output: Self::Output) -> napi::Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+#[napi(ts_return_type = "Promise<CommandResult>")]
+pub fn run_command_async(
+    command: String,
+    args: Option<Vec<String>>,
+    cwd: Option<String>,
+) -> AsyncTask<RunTask> {
+    AsyncTask::new(RunTask {
+        command,
+        args,
+        cwd,
+        shell: false,
+    })
+}
+
+#[napi(ts_return_type = "Promise<CommandResult>")]
+pub fn run_shell_async(command: String, cwd: Option<String>) -> AsyncTask<RunTask> {
+    AsyncTask::new(RunTask {
+        command,
+        args: None,
+        cwd,
+        shell: true,
+    })
 }
 
 /// Candidate filenames for `command` on this platform.

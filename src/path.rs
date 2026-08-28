@@ -159,37 +159,57 @@ pub fn ensure_ext(path: String, ext: String) -> String {
 mod tests {
     use super::*;
 
+    /// Build a platform-native path from segments, so these assertions hold on
+    /// Windows too — normalization preserves the platform separator.
+    fn native(segments: &[&str]) -> String {
+        segments
+            .iter()
+            .collect::<PathBuf>()
+            .to_string_lossy()
+            .to_string()
+    }
+
     #[test]
     fn normalizes_without_touching_filesystem() {
         // None of these paths exist; the old implementation returned them verbatim.
-        assert_eq!(normalize_path("/a/b/../c".into()), "/a/c");
-        assert_eq!(normalize_path("/a/./b".into()), "/a/b");
-        assert_eq!(normalize_path("a/b/../../c".into()), "c");
+        assert_eq!(normalize_path(native(&["a", "b", "..", "c"])), native(&["a", "c"]));
+        assert_eq!(normalize_path(native(&["a", ".", "b"])), native(&["a", "b"]));
+        assert_eq!(normalize_path(native(&["a", "b", "..", "..", "c"])), "c");
     }
 
     #[test]
     fn keeps_leading_parent_dirs_on_relative_paths() {
         // Dropping these would silently change which directory is meant.
-        assert_eq!(normalize_path("../a".into()), "../a");
-        assert_eq!(normalize_path("../../a".into()), "../../a");
-        assert_eq!(normalize_path("a/../../b".into()), "../b");
+        assert_eq!(normalize_path(native(&["..", "a"])), native(&["..", "a"]));
+        assert_eq!(
+            normalize_path(native(&["..", "..", "a"])),
+            native(&["..", "..", "a"])
+        );
+        assert_eq!(
+            normalize_path(native(&["a", "..", "..", "b"])),
+            native(&["..", "b"])
+        );
     }
 
     #[test]
     fn parent_of_root_is_root() {
-        assert_eq!(normalize_path("/..".into()), "/");
-        assert_eq!(normalize_path("/../..".into()), "/");
+        let root = Path::new("/").to_string_lossy().to_string();
+        assert_eq!(normalize_path("/..".into()), root);
+        assert_eq!(normalize_path("/../..".into()), root);
     }
 
     #[test]
     fn empty_result_becomes_current_dir() {
-        assert_eq!(normalize_path("a/..".into()), ".");
+        assert_eq!(normalize_path(native(&["a", ".."])), ".");
         assert_eq!(normalize_path(".".into()), ".");
     }
 
     #[test]
     fn join_normalizes_the_result() {
-        assert_eq!(join_paths("/a/b".into(), "../c".into()), "/a/c");
+        assert_eq!(
+            join_paths(native(&["a", "b"]), native(&["..", "c"])),
+            native(&["a", "c"])
+        );
     }
 
     #[test]
@@ -202,12 +222,16 @@ mod tests {
 
     #[test]
     fn basename_strips_extension_only_when_a_stem_remains() {
-        assert_eq!(basename("/a/b.txt".into(), None), Some("b.txt".into()));
-        assert_eq!(basename("/a/b.txt".into(), Some(".txt".into())), Some("b".into()));
-        assert_eq!(basename("/a/b.txt".into(), Some("txt".into())), Some("b".into()));
-        assert_eq!(basename("/a/b.txt".into(), Some(".md".into())), Some("b.txt".into()));
+        let file = native(&["a", "b.txt"]);
+        assert_eq!(basename(file.clone(), None), Some("b.txt".into()));
+        assert_eq!(basename(file.clone(), Some(".txt".into())), Some("b".into()));
+        assert_eq!(basename(file.clone(), Some("txt".into())), Some("b".into()));
+        assert_eq!(basename(file, Some(".md".into())), Some("b.txt".into()));
         // A dotfile whose whole name is the extension must survive intact.
-        assert_eq!(basename("/a/.txt".into(), Some(".txt".into())), Some(".txt".into()));
+        assert_eq!(
+            basename(native(&["a", ".txt"]), Some(".txt".into())),
+            Some(".txt".into())
+        );
     }
 
     #[test]
