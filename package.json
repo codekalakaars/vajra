@@ -4,6 +4,14 @@
   "description": "Cross-platform native operations for Vajra",
   "main": "index.js",
   "types": "index.d.ts",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codekalakaars/vajra.git"
+  },
+  "bugs": {
+    "url": "https://github.com/codekalakaars/vajra/issues"
+  },
   "napi": {
     "name": "vajra-native",
     "triples": {
@@ -35,7 +43,6 @@
     "@napi-rs/cli": "^2.14.0"
   },
   "engines": {
-    "node": ">= 10"
-  },
-  "license": "Apache-2.0"
+    "node": ">= 18"
+  }
 }

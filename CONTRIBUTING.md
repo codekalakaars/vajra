@@ -1,143 +1,84 @@
 # Contributing to Vajra
 
+Vajra is mid-rewrite: the project is moving from a standalone Linux-only Rust
+CLI to `vajra-native`, a napi-rs addon driven by a TypeScript harness. Read the
+[README](README.md) first — in particular which layers exist today and which
+are still only in [`legacy/`](legacy/).
+
+Changes to the old CLI under `legacy/` are not being accepted; it is kept as a
+reference for the port, not as a maintained code path.
+
 ## Getting Started
 
 ### Prerequisites
 
-- **Rust toolchain** (stable): Install via [rustup](https://rustup.rs/)
-- **Linux kernel 5.13+** with Landlock support (6.2+ recommended)
-- **sudo access**: Required for `setcap` to grant namespace capabilities
-- **Node.js** (optional): For testing with the demo app
+- **Rust toolchain** (stable), via [rustup](https://rustup.rs/)
+- **Node.js 22+** and **pnpm**
+
+No `sudo`, `setcap`, or particular kernel version is needed. Those were
+requirements of the legacy sandbox; the native core has none.
 
 ### Build and Test
 
 ```bash
-# Build debug binary and set capabilities
-make build
+pnpm install
+pnpm build                                  # builds the addon (napi build --platform --release)
 
-# Run tests
-cargo test
-
-# Run linter (must pass with zero warnings)
-cargo clippy --all-targets -- -D warnings
-
-# Format code
+pnpm test                                   # Node smoke tests, against the built addon
+cargo test                                  # Rust unit tests
+cargo clippy --all-targets -- -D warnings   # must pass with zero warnings
 cargo fmt
 ```
 
-### Try the Demo
-
-```bash
-make build
-cd examples/demo-app
-../../target/debug/vajra launch
-```
+`pnpm build` regenerates `index.js` and `index.d.ts`. Both are committed — do
+not hand-edit them, the next build overwrites your changes. If you add or
+change a binding, rebuild and commit the regenerated files with it.
 
 ## Development Workflow
 
-### Testing Changes Locally
+The two test layers catch different things, so run both:
 
-After making code changes:
+- **`cargo test`** covers the Rust logic directly. It does not build the Node
+  bindings, so it cannot see anything about the JavaScript boundary.
+- **`pnpm test`** loads the built addon and exercises it from JavaScript. This
+  is what catches a struct exported as a class instead of a plain object, a
+  loader that cannot find the platform binary, or an async binding that
+  silently blocks the event loop.
 
-```bash
-# Rebuild (required after every change)
-make build
+After changing any `#[napi]` signature, run `pnpm build` before `pnpm test` —
+otherwise you are testing the previously built addon.
 
-# Run tests to verify nothing broke
-cargo test
+### Writing bindings
 
-# Check for linting issues
-cargo clippy --all-targets -- -D warnings
-```
+A few conventions the existing modules follow:
 
-### Verifying Capabilities
+- Plain data structs crossing into JS use `#[napi(object)]`, not `#[napi]`.
+  The latter produces a JS *class*, which is almost never what a caller wants.
+- Anything returning `AsyncTask` needs an explicit
+  `#[napi(ts_return_type = "Promise<T>")]`, or the generated typings degrade to
+  `Promise<unknown>`.
+- Operations whose cost scales with input — file reads and writes, tree walks,
+  anything awaiting a subprocess — get an `…Async` variant. Cheap predicates
+  stay synchronous.
+- Prefer refusing an ambiguous or destructive operation over guessing. See
+  `editFile` and `deleteFile` in `src/file.rs` for the shape of that.
 
-The `vajra` binary needs `CAP_SYS_ADMIN` to create namespaces. This capability
-is lost every time you rebuild, which is why `make build` runs `setcap` after
-compilation.
+### Cross-platform work
 
-To check if capabilities are set:
+This is the core requirement of the native layer: it must work on Linux, macOS
+and Windows. A passing local build proves one of the three.
 
-```bash
-getcap target/debug/vajra
-# Should show: target/debug/vajra cap_sys_admin=ep
-```
+- Do not hardcode `/` in tests. Build paths with `path.join` (JS) or `PathBuf`
+  (Rust) so assertions hold where the separator is `\`.
+- Remember that `echo`, `exit` and friends are shell builtins on Windows, not
+  programs — `runCommand` cannot invoke them directly.
+- Gate genuinely platform-specific code with `#[cfg(...)]` and make sure every
+  target still compiles.
+- Skip, rather than fail, tests that need privileges CI may not have (creating
+  a symlink on Windows, for example).
 
-If missing, run `make build` again or manually:
-
-```bash
-sudo setcap cap_sys_admin+ep target/debug/vajra
-```
-
-### Common Debugging Tips
-
-- **Kernel support**: Verify with `uname -r` (need 5.13+) and check
-  `/sys/kernel/security/landlock/` exists
-- **Test without sandbox**: Run your app normally first to ensure it works
-  before testing under vajra
-- **Check socket communication**: The supervisor socket lives in
-  `$XDG_RUNTIME_DIR` (usually `/run/user/$UID/`) as `vajra-<pid>.sock`
-- **Inspect allowed paths**: Use `--allow` and `--allow-rw` flags to grant
-  additional access if your app needs it
-
-## Integration Tests
-
-Vajra uses a two-tier integration testing approach:
-
-### Tier 1: Automated Tests (CI)
-
-These tests run automatically in CI and don't require special capabilities:
-
-```bash
-# Run all tests (unit + integration)
-cargo test
-
-# Run only integration tests
-cargo test --test integration_tests
-```
-
-**What they test:**
-- Supervisor protocol communication
-- CLI commands (`status`, `validate`, `--dry-run`)
-- Configuration validation
-- Dry-run summary output
-
-### Tier 2: Capability Tests (Manual)
-
-These tests require `CAP_SYS_ADMIN` and are marked with `#[ignore]`:
-
-```bash
-# Run capability-required tests locally
-cargo test -- --ignored
-```
-
-**What they test:**
-- Full sandbox launch with namespace isolation
-- Environment file masking inside sandbox
-- Landlock filesystem restrictions
-
-### Manual End-to-End Test
-
-For comprehensive manual testing, use the integration test script:
-
-```bash
-# Build with capabilities
-make build
-
-# Run manual integration test
-./scripts/integration-test.sh
-```
-
-This script:
-1. Validates the demo app configuration
-2. Tests dry-run launch
-3. Checks status outside sandbox
-4. Launches an interactive sandbox for manual verification
-
-**When to run:**
-- Before submitting PRs that modify sandbox behavior
-- When debugging namespace/mount/Landlock issues
-- To verify end-to-end functionality after major changes
+CI runs clippy, both test suites, and a build on ubuntu, macos and windows.
+That matrix is the actual gate.
 
 ## Commit Convention
 
@@ -161,18 +102,18 @@ This project follows **Conventional Commits**:
 Examples:
 
 ```
-feat(sandbox): add timeout support for subprocess runs
-fix(cli): handle permission denied on Linux
-docs: add Quick Start guide
+feat(file): add async directory walk
+fix(process): take only the first PATH match on Windows
+docs: document the napi(object) convention
 ```
 
-Breaking changes use `!` before the colon: `feat!: drop Windows 10 support`
+Breaking changes use `!` before the colon: `feat!: drop setEnv binding`
 
 ## Pull Request Process
 
 1. Open an issue first for significant changes
 2. Keep PRs focused on a single concern
-3. Ensure all tests pass
+3. Ensure all tests pass on every platform in the matrix
 4. Squash commits before merge
 
 ## Code Style
@@ -182,34 +123,20 @@ Breaking changes use `!` before the colon: `feat!: drop Windows 10 support`
 
 ### Pre-commit Hooks
 
-This project uses [pre-commit](https://pre-commit.com/) to automatically run
-formatting, linting, and tests before each commit.
-
-**Install pre-commit:**
+This project uses [pre-commit](https://pre-commit.com/) to run formatting,
+linting, and the Rust tests before each commit.
 
 ```bash
-pip install pre-commit
-# or
-pipx install pre-commit
-```
-
-**Install the git hooks:**
-
-```bash
+pipx install pre-commit    # or: pip install pre-commit
 pre-commit install
 ```
 
-This will run `cargo fmt`, `cargo clippy`, and `cargo test` automatically on
-every commit. You can also run all hooks manually:
+The hooks cover `cargo fmt`, `cargo clippy`, and `cargo test`. They do not run
+`pnpm test`, since that needs a built addon — run it yourself before pushing.
 
 ```bash
 pre-commit run --all-files
-```
-
-To skip hooks for a specific commit (not recommended):
-
-```bash
-git commit --no-verify
+git commit --no-verify      # skip hooks (not recommended)
 ```
 
 ## License
