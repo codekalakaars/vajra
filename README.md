@@ -65,6 +65,12 @@ A few behaviours are deliberate and worth knowing:
   `deleteDir(path, true)`, so a tree is never destroyed by accident.
 - `editFile` fails on an absent *or ambiguous* match rather than silently
   rewriting every occurrence. Pass `replaceAll` when that is what you mean.
+- `copyFile` and `renameFile` refuse to replace an existing destination unless
+  `overwrite` is passed — `fs::copy`/`fs::rename` do so silently by default,
+  which is the same kind of surprise `deleteFile` and `editFile` refuse
+  elsewhere. `renameFile` in particular used to depend on whatever the
+  underlying OS chose to do with an existing destination, which POSIX and
+  Windows have not always agreed on.
 - `normalizePath` resolves `.` and `..` lexically, so it works on paths that do
   not exist yet. Use `realPath` when you need symlinks resolved.
 - There is no `setEnv`/`removeEnv`. `std::env::set_var` races with other

@@ -84,6 +84,71 @@ test('deleteFile will not silently destroy a directory tree', () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
+test('createDir makes missing parents and is idempotent', () => {
+  const dir = scratch()
+  const nested = join(dir, 'a', 'b', 'c')
+
+  native.createDir(nested)
+  assert.equal(native.isDir(nested), true)
+
+  // Calling again on an existing directory must not throw.
+  native.createDir(nested)
+
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('copyFile refuses to overwrite unless told to', () => {
+  const dir = scratch()
+  const src = join(dir, 'src.txt')
+  const dst = join(dir, 'dst.txt')
+  writeFileSync(src, 'new')
+  writeFileSync(dst, 'original')
+
+  assert.throws(() => native.copyFile(src, dst), /already exists/)
+  assert.equal(readFileSync(dst, 'utf8'), 'original')
+
+  native.copyFile(src, dst, true)
+  assert.equal(readFileSync(dst, 'utf8'), 'new')
+  // The source must survive a copy.
+  assert.equal(native.fileExists(src), true)
+
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('renameFile refuses to overwrite unless told to', () => {
+  const dir = scratch()
+  const src = join(dir, 'src.txt')
+  const dst = join(dir, 'dst.txt')
+  writeFileSync(src, 'new')
+  writeFileSync(dst, 'original')
+
+  assert.throws(() => native.renameFile(src, dst), /already exists/)
+  assert.equal(native.fileExists(src), true)
+  assert.equal(readFileSync(dst, 'utf8'), 'original')
+
+  native.renameFile(src, dst, true)
+  assert.equal(readFileSync(dst, 'utf8'), 'new')
+  // Unlike copy, the source must be gone after a rename.
+  assert.equal(native.fileExists(src), false)
+
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('copyFileAsync behaves like copyFile off the event loop', async () => {
+  const dir = scratch()
+  const src = join(dir, 'src.txt')
+  const dst = join(dir, 'dst.txt')
+  writeFileSync(src, 'data')
+
+  await native.copyFileAsync(src, dst)
+  assert.equal(readFileSync(dst, 'utf8'), 'data')
+
+  await assert.rejects(() => native.copyFileAsync(src, dst), /already exists/)
+  await native.copyFileAsync(src, dst, true)
+
+  rmSync(dir, { recursive: true, force: true })
+})
+
 test('listFiles returns plain objects, not class instances', () => {
   const dir = scratch()
   writeFileSync(join(dir, 'a.txt'), 'x')
