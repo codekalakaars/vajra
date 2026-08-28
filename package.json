@@ -11,15 +11,20 @@
       "additional": [
         "aarch64-apple-darwin",
         "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
         "x86_64-pc-windows-msvc"
       ]
     }
   },
   "scripts": {
-    "build": "napi build --release",
-    "build:debug": "napi build",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
     "prepublishOnly": "napi prepublish -t npm",
-    "universal": "napi universal"
+    "universal": "napi universal",
+    "test": "node --test \"test/*.test.mjs\"",
+    "test:rust": "cargo test",
+    "lint": "cargo clippy --all-targets -- -D warnings"
   },
   "files": [
     "index.js",
