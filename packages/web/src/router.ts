@@ -33,7 +33,7 @@ export class Router {
   }
 
   private resolve(): void {
-    const hash = window.location.hash.slice(1) || '/scan'
+    const hash = window.location.hash.slice(1) || '/sessions'
     for (const route of this.routes) {
       const match = hash.match(route.pattern)
       if (match) {
@@ -45,18 +45,23 @@ export class Router {
         return
       }
     }
-    // Default: navigate to scan
-    window.location.hash = '#/scan'
+    // Default: navigate to sessions
+    window.location.hash = '#/sessions'
   }
 }
 
-export function h(tag: string, attrs?: Record<string, string>, ...children: Array<string | HTMLElement | null>): HTMLElement {
+export function h(
+  tag: string,
+  attrs?: Record<string, unknown> | null,
+  ...children: Array<string | HTMLElement | null>
+): HTMLElement {
   const el = document.createElement(tag)
   if (attrs) {
     for (const [key, val] of Object.entries(attrs)) {
-      if (key === 'className') el.className = val
-      else if (key.startsWith('on')) el.addEventListener(key.slice(2).toLowerCase(), val as EventListener)
-      else el.setAttribute(key, val)
+      if (key === 'className') el.className = String(val)
+      else if (key.startsWith('on') && typeof val === 'function')
+        el.addEventListener(key.slice(2).toLowerCase(), val as EventListener)
+      else if (val != null) el.setAttribute(key, String(val))
     }
   }
   for (const child of children) {

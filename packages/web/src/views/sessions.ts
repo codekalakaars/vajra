@@ -89,8 +89,7 @@ export function sessionsView(client: VajraClient): HTMLElement {
     }) as HTMLTextAreaElement
 
     const modelInput = h('select', { className: 'form-select' },
-      h('option', { value: 'openai/gpt-4o' }, 'GPT-4o'),
-      h('option', { value: 'anthropic/claude-sonnet-4-20250514' }, 'Claude Sonnet 4'),
+      h('option', { value: 'z-ai/glm-5.2:free', selected: 'true' }, 'GLM 5.2 (z-ai/glm-5.2:free)'),
     ) as HTMLSelectElement
 
     const createBtn = h('button', { className: 'btn btn-primary' }, 'Create')

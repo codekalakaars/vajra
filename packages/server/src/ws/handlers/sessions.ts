@@ -4,7 +4,12 @@ import type { SessionCreateParams, SessionAttachParams, SessionStopParams } from
 
 export function registerSessionHandlers(router: RpcRouter<ServerContext>): void {
   router.register('session.create', async (params: SessionCreateParams, ctx) => {
-    const result = await ctx.sessions.create(params, (sessionId) => ctx.connection.subscribe(sessionId))
+    const defaultModel = process.env.VAJRA_MODEL || 'z-ai/glm-5.2:free'
+    const withDefaultModel = {
+      ...params,
+      model: params.model?.trim() || defaultModel,
+    }
+    const result = await ctx.sessions.create(withDefaultModel, (sessionId) => ctx.connection.subscribe(sessionId))
 
     // Start the agent loop in the background — the handler returns immediately
     // with the sessionId, and the loop runs concurrently, emitting push events

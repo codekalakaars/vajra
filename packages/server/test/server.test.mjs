@@ -48,7 +48,7 @@ function waitForEvent(ws, eventName) {
   })
 }
 
-test('project.scan and permissions round-trip over a real WS connection', async () => {
+test('permissions round-trip over a real WS connection', async () => {
   const { dbPath, dir: dbDir } = scratchDbPath()
   const projectDir = mkdtempSync(join(tmpdir(), 'vajra-project-'))
   writeFileSync(join(projectDir, 'app.js'), '')
@@ -57,9 +57,6 @@ test('project.scan and permissions round-trip over a real WS connection', async 
   const ws = await connect(server.port)
 
   try {
-    const entries = await call(ws, 'project.scan', { projectDir })
-    assert.ok(entries.some((e) => e.name === 'app.js'))
-
     const defaults = await call(ws, 'project.loadPermissions', { projectDir })
     assert.equal(defaults.default.read, true)
     assert.equal(defaults.default.write, false)

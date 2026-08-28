@@ -235,12 +235,13 @@ export function sessionDetailView(client: VajraClient, params: Record<string, st
     )
   )
 
-  if (sessionData) {
+  if (sessionData != null) {
+    const sd = sessionData as SessionData
     container.appendChild(
       h('div', { style: 'color: var(--text-secondary); margin-bottom: 16px;' },
-        h('span', null, `Project: ${sessionData.projectDir}`),
+        h('span', null, `Project: ${sd.projectDir}`),
         h('span', { style: 'margin: 0 8px;' }, '\u2022'),
-        h('span', null, sessionData.task)
+        h('span', null, sd.task)
       )
     )
   }

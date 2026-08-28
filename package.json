@@ -32,7 +32,11 @@
     "universal": "napi universal",
     "test": "node --test \"test/*.test.mjs\"",
     "test:rust": "cargo test",
-    "lint": "cargo clippy --all-targets -- -D warnings"
+    "lint": "cargo clippy --all-targets -- -D warnings",
+    "dev": "turbo run dev --filter=@vajra/server --filter=@vajra/web",
+    "dev:all": "pnpm -r --parallel dev",
+    "build:all": "turbo run build",
+    "test:all": "turbo run test"
   },
   "files": [
     "index.js",
@@ -40,8 +44,10 @@
     "*.node"
   ],
   "devDependencies": {
-    "@napi-rs/cli": "^2.14.0"
+    "@napi-rs/cli": "^2.14.0",
+    "turbo": "^2.10.12"
   },
+  "packageManager": "pnpm@11.9.0",
   "engines": {
     "node": ">= 18"
   }

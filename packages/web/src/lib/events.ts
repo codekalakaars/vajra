@@ -1,6 +1,6 @@
 // Typed push event bus.
 
-type EventMap = {
+export type EventMap = {
   'session.planUpdated': { sessionId: string; plan: Array<{ index: number; title: string; status: string }> }
   'session.assistantDelta': { sessionId: string; text: string }
   'session.toolCall': { sessionId: string; id: string; name: string; arguments: string }
@@ -18,7 +18,7 @@ type Handler<T> = (payload: T) => void
 export class EventBus {
   private listeners = new Map<string, Set<Handler<unknown>>>()
 
-  on<E extends EventName>(event: E, handler: Handler<EventMap[E]>): () => void {
+  on<E extends EventName>(event: E, handler: Handler<unknown>): () => void {
     let set = this.listeners.get(event)
     if (!set) {
       set = new Set()
