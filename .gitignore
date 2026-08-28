@@ -18,6 +18,10 @@ node_modules/
 vendor/
 .cache/
 
+# napi build artifacts
+native/
+*.node
+
 # Env
 .env
 .env.local
@@ -25,6 +29,7 @@ vendor/
 !examples/demo-app/.env
 examples/demo-app/.sample.env
 examples/demo-app/.vajra.toml
+examples/demo-app/.vajra-perms.json
 
 # Misc
 *.log

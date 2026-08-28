@@ -1,0 +1,36 @@
+{
+  "name": "vajra-native",
+  "version": "0.1.0",
+  "description": "Cross-platform native operations for Vajra",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "vajra-native",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "napi build --release",
+    "build:debug": "napi build",
+    "prepublishOnly": "napi prepublish -t npm",
+    "universal": "napi universal"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
+  "devDependencies": {
+    "@napi-rs/cli": "^2.14.0"
+  },
+  "engines": {
+    "node": ">= 10"
+  },
+  "license": "Apache-2.0"
+}

@@ -241,10 +241,13 @@ pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
 
     mask_env_files(&config.masked_files)?;
 
+    let file_perms = crate::permissions::load(std::path::Path::new(&config.project_dir));
+
     crate::landlock::restrict_filesystem(
         &config.project_dir,
         &config.allowed_paths,
         &config.allowed_rw_paths,
+        file_perms.as_ref(),
     )?;
 
     match unsafe { fork() }.map_err(|e| format!("fork failed: {}", e))? {

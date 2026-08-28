@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::thread;
 
 use vajra::{allow, config, envfile, envpick, sandbox, supervisor};
 
@@ -434,6 +435,12 @@ fn launch(
 
     // Setup supervisor
     let (sup, listener, sock_path) = setup_supervisor(&project_dir, &selection, verbose)?;
+
+    // Start permissions GUI in a background thread
+    let gui_project_dir = project_dir.clone();
+    thread::spawn(move || {
+        let _ = vajra::gui::start(&gui_project_dir, "127.0.0.1", 4823);
+    });
 
     // Fork and run sandbox
     fork_and_run_sandbox(

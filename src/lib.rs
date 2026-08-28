@@ -1,7 +1,14 @@
-pub mod allow;
-pub mod config;
-pub mod envfile;
-pub mod envpick;
-pub mod landlock;
-pub mod sandbox;
-pub mod supervisor;
+#![deny(clippy::all)]
+
+mod file;
+mod process;
+mod env;
+mod path;
+
+#[macro_use]
+extern crate napi_derive;
+
+#[napi]
+pub fn version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
