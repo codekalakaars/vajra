@@ -34,15 +34,21 @@ home.
 
 ## Port status
 
-Nothing here has been ported yet. The plan is, in order:
+| Module | Ported to |
+| --- | --- |
+| `src/envfile.rs` | `src/envfile.rs` |
+| `src/permissions.rs` | `src/permissions.rs` (flat scan; the config format is unchanged) |
+| `redact` from `src/supervisor.rs` | `src/secret.rs` |
+| `src/landlock.rs` | not yet — Phase 3 |
+| everything else | not planned |
 
-1. `envfile.rs` and `permissions.rs` — pure logic, portable as-is
-2. the output-redaction helper, extracted out of `supervisor.rs`
-3. sandbox enforcement — Landlock on Linux, Seatbelt on macOS, and an explicit
-   "unsupported" report on Windows
+Remaining: sandbox enforcement — Landlock on Linux, Seatbelt on macOS, and an
+explicit "unsupported" report on Windows.
 
 `sandbox.rs` and `supervisor.rs` are process-lifecycle concerns rather than
 native primitives; whether the TypeScript harness takes them over is still open.
+`envpick.rs` (interactive picker) and `gui.rs` belong in the harness, not the
+native core.
 
 ## Running it
 

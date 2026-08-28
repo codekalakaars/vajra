@@ -14,13 +14,15 @@ only copy of the sandbox, supervisor and permissions GUI.
 | Layer | State |
 | --- | --- |
 | File / process / env / path primitives | Implemented, tested on Linux/macOS/Windows in CI |
-| Env-file masking and redaction | Not ported yet — lives in `legacy/` |
+| Env-file parsing, sample generation, redaction | Implemented |
+| Per-file permission config | Implemented — declaration only, nothing enforces it |
 | Sandbox enforcement (Landlock / Seatbelt) | Not ported yet — lives in `legacy/` |
 | TypeScript harness | Not started (`packages/`) |
 
-Nothing on this branch confines an agent yet. The security surface described in
-[Security model](#security-model) is a property of the legacy CLI and has not
-been carried over. Do not treat the current native core as a sandbox.
+Nothing on this branch confines an agent yet. A permission config can be
+described and stored, but no layer enforces it, and no filesystem masking is
+applied. The security surface described in [Security model](#security-model) is
+a property of the legacy CLI. Do not treat the current native core as a sandbox.
 
 ## What the native core provides
 
@@ -35,6 +37,11 @@ Cross-platform primitives, exported to Node with generated TypeScript types
   `homeDir`, `tempDir`
 - **path** — `resolvePath`, `normalizePath`, `realPath`, `joinPaths`,
   `dirname`, `basename`, `extension`, `ensureExt`
+- **env files** — `parseEnv`, `loadEnvFile`, `renderSampleEnv`,
+  `ensureSampleEnv`
+- **secrets** — `redact`, `minRedactableLength`
+- **permissions** — `defaultPermissions`, `loadPermissions`, `savePermissions`,
+  `permissionsFor`, `scanProject`
 
 Operations whose cost scales with the data — reads, writes, tree walks and
 anything that waits on a subprocess — also have `…Async` variants that run off
@@ -53,6 +60,13 @@ A few behaviours are deliberate and worth knowing:
   not exist yet. Use `realPath` when you need symlinks resolved.
 - There is no `setEnv`/`removeEnv`. `std::env::set_var` races with other
   threads and Node runs workers; assign to `process.env` instead.
+- `redact` ignores values shorter than `minRedactableLength()` (4). A two-digit
+  port is too common in ordinary output to match safely — check that bound
+  rather than assuming every variable is scrubbed.
+- `scanProject` returns a flat list with project-relative, `/`-separated paths,
+  so a permission config written on one platform still resolves on another.
+- Permissions default to read-only, and `.vajra-perms.json` keeps the legacy
+  CLI's format so existing files still load.
 
 ## Build
 

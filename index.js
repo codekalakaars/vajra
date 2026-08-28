@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { getEnv, envExists, getAllEnv, getEnvFiltered, currentDir, setCurrentDir, homeDir, tempDir, readFile, writeFile, editFile, deleteFile, deleteDir, createDir, listFiles, fileExists, isFile, isDir, copyFile, renameFile, fileSize, readFileAsync, writeFileAsync, listFilesAsync, resolvePath, normalizePath, realPath, joinPaths, dirname, basename, extension, isAbsolute, pathExists, parentPath, ensureExt, runCommand, runShell, runCommandAsync, runShellAsync, which, version } = nativeBinding
+const { getEnv, envExists, getAllEnv, getEnvFiltered, currentDir, setCurrentDir, homeDir, tempDir, parseEnv, loadEnvFile, renderSampleEnv, ensureSampleEnv, readFile, writeFile, editFile, deleteFile, deleteDir, createDir, listFiles, fileExists, isFile, isDir, copyFile, renameFile, fileSize, readFileAsync, writeFileAsync, listFilesAsync, resolvePath, normalizePath, realPath, joinPaths, dirname, basename, extension, isAbsolute, pathExists, parentPath, ensureExt, defaultPermissions, loadPermissions, savePermissions, permissionsFor, scanProject, runCommand, runShell, runCommandAsync, runShellAsync, which, redact, minRedactableLength, version } = nativeBinding
 
 module.exports.getEnv = getEnv
 module.exports.envExists = envExists
@@ -320,6 +320,10 @@ module.exports.currentDir = currentDir
 module.exports.setCurrentDir = setCurrentDir
 module.exports.homeDir = homeDir
 module.exports.tempDir = tempDir
+module.exports.parseEnv = parseEnv
+module.exports.loadEnvFile = loadEnvFile
+module.exports.renderSampleEnv = renderSampleEnv
+module.exports.ensureSampleEnv = ensureSampleEnv
 module.exports.readFile = readFile
 module.exports.writeFile = writeFile
 module.exports.editFile = editFile
@@ -347,9 +351,16 @@ module.exports.isAbsolute = isAbsolute
 module.exports.pathExists = pathExists
 module.exports.parentPath = parentPath
 module.exports.ensureExt = ensureExt
+module.exports.defaultPermissions = defaultPermissions
+module.exports.loadPermissions = loadPermissions
+module.exports.savePermissions = savePermissions
+module.exports.permissionsFor = permissionsFor
+module.exports.scanProject = scanProject
 module.exports.runCommand = runCommand
 module.exports.runShell = runShell
 module.exports.runCommandAsync = runCommandAsync
 module.exports.runShellAsync = runShellAsync
 module.exports.which = which
+module.exports.redact = redact
+module.exports.minRedactableLength = minRedactableLength
 module.exports.version = version
