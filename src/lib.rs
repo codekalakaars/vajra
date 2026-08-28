@@ -9,6 +9,7 @@ mod file;
 mod path;
 mod permissions;
 mod process;
+mod sandbox;
 mod secret;
 
 #[macro_use]

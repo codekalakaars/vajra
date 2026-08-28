@@ -2,16 +2,26 @@
 
 ## Scope
 
-Vajra is mid-rewrite. The current native core (`vajra-native`) provides
-cross-platform file, process, environment and path primitives — it does **not**
-sandbox anything. Landlock confinement, `.env` masking and output redaction
-exist only in the unmaintained [`legacy/`](legacy/) CLI and have not been
-ported.
+Vajra is mid-rewrite. The native core (`vajra-native`) now enforces filesystem
+confinement on Linux (Landlock) and macOS (Seatbelt), and provides output
+redaction. **Windows has no confinement at all** — that is a known and
+documented limitation, not a vulnerability.
 
-So please do not report a "sandbox escape" against this branch: there is no
-sandbox to escape yet. Reports about the native core — path traversal,
-unintended file destruction, command injection through `runShell`, leaking
-environment values — are in scope and welcome.
+In scope, and welcome:
+
+- escaping the filesystem policy on Linux or macOS — reaching a path the policy
+  should deny
+- a permission config that is accepted but not correctly enforced
+- secret values surviving `redact`
+- path traversal, unintended file destruction, or command injection through
+  `runShell`
+
+Not in scope:
+
+- the absence of confinement on Windows
+- `.env` files being readable inside a sandboxed project — masking is not
+  ported yet and the README says so
+- anything in [`legacy/`](legacy/), which is unmaintained reference code
 
 ## Reporting a Vulnerability
 
