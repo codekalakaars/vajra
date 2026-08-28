@@ -6,8 +6,8 @@ so they can work on your code without reading your secrets.
 **This branch is a rewrite in progress.** Vajra is moving from a standalone
 Linux-only Rust CLI to `vajra-native`, a napi-rs addon that a TypeScript
 harness drives: Rust does the native work, TypeScript does the orchestration.
-The previous CLI is preserved under [`legacy/`](legacy/) and still contains the
-only copy of the sandbox, supervisor and permissions GUI.
+The previous CLI is preserved under [`legacy/`](legacy/), which is still the
+only copy of the supervisor, the mount-namespace setup and the permissions GUI.
 
 ## Status
 
@@ -15,14 +15,22 @@ only copy of the sandbox, supervisor and permissions GUI.
 | --- | --- |
 | File / process / env / path primitives | Implemented, tested on Linux/macOS/Windows in CI |
 | Env-file parsing, sample generation, redaction | Implemented |
-| Per-file permission config | Implemented — declaration only, nothing enforces it |
-| Sandbox enforcement (Landlock / Seatbelt) | Not ported yet — lives in `legacy/` |
+| Per-file permission config | Implemented |
+| Sandbox enforcement | Linux (Landlock) and macOS (Seatbelt); **none on Windows** |
+| Env-file masking via bind mounts | Not ported — needs mount namespaces, `legacy/` only |
 | TypeScript harness | Not started (`packages/`) |
 
-Nothing on this branch confines an agent yet. A permission config can be
-described and stored, but no layer enforces it, and no filesystem masking is
-applied. The security surface described in [Security model](#security-model) is
-a property of the legacy CLI. Do not treat the current native core as a sandbox.
+Filesystem confinement is real on Linux and macOS: the test suite applies a
+policy in a child process and asserts the kernel denies a read outside the
+project, so "enforced" is observed rather than assumed.
+
+On **Windows nothing is enforced**. `applySandbox` fails there by default
+rather than returning a success that implies confinement it did not apply; a
+caller that wants to continue anyway has to pass `allowUnenforced`.
+
+Note also that `.env` masking is still unported — a sandboxed agent is confined
+to the project but can read the real `.env` inside it. That masking relied on
+bind mounts, which need the mount namespaces the legacy CLI set up.
 
 ## What the native core provides
 
@@ -42,6 +50,7 @@ Cross-platform primitives, exported to Node with generated TypeScript types
 - **secrets** — `redact`, `minRedactableLength`
 - **permissions** — `defaultPermissions`, `loadPermissions`, `savePermissions`,
   `permissionsFor`, `scanProject`
+- **sandbox** — `sandboxCapabilities`, `applySandbox`
 
 Operations whose cost scales with the data — reads, writes, tree walks and
 anything that waits on a subprocess — also have `…Async` variants that run off
@@ -67,6 +76,18 @@ A few behaviours are deliberate and worth knowing:
   so a permission config written on one platform still resolves on another.
 - Permissions default to read-only, and `.vajra-perms.json` keeps the legacy
   CLI's format so existing files still load.
+- `applySandbox` confines **the calling process**, irreversibly, including every
+  child it later spawns — the harness itself included. Call it immediately
+  before handing control to the agent, never speculatively.
+- Check `sandboxCapabilities()` before relying on confinement. `partial` means
+  an older Landlock ABI cannot honour every restriction; `unsupported` means
+  there is none at all.
+- The system temp directory is **not** granted. The legacy CLI could allow
+  `/tmp` safely because it gave the sandbox a private one via a mount
+  namespace; without that, granting it would expose every other process's
+  scratch files. Pass a private scratch directory in `readWritePaths` instead.
+  (On macOS `/private/var/folders` is unavoidably granted — the OS requires it
+  — and `applySandbox` reports that in its warnings.)
 
 ## Build
 
@@ -93,25 +114,33 @@ does not.
 
 ## Security model
 
-*Describes the legacy CLI under [`legacy/`](legacy/). Not yet true of this branch.*
+Vajra protects against an agent **accidentally or casually** reading secrets. It
+does *not* defend against one that deliberately writes exfiltration code — the
+same limitation CI log masking has. Network access is unrestricted, since agents
+need their LLM APIs. Review what the agent commits.
 
-Vajra protects against an agent **accidentally or casually** reading secrets:
-`.env` files are masked, host env is stripped, files outside the project are
-unreachable via Landlock, and app output is scrubbed of secret values. It does
-*not* fully defend against an agent that deliberately writes exfiltration code
-— the same limitation CI log masking has. Network access is unrestricted, since
-agents need their LLM APIs.
+What this branch enforces today:
 
-One deliberate exception to "host env is stripped": the agent's *own* LLM
-credentials (`ANTHROPIC_API_KEY`, `auth.json`, and similar — see
-`legacy/src/allow.rs`) are forwarded into the sandbox, since the agent cannot
-function without them. Those are the developer's own credentials, not the
-project's secrets.
+- **Filesystem confinement** — Landlock on Linux, Seatbelt on macOS. Paths
+  outside the project (and outside the read-only system paths a process needs)
+  are denied by the kernel. Per-file permissions from `.vajra-perms.json` are
+  applied as individual rules.
+- **Output redaction** — `redact` replaces secret values with
+  `[REDACTED:KEY]`, for a harness streaming an app's output back to an agent.
 
-When this is ported, enforcement will be per-platform and reported honestly:
-Landlock on Linux, Seatbelt on macOS, and **no filesystem confinement on
-Windows** — where the API will say so rather than implying a guarantee it
-cannot make.
+What it does **not** enforce yet, and you should not assume:
+
+- **Nothing on Windows.** There is no filesystem confinement available;
+  `applySandbox` refuses rather than pretending.
+- **`.env` files are not masked.** An agent confined to the project can still
+  read the project's real `.env`. The legacy CLI masked these with read-only
+  bind mounts, which need mount namespaces this layer does not set up.
+- **The host environment is not stripped**, and no credential passthrough
+  policy is applied — that logic is still `legacy/src/allow.rs`. Both belong to
+  process launch, which the TypeScript harness will own.
+
+Confinement is process-wide and irreversible: `applySandbox` restricts the
+calling process and everything it spawns afterwards, itself included.
 
 ## License
 

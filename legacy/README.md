@@ -39,11 +39,12 @@ home.
 | `src/envfile.rs` | `src/envfile.rs` |
 | `src/permissions.rs` | `src/permissions.rs` (flat scan; the config format is unchanged) |
 | `redact` from `src/supervisor.rs` | `src/secret.rs` |
-| `src/landlock.rs` | not yet — Phase 3 |
+| `src/landlock.rs` | `src/sandbox/linux.rs` (rules now keyed by absolute path) |
 | everything else | not planned |
 
-Remaining: sandbox enforcement — Landlock on Linux, Seatbelt on macOS, and an
-explicit "unsupported" report on Windows.
+Still only here: the `.env` bind-mount masking and private `/tmp` from
+`src/sandbox.rs`, which need mount namespaces, and the supervisor's socket
+protocol.
 
 `sandbox.rs` and `supervisor.rs` are process-lifecycle concerns rather than
 native primitives; whether the TypeScript harness takes them over is still open.

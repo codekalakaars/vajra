@@ -180,6 +180,69 @@ export declare function runShellAsync(command: string, cwd?: string | undefined 
  */
 export declare function which(command: string): string | null
 /**
+ * How well this platform can confine the filesystem.
+ *
+ * `enforced` — the kernel denies access outside the policy.
+ * `partial`  — enforced, but an older kernel cannot honour every restriction.
+ * `unsupported` — nothing is enforced. Not a degraded mode: no confinement.
+ */
+export interface SandboxCapabilities {
+  platform: string
+  filesystem: string
+  /** `landlock`, `seatbelt`, or `none`. */
+  mechanism: string
+  details: string
+  /** Landlock ABI version, when the mechanism is Landlock. */
+  abi?: number
+}
+export interface SandboxConfig {
+  projectDir: string
+  /** Extra paths granted read+execute — toolchains, interpreters. */
+  readExecutePaths?: Array<string>
+  /**
+   * Extra paths granted read+write without execute — agent state, logs,
+   * tokens. These hold data, not binaries.
+   */
+  readWritePaths?: Array<string>
+  /** Per-file permissions. When absent the whole project is read-write. */
+  permissions?: PermissionsConfig
+  /**
+   * Proceed on a platform that cannot enforce anything.
+   *
+   * Without this, `applySandbox` fails on such a platform rather than
+   * returning a success that implies confinement it did not apply.
+   */
+  allowUnenforced?: boolean
+}
+export interface SandboxResult {
+  /**
+   * Whether the kernel is now actually enforcing a policy. False only when
+   * the caller opted in via `allowUnenforced`.
+   */
+  enforced: boolean
+  mechanism: string
+  /**
+   * Anything the caller should surface: an unenforceable restriction on an
+   * old kernel, a system path that could not be added, or the fact that
+   * nothing was enforced at all.
+   */
+  warnings: Array<string>
+}
+/** What this platform can enforce. Safe to call at any time; changes nothing. */
+export declare function sandboxCapabilities(): SandboxCapabilities
+/**
+ * Confine the **current process** to the given policy.
+ *
+ * This is irreversible and process-wide: it applies to this Node process and
+ * every child it spawns afterwards, and cannot be lifted. Call it immediately
+ * before handing control to the agent, never speculatively — once applied, the
+ * harness itself is subject to it too.
+ *
+ * Fails on a platform with no enforcement unless `allowUnenforced` is set, so
+ * the unconfined case has to be chosen rather than stumbled into.
+ */
+export declare function applySandbox(config: SandboxConfig): SandboxResult
+/**
  * Replace every occurrence of each secret value with `[REDACTED:<KEY>]`.
  *
  * When streaming process output, redact whole lines rather than raw read

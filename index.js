@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { getEnv, envExists, getAllEnv, getEnvFiltered, currentDir, setCurrentDir, homeDir, tempDir, parseEnv, loadEnvFile, renderSampleEnv, ensureSampleEnv, readFile, writeFile, editFile, deleteFile, deleteDir, createDir, listFiles, fileExists, isFile, isDir, copyFile, renameFile, fileSize, readFileAsync, writeFileAsync, listFilesAsync, resolvePath, normalizePath, realPath, joinPaths, dirname, basename, extension, isAbsolute, pathExists, parentPath, ensureExt, defaultPermissions, loadPermissions, savePermissions, permissionsFor, scanProject, runCommand, runShell, runCommandAsync, runShellAsync, which, redact, minRedactableLength, version } = nativeBinding
+const { getEnv, envExists, getAllEnv, getEnvFiltered, currentDir, setCurrentDir, homeDir, tempDir, parseEnv, loadEnvFile, renderSampleEnv, ensureSampleEnv, readFile, writeFile, editFile, deleteFile, deleteDir, createDir, listFiles, fileExists, isFile, isDir, copyFile, renameFile, fileSize, readFileAsync, writeFileAsync, listFilesAsync, resolvePath, normalizePath, realPath, joinPaths, dirname, basename, extension, isAbsolute, pathExists, parentPath, ensureExt, defaultPermissions, loadPermissions, savePermissions, permissionsFor, scanProject, runCommand, runShell, runCommandAsync, runShellAsync, which, sandboxCapabilities, applySandbox, redact, minRedactableLength, version } = nativeBinding
 
 module.exports.getEnv = getEnv
 module.exports.envExists = envExists
@@ -361,6 +361,8 @@ module.exports.runShell = runShell
 module.exports.runCommandAsync = runCommandAsync
 module.exports.runShellAsync = runShellAsync
 module.exports.which = which
+module.exports.sandboxCapabilities = sandboxCapabilities
+module.exports.applySandbox = applySandbox
 module.exports.redact = redact
 module.exports.minRedactableLength = minRedactableLength
 module.exports.version = version
