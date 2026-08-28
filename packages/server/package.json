@@ -1,0 +1,26 @@
+{
+  "name": "@vajra/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-schema.mjs",
+    "dev": "node --watch dist/index.js",
+    "test": "node --test \"test/*.test.mjs\"",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@vajra/protocol": "workspace:*",
+    "vajra-native": "workspace:*",
+    "better-sqlite3": "^11.3.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.5.4",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.5.4"
+  }
+}

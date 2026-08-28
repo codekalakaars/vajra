@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vajra</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1 class="app-title">Vajra</h1>
+    <nav class="app-nav">
+      <a href="#/scan" class="nav-link">Scan</a>
+      <a href="#/sessions" class="nav-link">Sessions</a>
+    </nav>
+    <div class="connection-status" id="connection-status">
+      <span class="status-dot"></span>
+      <span class="status-text">Disconnected</span>
+    </div>
+  </header>
+  <main class="app-main" id="app-root">
+    <div class="loading">Connecting...</div>
+  </main>
+  <script type="module" src="index.js"></script>
+</body>
+</html>
