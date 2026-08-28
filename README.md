@@ -82,12 +82,16 @@ A few behaviours are deliberate and worth knowing:
 - Check `sandboxCapabilities()` before relying on confinement. `partial` means
   an older Landlock ABI cannot honour every restriction; `unsupported` means
   there is none at all.
-- The system temp directory is **not** granted. The legacy CLI could allow
-  `/tmp` safely because it gave the sandbox a private one via a mount
+- The shared system temp directory is **not** granted. The legacy CLI could
+  allow `/tmp` safely because it gave the sandbox a private one via a mount
   namespace; without that, granting it would expose every other process's
   scratch files. Pass a private scratch directory in `readWritePaths` instead.
-  (On macOS `/private/var/folders` is unavoidably granted — the OS requires it
-  — and `applySandbox` reports that in its warnings.)
+- On macOS the process's **own** temp and cache container
+  (`/private/var/folders/<xx>/<yyyy>`, the parent of `TMPDIR`) is granted, because
+  macOS and Node need it to function. Files sitting beside the project *inside
+  that container* are therefore reachable. `applySandbox` names the granted path
+  in its warnings. Put the project somewhere else — under `$HOME`, as a real
+  project would be — rather than in the system temp dir.
 
 ## Build
 

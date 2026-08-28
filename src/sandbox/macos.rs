@@ -29,6 +29,36 @@ fn should_skip_dir(name: &str) -> bool {
     matches!(name, ".git" | "node_modules" | "target")
 }
 
+/// The per-user container this process's temp directory lives in.
+///
+/// TMPDIR is `/var/folders/<xx>/<yyyy>/T/`; its parent holds both `T` and the
+/// `C` cache directory, and macOS misbehaves without the latter. Resolving is
+/// necessary because `/var` is a symlink to `/private/var` and a profile naming
+/// the link governs nothing.
+///
+/// Falls back to the whole `/private/var/folders` tree when TMPDIR is unset or
+/// has an unexpected shape — a broader grant is survivable, a process that
+/// cannot reach its own cache is not. `apply` reports which one was used.
+fn temp_container() -> String {
+    const FALLBACK: &str = "/private/var/folders";
+
+    let Some(tmpdir) = std::env::var_os("TMPDIR") else {
+        return FALLBACK.to_string();
+    };
+
+    let resolved = match Path::new(&tmpdir).canonicalize() {
+        Ok(p) => p,
+        Err(_) => return FALLBACK.to_string(),
+    };
+
+    match resolved.parent() {
+        Some(parent) if parent.starts_with("/private/var/folders") => {
+            parent.to_string_lossy().to_string()
+        }
+        _ => FALLBACK.to_string(),
+    }
+}
+
 /// Escape a path for inclusion in an SPL string literal.
 ///
 /// Without this a path containing a quote or backslash would terminate the
@@ -66,14 +96,21 @@ pub fn build_profile(config: &SandboxConfig, project_dir: &Path) -> String {
 
     // /private/tmp and /private/var/tmp are deliberately absent: they are the
     // shared temp dirs, and granting them would expose every other process's
-    // scratch files. /private/var/folders has to stay — it is the per-user
-    // cache and TMPDIR that macOS and Node require to function — and the
-    // residual exposure is reported as a warning rather than left implicit.
+    // scratch files.
     out.push_str(
-        "\n; Devices and the per-user cache macOS requires.\n\
-         (allow file-read* file-write* (subpath \"/dev\"))\n\
-         (allow file-read* file-write* (subpath \"/private/var/folders\"))\n",
+        "\n; Devices.\n\
+         (allow file-read* file-write* (subpath \"/dev\"))\n",
     );
+
+    // macOS and Node need this process's own per-user container (TMPDIR and the
+    // sibling cache dir) to function. Granting all of /private/var/folders
+    // would hand over every other session's caches too, so narrow it to just
+    // this one.
+    out.push_str("\n; This process's own temp and cache container.\n");
+    out.push_str(&format!(
+        "(allow file-read* file-write* (subpath \"{}\"))\n",
+        escape(&temp_container())
+    ));
 
     let project = escape(&project_dir.to_string_lossy());
 
@@ -88,17 +125,28 @@ pub fn build_profile(config: &SandboxConfig, project_dir: &Path) -> String {
         Some(perms) => {
             // Traversal into the project has to be possible before any rule
             // beneath it can matter.
-            out.push_str("\n; Project root: traversal plus whatever the default grants.\n");
+            out.push_str("\n; Project root: the default, stated explicitly.\n");
             out.push_str(&format!(
                 "(allow file-read-metadata (subpath \"{}\"))\n",
                 project
             ));
-            if perms.default.read {
-                out.push_str(&format!("(allow file-read* (subpath \"{}\"))\n", project));
-            }
-            if perms.default.write || perms.default.edit || perms.default.delete {
-                out.push_str(&format!("(allow file-write* (subpath \"{}\"))\n", project));
-            }
+
+            // State the denial rather than relying on the absence of a grant.
+            // SBPL is last-match-wins, and an earlier broad allow — the temp
+            // container, say — would otherwise silently supply the access the
+            // default is meant to withhold. A project inside TMPDIR was fully
+            // writable because of exactly that.
+            let default_writable =
+                perms.default.write || perms.default.edit || perms.default.delete;
+
+            let verb = if perms.default.read { "allow" } else { "deny" };
+            out.push_str(&format!("({} file-read* (subpath \"{}\"))\n", verb, project));
+
+            let verb = if default_writable { "allow" } else { "deny" };
+            out.push_str(&format!(
+                "({} file-write* (subpath \"{}\"))\n",
+                verb, project
+            ));
 
             out.push_str("\n; Per-path overrides.\n");
             for (rel, path) in walk(project_dir) {
@@ -118,8 +166,6 @@ pub fn build_profile(config: &SandboxConfig, project_dir: &Path) -> String {
                 }
 
                 let writable = perm.write || perm.edit || perm.delete;
-                let default_writable =
-                    perms.default.write || perms.default.edit || perms.default.delete;
                 if writable != default_writable {
                     let verb = if writable { "allow" } else { "deny" };
                     out.push_str(&format!(
@@ -234,12 +280,24 @@ pub fn apply(config: &SandboxConfig) -> Result<(Vec<String>, Option<String>), St
         return Err(message);
     }
 
-    Ok((
-        vec![
-            "/private/var/folders stays readable and writable: macOS needs the \
-             per-user cache to function, so it is not confined by this policy"
+    let container = temp_container();
+    let mut warnings = vec![format!(
+        "{} stays readable and writable: macOS needs this process's temp and \
+         cache directory to function, so files beside the project within it are \
+         not confined by this policy",
+        container
+    )];
+
+    if container == "/private/var/folders" {
+        warnings.push(
+            "TMPDIR was unset or unrecognised, so the whole /private/var/folders \
+             tree is granted rather than just this session's container"
                 .into(),
-        ],
+        );
+    }
+
+    Ok((
+        warnings,
         Some(
             "macOS confinement uses the deprecated sandbox_init SPI; process-level \
              only, and it cannot be lifted once applied"

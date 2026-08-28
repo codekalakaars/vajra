@@ -10,7 +10,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
@@ -20,6 +20,17 @@ const native = require('../index.js')
 
 const here = dirname(fileURLToPath(import.meta.url))
 const CHILD = join(here, 'fixtures', 'sandbox-child.mjs')
+
+/// Fixtures go under $HOME, not the system temp dir.
+///
+/// On macOS os.tmpdir() is TMPDIR, which sits inside the per-user container the
+/// policy has to grant for the OS to work — so a fixture placed there is inside
+/// an allowed subpath and every "must be denied" assertion passes vacuously.
+/// That is exactly how the profile shipped reporting "enforced" while enforcing
+/// nothing. $HOME is granted by neither backend, so it tests the real thing.
+function outsideAnyGrant(tag) {
+  return mkdtempSync(join(homedir(), `.vajra-test-${tag}-`))
+}
 
 const caps = native.sandboxCapabilities()
 const enforces = caps.filesystem !== 'unsupported'
@@ -48,7 +59,10 @@ test('capabilities report is internally consistent', () => {
   if (process.platform === 'darwin') assert.equal(caps.mechanism, 'seatbelt')
   if (process.platform === 'win32') {
     assert.equal(caps.filesystem, 'unsupported')
-    assert.equal(caps.abi, null)
+    // Loose compare on purpose: napi maps Option::None to `undefined` in an
+    // object field but to `null` as a return value, so a strict compare against
+    // either one is wrong half the time. Do not "fix" this to assert.equal.
+    assert.ok(caps.abi == null)
   }
 })
 
@@ -84,8 +98,8 @@ test('confines the process to the project directory', (t) => {
     return
   }
 
-  const project = mkdtempSync(join(tmpdir(), 'vajra-sb-project-'))
-  const outside = mkdtempSync(join(tmpdir(), 'vajra-sb-outside-'))
+  const project = outsideAnyGrant('project')
+  const outside = outsideAnyGrant('outside')
 
   const inside = join(project, 'app.js')
   const secret = join(outside, 'secret.txt')
@@ -124,7 +138,7 @@ test('per-file permissions deny writes to a read-only file', (t) => {
     return
   }
 
-  const project = mkdtempSync(join(tmpdir(), 'vajra-sb-perms-'))
+  const project = outsideAnyGrant('perms')
   writeFileSync(join(project, 'readable.txt'), 'data')
   writeFileSync(join(project, 'writable.txt'), 'data')
 
