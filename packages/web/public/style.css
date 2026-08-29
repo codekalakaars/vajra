@@ -637,27 +637,6 @@ textarea.form-input {
   margin-bottom: 16px;
 }
 
-/* Sandbox status */
-.sandbox-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--bg-primary);
-  border-radius: var(--radius);
-  font-size: 13px;
-  margin-bottom: 16px;
-}
-
-.sandbox-icon {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-}
-
-.sandbox-icon.enforced { background: var(--success); }
-.sandbox-icon.unenforced { background: var(--warning); }
-
 /* Modal */
 .modal-overlay {
   position: fixed;
@@ -828,27 +807,6 @@ textarea.form-input {
   max-height: 300px;
   overflow-y: auto;
   border-top: 1px solid var(--border);
-}
-
-.chat-header-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-
-.model-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-muted);
-  background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 2px 8px;
-  font-family: var(--font-mono);
 }
 
 /* Responsive */

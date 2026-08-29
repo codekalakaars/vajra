@@ -3,7 +3,6 @@
 import { h } from '../router.js'
 import { permissionRow, permissionHeader, type Permissions } from '../components/permission-toggle.js'
 import { planSteps } from '../components/plan-steps.js'
-import { statusBadge } from '../components/status-badge.js'
 import type { VajraClient } from '../client.js'
 
 interface PlanStep { index: number; title: string; status: string }
@@ -22,13 +21,13 @@ export function chatView(client: VajraClient, params: Record<string, string>): {
   let thinkingText = ''
   let steps: PlanStep[] = []
   let toolCalls: ToolCall[] = []
-  let sessionStatus = 'starting'
   let selectedModel = 'openrouter/free'
+  let isStreaming = false
 
   // --- Setup UI (path + permissions) ---
   const setupEl = h('div', { className: 'chat-setup' })
   const pathInput = h('input', { className: 'form-input', type: 'text', placeholder: '/path/to/project' }) as HTMLInputElement
-  const pathCheckBtn = h('button', { className: 'btn' }, 'Check')
+  const pathCheckBtn = h('button', { className: 'btn' }, 'List')
   const modelSelect = h('select', { className: 'form-select' },
     h('optgroup', { label: 'Auto (Recommended)' },
       h('option', { value: 'openrouter/free', selected: 'true' }, 'Auto-route free models'),
@@ -61,8 +60,10 @@ export function chatView(client: VajraClient, params: Record<string, string>): {
     renderChat()
   })
   const permContainer = h('div', { style: 'margin-top: 12px;' })
-  const saveBtn = h('button', { className: 'btn btn-primary' }, 'Save Permissions')
-  const skipBtn = h('button', { className: 'btn' }, 'Skip (read-only)')
+  const saveBtn = h('button', { className: 'btn btn-primary' }, 'Save Permissions') as HTMLButtonElement
+  saveBtn.setAttribute('disabled', 'true')
+  const skipBtn = h('button', { className: 'btn' }, 'Skip (read-only)') as HTMLButtonElement
+  skipBtn.setAttribute('disabled', 'true')
   const setupMsg = h('div', { style: 'font-size: 12px; color: var(--text-muted); margin-top: 8px;' })
 
   if (!createdSessionId) {
@@ -125,7 +126,7 @@ export function chatView(client: VajraClient, params: Record<string, string>): {
     const dir = pathInput.value.trim()
     if (!dir) return
     projectDir = dir
-    pathCheckBtn.textContent = 'Scanning...'
+    pathCheckBtn.textContent = 'Listing...'
     setupMsg.textContent = ''
     permContainer.innerHTML = ''
     try {
@@ -148,12 +149,14 @@ export function chatView(client: VajraClient, params: Record<string, string>): {
         }
       }
       setupMsg.textContent = `${realFiles.length} file(s) found. Toggle permissions, then Save or Skip.`
+      saveBtn.removeAttribute('disabled')
+      skipBtn.removeAttribute('disabled')
       updateChatEnabled()
     } catch (e) {
       setupMsg.textContent = String(e)
       setupMsg.style.color = 'var(--danger)'
     } finally {
-      pathCheckBtn.textContent = 'Check'
+      pathCheckBtn.textContent = 'List'
     }
   })
 
@@ -184,20 +187,7 @@ export function chatView(client: VajraClient, params: Record<string, string>): {
     updateChatEnabled()
   })
 
-  // Render helpers
-  const statusEl = h('span')
-  const sandboxEl = h('div', { className: 'sandbox-status' })
-  const modelEl = h('div', { className: 'model-badge' })
-  let sandboxEnforced = true
-
   function renderChat() {
-    statusEl.innerHTML = ''
-    statusEl.appendChild(statusBadge(sessionStatus))
-    sandboxEl.innerHTML = ''
-    sandboxEl.appendChild(h('div', { className: `sandbox-icon ${sandboxEnforced ? 'enforced' : 'unenforced'}` }))
-    sandboxEl.appendChild(h('span', null, `Sandbox: ${sandboxEnforced ? 'Enforced' : 'Unenforced'}`))
-    modelEl.innerHTML = ''
-    modelEl.appendChild(h('span', null, `Model: ${selectedModel}`))
 
     planEl.innerHTML = ''
     if (steps.length > 0) {
@@ -227,11 +217,10 @@ export function chatView(client: VajraClient, params: Record<string, string>): {
     }
     messagesEl.innerHTML = ''
     if (assistantText) {
+      messagesEl.style.display = ''
       messagesEl.appendChild(h('div', { className: 'chat-bubble assistant' }, assistantText))
-    } else if (createdSessionId) {
-      messagesEl.appendChild(h('div', { style: 'color:var(--text-muted); font-size:13px;' }, 'No messages yet. Send a task to start master planning.'))
     } else {
-      messagesEl.appendChild(h('div', { style: 'color:var(--text-muted); font-size:13px;' }, 'Set project path and permissions, then chat.'))
+      messagesEl.style.display = 'none'
     }
   }
 
@@ -248,6 +237,7 @@ export function chatView(client: VajraClient, params: Record<string, string>): {
     client.on('session.assistantDelta' as never, (payload: unknown) => {
       const p = payload as { sessionId: string; text: string }
       if (p.sessionId !== targetId()) return
+      isStreaming = true
       assistantText += p.text
       renderChat()
     }),
@@ -277,22 +267,16 @@ export function chatView(client: VajraClient, params: Record<string, string>): {
       if (s) s.status = p.status
       renderChat()
     }),
-    client.on('session.sandboxStatus' as never, (payload: unknown) => {
-      const p = payload as { sessionId: string; enforced: boolean }
-      if (p.sessionId !== targetId()) return
-      sandboxEnforced = p.enforced
-      renderChat()
-    }),
     client.on('session.completed' as never, (payload: unknown) => {
       const p = payload as { sessionId: string }
       if (p.sessionId !== targetId()) return
-      sessionStatus = 'done'
+      isStreaming = false
       renderChat()
     }),
     client.on('session.failed' as never, (payload: unknown) => {
       const p = payload as { sessionId: string; error: string }
       if (p.sessionId !== targetId()) return
-      sessionStatus = 'failed'
+      isStreaming = false
       assistantText += `\n\nError: ${p.error}`
       renderChat()
     })
@@ -304,22 +288,21 @@ export function chatView(client: VajraClient, params: Record<string, string>): {
       const result = (await client.call('session.attach', { sessionId: createdSessionId } as never)) as unknown as {
         session: { status: string; model: string }
         plan: PlanStep[]
-        sandbox: { enforced: boolean } | null
         messages: Array<{ role: string; content: string | null; toolName?: string; toolCallId?: string; toolArgs?: string; toolResult?: string }>
         activeStep: number | null
       }
-      sessionStatus = result.session.status
       selectedModel = result.session.model || 'openrouter/free'
       steps = result.plan || []
-      if (result.sandbox) sandboxEnforced = result.sandbox.enforced
-      assistantText = ''
-      toolCalls = []
-      for (const m of result.messages || []) {
-        if (m.role === 'assistant' && m.content) assistantText += m.content
+      if (!isStreaming) {
+        assistantText = ''
+        toolCalls = []
+        for (const m of result.messages || []) {
+          if (m.role === 'assistant' && m.content) assistantText += m.content
+        }
+        toolCalls = (result.messages || [])
+          .filter((m): m is typeof m & { toolName: string; toolCallId: string } => m.role === 'tool' && !!m.toolCallId && !!m.toolName)
+          .map(m => ({ id: m.toolCallId!, name: m.toolName!, arguments: m.toolArgs || '{}', result: m.toolResult }))
       }
-      toolCalls = (result.messages || [])
-        .filter((m): m is typeof m & { toolName: string; toolCallId: string } => m.role === 'tool' && !!m.toolCallId && !!m.toolName)
-        .map(m => ({ id: m.toolCallId!, name: m.toolName!, arguments: m.toolArgs || '{}', result: m.toolResult }))
       renderChat()
     } catch (e) {
       assistantText = `Error attaching: ${e}`
@@ -353,19 +336,14 @@ export function chatView(client: VajraClient, params: Record<string, string>): {
         } as never)) as unknown as { sessionId: string }
         createdSessionId = result.sessionId
         window.location.hash = `#/session/${createdSessionId}`
-        assistantText += `\nYou: ${text || '(empty)'}\n`
-        sessionStatus = 'planning'
         renderChat()
-        // attach will hydrate plan as agent emits
-        setTimeout(attach, 300)
       } else {
-        // Follow-up message (if session.sendMessage exists, else append locally)
+        // Follow-up message
         try {
           await client.call('session.sendMessage' as never, { sessionId: createdSessionId, content: text } as never)
         } catch {
           assistantText += `\nYou: ${text}\n(offline — message queued)`
         }
-        assistantText += `\nYou: ${text}\n`
         renderChat()
       }
     } catch (e) {
@@ -385,8 +363,6 @@ export function chatView(client: VajraClient, params: Record<string, string>): {
 
   // Layout
   const scrollArea = h('div', { className: 'chat-scroll' })
-  const headerRow = h('div', { className: 'chat-header-row' }, statusEl, sandboxEl, modelEl)
-  scrollArea.appendChild(headerRow)
   scrollArea.appendChild(planEl)
   scrollArea.appendChild(thinkingEl)
   scrollArea.appendChild(messagesEl)

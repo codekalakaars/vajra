@@ -284,7 +284,6 @@ export class SessionManager {
       })
       this.setStatus(sessionId, 'done', Date.now())
       this.events.push('session.completed', sessionId, {})
-      this.handles.delete(sessionId)
       return result
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
