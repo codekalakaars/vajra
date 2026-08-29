@@ -1,6 +1,7 @@
 # OS
 .DS_Store
 Thumbs.db
+.fuse_hidden*
 
 # IDE
 .vscode/
@@ -18,13 +19,22 @@ node_modules/
 vendor/
 .cache/
 
+# napi build artifacts
+*.node
+
 # Env
 .env
 .env.local
-# demo app ships a fake .env on purpose; its generated sample stays out
-!examples/demo-app/.env
-examples/demo-app/.sample.env
-examples/demo-app/.vajra.toml
+# the legacy demo app ships a fake .env on purpose; generated files stay out
+!legacy/examples/demo-app/.env
+legacy/examples/demo-app/.sample.env
+legacy/examples/demo-app/.vajra.toml
+legacy/examples/demo-app/.vajra-perms.json
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
 
 # Misc
 *.log
