@@ -5,6 +5,7 @@ import dotenv from 'dotenv'
 import { openDb } from './db/client.js'
 import { createAppServer } from './ws/server.js'
 import type { SessionLauncher } from './session/manager.js'
+import { forkSessionLauncher } from './session/launcher.js'
 
 // Load .env before reading process.env. Existing env vars win — dotenv never
 // overrides by default. Try CWD first, then repo root (so `pnpm --filter`
@@ -75,7 +76,7 @@ if (isMain) {
     console.error('  See .env.example at the repo root')
     process.exit(1)
   }
-  startServer({ port, apiKey }).then((server) => {
+  startServer({ port, apiKey, launcher: forkSessionLauncher }).then((server) => {
     console.log(`vajra server listening on :${server.port}`)
   })
 }

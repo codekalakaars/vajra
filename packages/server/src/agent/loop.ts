@@ -9,7 +9,7 @@ import type { SqliteDb } from '../db/client.js'
 import type { LaunchHandle } from '../session/manager.js'
 import type { PushEvents } from '../session/manager.js'
 import type { PermissionsConfig } from '@vajra/protocol'
-import { chatCompletion, type OpenRouterMessage } from './openrouter.js'
+import { chatCompletion, streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
 import { parseToolCall, getToolSpecs } from './tools.js'
 import { scanProject } from '../native.js'
 
@@ -216,27 +216,29 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
         throw new Error(`Max tool calls (${maxToolCalls}) exceeded`)
       }
 
-      const result = await chatCompletion({
-        apiKey,
-        model: session.model,
-        messages,
-        tools,
-      })
+      const result = await streamChatCompletion(
+        {
+          apiKey,
+          model: session.model,
+          messages,
+          tools,
+        },
+        (text) => {
+          events.push('session.assistantDelta', session.id, { text })
+        },
+        (thinking) => {
+          events.push('session.thinkingDelta', session.id, { text: thinking })
+        },
+      )
 
       const assistantMsg = result.message
       messages.push(assistantMsg)
 
-      // Persist assistant message
+      // Persist assistant message (streaming callbacks already emitted deltas)
       seq = nextSeq(db, session.id)
       const assistantContent = assistantMsg.content ?? null
-      const toolCallsJson = assistantMsg.tool_calls ? JSON.stringify(assistantMsg.tool_calls) : null
       appendMessage(db, session.id, seq, 'assistant', assistantContent)
       seq++
-
-      // Push text deltas if the model produced content
-      if (assistantMsg.content) {
-        events.push('session.assistantDelta', session.id, { text: assistantMsg.content })
-      }
 
       if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
         // Dispatch each tool call

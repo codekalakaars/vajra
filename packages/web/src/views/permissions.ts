@@ -78,6 +78,23 @@ export function permissionsView(client: VajraClient, params: Record<string, stri
     }
   })
 
+  // Guard buttons until WS connected
+  const updateConn = (state: string) => {
+    const disabled = state !== 'connected'
+    if (disabled) {
+      loadBtn.setAttribute('disabled', 'true')
+      saveBtn.setAttribute('disabled', 'true')
+      loadBtn.title = saveBtn.title = 'Connecting to server...'
+    } else {
+      // re-enable; per-action handlers will manage disabled during load/save
+      if (loadBtn.textContent === 'Load') loadBtn.removeAttribute('disabled')
+      if (saveBtn.textContent === 'Save Permissions') saveBtn.removeAttribute('disabled')
+      loadBtn.title = saveBtn.title = ''
+    }
+  }
+  if (client.state !== 'connected') updateConn(client.state)
+  client.onStateChange(updateConn)
+
   container.appendChild(h('h2', { className: 'card-title' }, 'Permissions'))
   container.appendChild(h('p', { style: 'color: var(--text-secondary); margin-bottom: 16px;' }, 'Configure which files the agent can access.'))
   container.appendChild(
