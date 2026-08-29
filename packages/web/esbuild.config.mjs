@@ -14,19 +14,16 @@ if (!existsSync(outdir)) mkdirSync(outdir, { recursive: true })
 cpSync(join(__dirname, 'public'), outdir, { recursive: true })
 
 const ctx = await context({
-  entryPoints: [join(__dirname, 'src', 'index.ts')],
+  entryPoints: [join(__dirname, 'src', 'index.tsx')],
   bundle: true,
   format: 'esm',
   target: 'es2022',
   outdir,
   minify: isProd,
   sourcemap: !isProd,
+  jsx: 'automatic',
   define: {
     'process.env.NODE_ENV': isProd ? '"production"' : '"development"',
-  },
-  alias: {
-    // Protocol package provides types only; esbuild will strip them.
-    // But if any runtime values slip in, we want a clear error.
   },
 })
 
@@ -34,7 +31,6 @@ if (isWatch) {
   await ctx.watch()
   console.log('Watching for changes...')
 
-  // Simple serve for development
   const { host, port } = await ctx.serve({
     servedir: outdir,
     port: 8080,

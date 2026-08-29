@@ -25,15 +25,7 @@ export interface ProjectFileEntry {
   isMasked: boolean
 }
 
-export type PlanStepStatus = 'pending' | 'active' | 'done' | 'skipped'
-
-export interface PlanStep {
-  index: number
-  title: string
-  status: PlanStepStatus
-}
-
-export type SessionStatus = 'starting' | 'planning' | 'executing' | 'done' | 'failed' | 'stopped'
+export type SessionStatus = 'starting' | 'running' | 'done' | 'failed' | 'stopped'
 
 // ---- RPC method params/results ----
 
@@ -94,10 +86,8 @@ export interface AttachMessage {
 
 export interface SessionAttachResult {
   session: SessionListResult[number]
-  plan: PlanStep[]
   sandbox: SandboxStatusPayload | null
   messages: AttachMessage[]
-  activeStep: number | null
 }
 
 export interface SessionStopParams {
@@ -124,31 +114,8 @@ export interface SandboxStatusPayload {
   warnings: string[]
 }
 
-export interface PlanUpdatedPayload {
-  steps: PlanStep[]
-}
-
 export interface AssistantDeltaPayload {
   text: string
-}
-
-export interface ToolCallPayload {
-  callId: string
-  tool: string
-  args: unknown
-}
-
-export interface ToolResultPayload {
-  callId: string
-  tool: string
-  ok: boolean
-  result?: unknown
-  error?: string
-}
-
-export interface StepStatusPayload {
-  index: number
-  status: PlanStepStatus
 }
 
 export interface FailedPayload {
@@ -162,12 +129,8 @@ export interface ThinkingDeltaPayload {
 /** Maps each push-event name to its payload type, for a typed subscriber. */
 export interface PushEventPayloads {
   'session.sandboxStatus': SandboxStatusPayload
-  'session.planUpdated': PlanUpdatedPayload
   'session.assistantDelta': AssistantDeltaPayload
   'session.thinkingDelta': ThinkingDeltaPayload
-  'session.toolCall': ToolCallPayload
-  'session.toolResult': ToolResultPayload
-  'session.stepStatus': StepStatusPayload
   'session.completed': Record<string, never>
   'session.failed': FailedPayload
   'session.deleted': { sessionId: string }

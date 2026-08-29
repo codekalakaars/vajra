@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
-import type { PermissionsConfig, PlanStep, SessionStatus, SessionListResult, AttachMessage } from '@vajra/protocol'
+import type { PermissionsConfig, SessionStatus, SessionListResult, AttachMessage } from '@vajra/protocol'
 import { agentLoop, type AgentLoopResult } from '../agent/loop.js'
 
 export interface LaunchJob {
@@ -101,7 +101,7 @@ export class SessionManager {
         (report) => this.recordSandboxReport(sessionId, report),
       )
       this.handles.set(sessionId, handle)
-      this.setStatus(sessionId, 'planning')
+      this.setStatus(sessionId, 'running')
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       this.setStatus(sessionId, 'failed', now)
@@ -151,10 +151,6 @@ export class SessionManager {
       throw new Error(`No such session '${sessionId}'`)
     }
 
-    const steps = this.db
-      .prepare(`SELECT step_index, title, status FROM plan_steps WHERE session_id = ? ORDER BY step_index`)
-      .all(sessionId) as Array<{ step_index: number; title: string; status: PlanStep['status'] }>
-
     const messages = this.db
       .prepare(
         `SELECT seq, role, content, tool_name, tool_call_id, tool_args, tool_result, created_at
@@ -171,8 +167,6 @@ export class SessionManager {
         created_at: number
       }>
 
-    const activeStep = steps.find((s) => s.status === 'active')?.step_index ?? null
-
     return {
       session: {
         id: row.id,
@@ -182,7 +176,6 @@ export class SessionManager {
         status: row.status,
         createdAt: row.created_at,
       },
-      plan: steps.map((s) => ({ index: s.step_index, title: s.title, status: s.status })),
       sandbox:
         row.sandbox_enforced === null
           ? null
@@ -201,7 +194,6 @@ export class SessionManager {
         toolResult: m.tool_result ?? undefined,
         createdAt: m.created_at,
       })),
-      activeStep,
     }
   }
 
@@ -237,12 +229,7 @@ export class SessionManager {
    * Must be called after the creating connection is subscribed (see `create`).
    * The API key is held in this process — the worker never sees it.
    */
-  async startSession(sessionId: string, apiKey: string, maxToolCalls?: number): Promise<AgentLoopResult> {
-    const handle = this.handles.get(sessionId)
-    if (!handle) {
-      throw new Error(`No handle for session '${sessionId}'`)
-    }
-
+  async startSession(sessionId: string, apiKey: string): Promise<AgentLoopResult> {
     const row = this.db
       .prepare(`SELECT id, project_dir, task, model FROM sessions WHERE id = ?`)
       .get(sessionId) as { id: string; project_dir: string; task: string; model: string } | undefined
@@ -267,7 +254,7 @@ export class SessionManager {
     }
 
     try {
-      this.setStatus(sessionId, 'planning')
+      this.setStatus(sessionId, 'running')
       const result = await agentLoop({
         session: {
           id: sessionId,
@@ -277,10 +264,8 @@ export class SessionManager {
         },
         apiKey,
         permissions,
-        handle,
         events: this.events,
         db: this.db,
-        maxToolCalls,
       })
       this.setStatus(sessionId, 'done', Date.now())
       this.events.push('session.completed', sessionId, {})
@@ -296,20 +281,10 @@ export class SessionManager {
   }
 
   async sendMessage(sessionId: string, content: string, apiKey: string): Promise<void> {
-    const handle = this.handles.get(sessionId)
-    if (!handle) throw new Error(`Session ${sessionId} is not active`)
     const row = this.db
       .prepare(`SELECT project_dir, model FROM sessions WHERE id = ?`)
       .get(sessionId) as { project_dir: string; model: string } | undefined
     if (!row) throw new Error(`No such session ${sessionId}`)
-
-    // Append user message
-    const seqRow = this.db
-      .prepare(`SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM messages WHERE session_id = ?`)
-      .get(sessionId) as { next_seq: number }
-    this.db
-      .prepare(`INSERT INTO messages (session_id, seq, role, content, created_at) VALUES (?, ?, 'user', ?, ?)`)
-      .run(sessionId, seqRow.next_seq, content, Date.now())
 
     const { loadPermissions } = await import('../native.js')
     const permissions = loadPermissions(row.project_dir) ?? {
@@ -318,13 +293,12 @@ export class SessionManager {
       files: {},
     }
 
-    this.setStatus(sessionId, 'executing')
+    this.setStatus(sessionId, 'running')
     try {
       const result = await agentLoop({
         session: { id: sessionId, projectDir: row.project_dir, task: content, model: row.model },
         apiKey,
         permissions,
-        handle,
         events: this.events,
         db: this.db,
       })
