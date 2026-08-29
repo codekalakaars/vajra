@@ -1,0 +1,54 @@
+{
+  "name": "vajra-native",
+  "version": "0.1.0",
+  "description": "Cross-platform native operations for Vajra",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codekalakaars/vajra.git"
+  },
+  "bugs": {
+    "url": "https://github.com/codekalakaars/vajra/issues"
+  },
+  "napi": {
+    "name": "vajra-native",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+        "x86_64-pc-windows-msvc"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "prepublishOnly": "napi prepublish -t npm",
+    "universal": "napi universal",
+    "test": "node --test \"test/*.test.mjs\"",
+    "test:rust": "cargo test",
+    "lint": "cargo clippy --all-targets -- -D warnings",
+    "dev": "turbo run dev --filter=@vajra/server --filter=@vajra/web",
+    "dev:all": "pnpm -r --parallel dev",
+    "build:all": "turbo run build",
+    "test:all": "turbo run test"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
+  "devDependencies": {
+    "@napi-rs/cli": "^2.14.0",
+    "turbo": "^2.10.12"
+  },
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">= 18"
+  }
+}
