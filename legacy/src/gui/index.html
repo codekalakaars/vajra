@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>vajra permissions</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root { --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --text-muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --orange: #d29922; --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+body { background: var(--bg); color: var(--text); font: 14px/1.5 var(--font); padding: 0; }
+.header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.header h1 { font-size: 16px; font-weight: 600; white-space: nowrap; }
+.header h1 span { color: var(--accent); }
+.search { flex: 1; min-width: 180px; }
+.search input { width: 100%; padding: 6px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; }
+.search input:focus { outline: none; border-color: var(--accent); }
+.tree { padding: 8px 0; }
+.tree-item { padding: 2px 0; }
+.tree-item .row { display: flex; align-items: center; gap: 6px; padding: 3px 20px; cursor: default; border-radius: 0; }
+.tree-item .row:hover { background: var(--surface); }
+.tree-item .row .icon { flex-shrink: 0; width: 18px; text-align: center; font-size: 13px; }
+.tree-item .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-item .row .badge { font-size: 10px; color: var(--text-muted); background: var(--surface); padding: 1px 6px; border-radius: 8px; }
+.tree-item .row .masked-label { font-size: 10px; color: var(--orange); font-style: italic; }
+.tree-item .row .toggles { display: flex; gap: 2px; margin-left: 8px; flex-shrink: 0; }
+.tree-item .row .toggles label { display: flex; align-items: center; gap: 2px; font-size: 11px; color: var(--text-muted); cursor: pointer; padding: 1px 4px; border-radius: 3px; }
+.tree-item .row .toggles label:hover { background: var(--border); }
+.tree-item .row .toggles input { width: 13px; height: 13px; cursor: pointer; accent-color: var(--accent); }
+.tree-item .row .toggles .on { color: var(--text); }
+.children { padding-left: 20px; }
+details > summary { list-style: none; display: flex; align-items: center; gap: 6px; padding: 3px 20px; cursor: pointer; user-select: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary:hover { background: var(--surface); }
+details > summary .chevron { font-size: 10px; color: var(--text-muted); transition: transform .15s; width: 10px; text-align: center; }
+details[open] > summary .chevron { transform: rotate(90deg); }
+details > summary .toggles { display: flex; gap: 2px; margin-left: 8px; flex-shrink: 0; }
+details > summary .toggles label { display: flex; align-items: center; gap: 2px; font-size: 11px; color: var(--text-muted); cursor: pointer; padding: 1px 4px; border-radius: 3px; }
+details > summary .toggles label:hover { background: var(--border); }
+details > summary .toggles input { width: 13px; height: 13px; cursor: pointer; accent-color: var(--accent); }
+details > summary .toggles .on { color: var(--text); }
+details > summary .badge { font-size: 10px; color: var(--text-muted); background: var(--surface); padding: 1px 6px; border-radius: 8px; }
+details > summary .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.footer { background: var(--surface); border-top: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; position: sticky; bottom: 0; }
+.footer .default-label { font-size: 12px; color: var(--text-muted); }
+.footer .toggles { display: flex; gap: 2px; }
+.footer .toggles label { display: flex; align-items: center; gap: 2px; font-size: 12px; color: var(--text-muted); cursor: pointer; padding: 2px 6px; border-radius: 3px; }
+.footer .toggles label:hover { background: var(--border); }
+.footer .toggles input { width: 14px; height: 14px; cursor: pointer; accent-color: var(--accent); }
+.footer .toggles .on { color: var(--text); }
+.btn { padding: 6px 16px; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; font-size: 13px; font-weight: 500; }
+.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-primary:hover { filter: brightness(1.1); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.save-status { font-size: 12px; padding: 3px 8px; border-radius: 4px; }
+.save-status.saved { color: var(--green); }
+.save-status.error { color: var(--red); }
+.save-status.saving { color: var(--orange); }
+.empty { padding: 40px 20px; text-align: center; color: var(--text-muted); }
+.hidden { display: none !important; }
+.depth-limit { padding: 8px 20px; font-size: 11px; color: var(--text-muted); font-style: italic; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span>⚡</span> vajra permissions</h1>
+  <div class="search"><input id="filter" type="text" placeholder="Filter files..." oninput="render()"></div>
+  <span id="file-count" style="font-size:12px;color:var(--text-muted)"></span>
+</div>
+
+<div class="tree" id="tree"></div>
+
+<div class="footer">
+  <span class="default-label">Default for new files:</span>
+  <div class="toggles" id="default-toggles"></div>
+  <button class="btn btn-primary" id="save-btn" onclick="save()">Save</button>
+  <span id="save-status" class="save-status"></span>
+</div>
+
+<script>
+const TOGGLE_LABELS = { read: 'R', write: 'W', edit: 'E', delete: 'D' };
+
+let tree = null;
+let config = null;
+
+function init() {
+  Promise.all([
+    fetch('/api/tree').then(r => r.json()),
+    fetch('/api/permissions').then(r => r.json()),
+  ]).then(([t, c]) => {
+    tree = t;
+    config = c;
+    render();
+  }).catch(e => {
+    document.getElementById('tree').innerHTML = `<div class="empty">Failed to load: ${e.message}</div>`;
+  });
+}
+
+function getPerm(path) {
+  if (path === '') return config.default;
+  return config.files[path] || config.default;
+}
+
+function setPerm(path, key, val) {
+  if (path === '') {
+    config.default[key] = val;
+    render();
+    return;
+  }
+  let p = config.files[path];
+  if (!p) {
+    p = { ...config.default };
+    config.files[path] = p;
+  }
+  p[key] = val;
+  render();
+}
+
+function toggleHtml(key, val) {
+  const on = val ? 'on' : '';
+  return `<label class="${on}"><input type="checkbox" ${val ? 'checked' : ''} onchange="void 0">${TOGGLE_LABELS[key]}</label>`;
+}
+
+function renderDir(dirPath, entries, depth) {
+  const filter = document.getElementById('filter').value.toLowerCase();
+  let html = '';
+  for (const entry of entries) {
+    const path = entry.path;
+    const nameMatch = entry.name.toLowerCase().includes(filter);
+    const pathMatch = entry.path.toLowerCase().includes(filter);
+    let childMatch = false;
+    let childHtml = '';
+    if (entry.is_dir && entry.children.length > 0) {
+      childHtml = renderDir(path, entry.children, depth + 1);
+      childMatch = childHtml.includes('data-match="true"');
+    }
+    const match = nameMatch || pathMatch || childMatch;
+    if (filter && !match) continue;
+
+    const perm = getPerm(path);
+    const toggles = Object.keys(TOGGLE_LABELS).map(k => toggleHtml(k, perm[k])).join('');
+
+    if (entry.is_dir) {
+      const badge = entry.children.length ? `<span class="badge">${entry.children.length}</span>` : '';
+      html += `<details ${childMatch || nameMatch ? 'open' : ''} data-match="${match}">
+        <summary>
+          <span class="chevron">▶</span>
+          <span class="icon">📁</span>
+          <span class="name">${esc(entry.name)}</span>
+          ${badge}
+          ${entry.is_masked ? '<span class="masked-label">masked</span>' : `<span class="toggles">${toggles}</span>`}
+        </summary>
+        <div class="children">${childHtml || '<div class="empty" style="padding:8px 0;font-size:12px;">empty</div>'}</div>
+      </details>`;
+    } else {
+      html += `<div class="tree-item" data-match="${match}">
+        <div class="row">
+          <span class="icon">📄</span>
+          <span class="name">${esc(entry.name)}</span>
+          ${entry.is_masked ? '<span class="masked-label">masked</span>' : `<span class="toggles">${toggles}</span>`}
+        </div>
+      </div>`;
+    }
+  }
+  return html;
+}
+
+function render() {
+  if (!tree || !config) return;
+  const html = renderDir('', tree.children, 0);
+  document.getElementById('tree').innerHTML = html;
+
+  // Count visible files
+  const items = document.querySelectorAll('.tree-item, details');
+  let count = 0;
+  for (const el of items) {
+    if (el.dataset.match === 'true' || !document.getElementById('filter').value) count++;
+  }
+  document.getElementById('file-count').textContent = `${count} items`;
+
+  const filter = document.getElementById('filter').value.toLowerCase();
+  document.querySelectorAll('.tree-item, details').forEach(el => {
+    if (!filter) { el.classList.remove('hidden'); return; }
+    const match = el.dataset.match === 'true';
+    el.classList.toggle('hidden', !match);
+  });
+
+  renderDefaultToggles();
+
+  // Re-bind events
+  document.querySelectorAll('.toggles input').forEach(inp => {
+    const label = inp.closest('label');
+    if (!label) return;
+    const key = Object.keys(TOGGLE_LABELS).find(k => TOGGLE_LABELS[k] === label.textContent.trim());
+    if (!key) return;
+    inp.addEventListener('change', function() {
+      const row = this.closest('.row, summary');
+      if (!row) return;
+      // Find path
+      let pathEl = row.querySelector('.name');
+      if (!pathEl) return;
+      // Walk up to find details with stored path
+      let path = '';
+      let el = row.closest('details') || row.closest('.tree-item');
+      // Actually, we need to get the path from the tree data
+      // Better approach: look up by the structure
+      const name = pathEl.textContent.trim();
+      const dirEl = row.closest('details');
+      let dirPath = '';
+      if (dirEl) {
+        const summary = dirEl.querySelector('summary .name');
+        if (summary) {
+          // We need parent chain — let's use a different approach
+        }
+      }
+      // Simplest: find the FileEntry by traversing
+      updatePermFromUI();
+    });
+  });
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function renderDefaultToggles() {
+  if (!config) return;
+  const container = document.getElementById('default-toggles');
+  container.innerHTML = Object.keys(TOGGLE_LABELS).map(k => {
+    const val = config.default[k];
+    const on = val ? 'on' : '';
+    return `<label class="${on}" data-key="${k}"><input type="checkbox" ${val ? 'checked' : ''}>${TOGGLE_LABELS[k]}</label>`;
+  }).join('');
+  container.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('change', function() {
+      const key = this.closest('label').dataset.key;
+      config.default[key] = this.checked;
+      this.closest('label').className = this.checked ? 'on' : '';
+      render();
+    });
+  });
+}
+
+function updatePermFromUI() {
+  // Rebuild file permissions from DOM
+  const newFiles = {};
+  document.querySelectorAll('details').forEach(details => {
+    const summary = details.querySelector('summary');
+    if (!summary) return;
+    const nameEl = summary.querySelector('.name');
+    if (!nameEl) return;
+    // Build path from parent chain
+    const pathParts = [];
+    let current = details.parentElement;
+    while (current) {
+      const parentDetails = current.closest('details');
+      if (parentDetails) {
+        const pName = parentDetails.querySelector('summary .name');
+        if (pName) pathParts.unshift(pName.textContent.trim());
+        current = parentDetails.parentElement;
+      } else {
+        break;
+      }
+    }
+    const name = nameEl.textContent.trim();
+    pathParts.push(name);
+    const path = pathParts.join('/');
+
+    const toggles = summary.querySelectorAll('.toggles input');
+    if (toggles.length === 0) return;
+    const perm = {};
+    toggles.forEach(inp => {
+      const label = inp.closest('label');
+      if (!label) return;
+      const key = Object.keys(TOGGLE_LABELS).find(k => TOGGLE_LABELS[k] === label.textContent.trim());
+      if (key) perm[key] = inp.checked;
+    });
+    if (Object.keys(perm).length) newFiles[path] = perm;
+  });
+
+  document.querySelectorAll('.tree-item').forEach(item => {
+    const row = item.querySelector('.row');
+    if (!row) return;
+    const nameEl = row.querySelector('.name');
+    if (!nameEl) return;
+    const pathParts = [];
+    let current = item.parentElement;
+    while (current) {
+      const parentDetails = current.closest('details');
+      if (parentDetails) {
+        const pName = parentDetails.querySelector('summary .name');
+        if (pName) pathParts.unshift(pName.textContent.trim());
+        current = parentDetails.parentElement;
+      } else {
+        break;
+      }
+    }
+    const name = nameEl.textContent.trim();
+    pathParts.push(name);
+    const path = pathParts.join('/');
+
+    const toggles = row.querySelectorAll('.toggles input');
+    if (toggles.length === 0) return;
+    const perm = {};
+    toggles.forEach(inp => {
+      const label = inp.closest('label');
+      if (!label) return;
+      const key = Object.keys(TOGGLE_LABELS).find(k => TOGGLE_LABELS[k] === label.textContent.trim());
+      if (key) perm[key] = inp.checked;
+    });
+    if (Object.keys(perm).length) newFiles[path] = perm;
+  });
+
+  config.files = newFiles;
+}
+
+function save() {
+  updatePermFromUI();
+  const btn = document.getElementById('save-btn');
+  const status = document.getElementById('save-status');
+  btn.disabled = true;
+  status.className = 'save-status saving';
+  status.textContent = 'Saving...';
+
+  fetch('/api/permissions', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  }).then(r => {
+    if (!r.ok) throw new Error(r.statusText);
+    status.className = 'save-status saved';
+    status.textContent = 'Saved';
+    setTimeout(() => { status.textContent = ''; }, 2000);
+  }).catch(e => {
+    status.className = 'save-status error';
+    status.textContent = `Error: ${e.message}`;
+  }).finally(() => {
+    btn.disabled = false;
+  });
+}
+
+init();
+</script>
+</body>
+</html>
