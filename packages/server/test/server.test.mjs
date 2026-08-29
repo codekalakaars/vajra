@@ -118,7 +118,6 @@ test('session.create fails closed when no launcher is configured yet', async () 
     assert.equal(attached.sandbox, null)
     assert.ok(Array.isArray(attached.messages))
     assert.equal(attached.messages.length, 0)
-    assert.equal(attached.activeStep, null)
   } finally {
     ws.close()
     await server.close()

@@ -1,6 +1,7 @@
 # OS
 .DS_Store
 Thumbs.db
+.fuse_hidden*
 
 # IDE
 .vscode/
@@ -29,6 +30,11 @@ vendor/
 legacy/examples/demo-app/.sample.env
 legacy/examples/demo-app/.vajra.toml
 legacy/examples/demo-app/.vajra-perms.json
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
 
 # Misc
 *.log

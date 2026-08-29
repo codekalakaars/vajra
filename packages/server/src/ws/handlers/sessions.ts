@@ -16,7 +16,7 @@ export function registerSessionHandlers(router: RpcRouter<ServerContext>): void 
     // as it progresses. Skip if task is empty (user will send via sendMessage)
     // or if the launcher failed (status would be 'failed', no handle set).
     const status = ctx.sessions.getStatus(result.sessionId)
-    if (ctx.apiKey && withDefaultModel.task && status === 'planning') {
+    if (ctx.apiKey && withDefaultModel.task && status === 'running') {
       ctx.sessions.startSession(result.sessionId, ctx.apiKey).catch((err) => {
         console.error(`Agent loop failed for session ${result.sessionId}:`, err)
       })
