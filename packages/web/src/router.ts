@@ -33,7 +33,7 @@ export class Router {
   }
 
   private resolve(): void {
-    const hash = window.location.hash.slice(1) || '/sessions'
+    const hash = window.location.hash.slice(1) || '/'
     for (const route of this.routes) {
       const match = hash.match(route.pattern)
       if (match) {
@@ -45,8 +45,8 @@ export class Router {
         return
       }
     }
-    // Default: navigate to sessions
-    window.location.hash = '#/sessions'
+    // Default: navigate to chat root
+    window.location.hash = '#/'
   }
 }
 

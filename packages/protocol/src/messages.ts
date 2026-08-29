@@ -48,6 +48,11 @@ export interface ProjectSavePermissionsParams {
 }
 export type ProjectSavePermissionsResult = { ok: true }
 
+export interface ProjectScanParams {
+  projectDir: string
+}
+export type ProjectScanResult = ProjectFileEntry[]
+
 export interface SessionCreateParams {
   projectDir: string
   permissions: PermissionsConfig
@@ -67,6 +72,7 @@ export type SessionListResult = Array<{
   id: string
   projectDir: string
   task: string
+  model: string
   status: SessionStatus
   createdAt: number
 }>
@@ -98,6 +104,17 @@ export interface SessionStopParams {
   sessionId: string
 }
 export type SessionStopResult = { ok: true }
+
+export interface SessionDeleteParams {
+  sessionId: string
+}
+export type SessionDeleteResult = { ok: true }
+
+export interface SessionSendMessageParams {
+  sessionId: string
+  content: string
+}
+export type SessionSendMessageResult = { ok: true }
 
 // ---- Push event payloads ----
 
@@ -138,16 +155,22 @@ export interface FailedPayload {
   message: string
 }
 
+export interface ThinkingDeltaPayload {
+  text: string
+}
+
 /** Maps each push-event name to its payload type, for a typed subscriber. */
 export interface PushEventPayloads {
   'session.sandboxStatus': SandboxStatusPayload
   'session.planUpdated': PlanUpdatedPayload
   'session.assistantDelta': AssistantDeltaPayload
+  'session.thinkingDelta': ThinkingDeltaPayload
   'session.toolCall': ToolCallPayload
   'session.toolResult': ToolResultPayload
   'session.stepStatus': StepStatusPayload
   'session.completed': Record<string, never>
   'session.failed': FailedPayload
+  'session.deleted': { sessionId: string }
 }
 
 export type PushEventName = keyof PushEventPayloads

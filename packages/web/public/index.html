@@ -8,19 +8,25 @@
 </head>
 <body>
   <header class="app-header">
+    <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Toggle sidebar">☰</button>
     <h1 class="app-title">Vajra</h1>
-    <nav class="app-nav">
-      <a href="#/sessions" class="nav-link">Sessions</a>
-      <a href="#/permissions" class="nav-link">Permissions</a>
-    </nav>
     <div class="connection-status" id="connection-status">
       <span class="status-dot"></span>
       <span class="status-text">Disconnected</span>
     </div>
   </header>
-  <main class="app-main" id="app-root">
-    <div class="loading">Connecting...</div>
-  </main>
+  <div class="app-layout">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-header">
+        <button id="sidebar-new" class="btn btn-primary sidebar-new">+ New Chat</button>
+      </div>
+      <div id="sidebar-list" class="sidebar-list"></div>
+    </aside>
+    <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+    <main class="app-main" id="app-root">
+      <div class="loading">Connecting...</div>
+    </main>
+  </div>
   <script type="module" src="index.js"></script>
 </body>
 </html>

@@ -89,7 +89,34 @@ export function sessionsView(client: VajraClient): HTMLElement {
     }) as HTMLTextAreaElement
 
     const modelInput = h('select', { className: 'form-select' },
-      h('option', { value: 'z-ai/glm-5.2:free', selected: 'true' }, 'GLM 5.2 (z-ai/glm-5.2:free)'),
+      h('optgroup', { label: 'Auto (Recommended)' },
+        h('option', { value: 'openrouter/free', selected: 'true' }, 'Auto-route free models (openrouter/free)'),
+      ),
+      h('optgroup', { label: 'Strong (1M context)' },
+        h('option', { value: 'nvidia/nemotron-3-ultra-550b-a55b:free' }, 'Nemotron 3 Ultra 550B'),
+        h('option', { value: 'nvidia/nemotron-3-super-120b-a12b:free' }, 'Nemotron 3 Super 120B'),
+        h('option', { value: 'minimax/minimax-m3:free' }, 'MiniMax M3 (vision+tools)'),
+        h('option', { value: 'thinkingmachines/inkling:free' }, 'Inkling'),
+      ),
+      h('optgroup', { label: 'Fast' },
+        h('option', { value: 'nvidia/nemotron-3.5-lightning:free' }, 'Nemotron 3.5 Lightning'),
+        h('option', { value: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free' }, 'Nemotron 3 Nano 30B'),
+        h('option', { value: 'inclusionai/ling-3.0-flash-fin:free' }, 'Ling 3.0 Flash'),
+      ),
+      h('optgroup', { label: 'Coding' },
+        h('option', { value: 'poolside/laguna-s-2.1:free' }, 'Laguna S 2.1'),
+        h('option', { value: 'poolside/laguna-xs-2.1:free' }, 'Laguna XS 2.1'),
+        h('option', { value: 'cohere/north-mini-code:free' }, 'North Mini Code'),
+      ),
+      h('optgroup', { label: 'General' },
+        h('option', { value: 'z-ai/glm-5.2:free' }, 'GLM 5.2'),
+        h('option', { value: 'google/gemma-4-31b-it:free' }, 'Gemma 4 31B'),
+        h('option', { value: 'google/gemma-4-26b-a4b-it:free' }, 'Gemma 4 26B'),
+        h('option', { value: 'minimax/minimax-m2.7:free' }, 'MiniMax M2.7'),
+        h('option', { value: 'dots-studio/dots-3-note-preview:free' }, 'Dots 3 Note'),
+        h('option', { value: 'liquid/lfm-2.5-2.6b:free' }, 'LFM 2.5 2.6B'),
+        h('option', { value: 'thinkingmachines/inkling-small:free' }, 'Inkling Small'),
+      ),
     ) as HTMLSelectElement
 
     const createBtn = h('button', { className: 'btn btn-primary' }, 'Create')
@@ -157,6 +184,21 @@ export function sessionsView(client: VajraClient): HTMLElement {
       modal = null
     }
   }
+
+  // Disable until WS connected — RpcClient now queues, but UX should block early clicks
+  if (client.state !== 'connected') {
+    newBtn.setAttribute('disabled', 'true')
+    ;(newBtn as HTMLButtonElement).title = 'Connecting to server...'
+  }
+  client.onStateChange((state) => {
+    if (state === 'connected') {
+      newBtn.removeAttribute('disabled')
+      ;(newBtn as HTMLButtonElement).title = ''
+    } else {
+      newBtn.setAttribute('disabled', 'true')
+      ;(newBtn as HTMLButtonElement).title = 'Connecting to server...'
+    }
+  })
 
   newBtn.addEventListener('click', showModal)
 

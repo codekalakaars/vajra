@@ -113,13 +113,14 @@ export class SessionManager {
 
   list(): SessionListResult {
     const rows = this.db
-      .prepare(`SELECT id, project_dir, task, status, created_at FROM sessions ORDER BY created_at DESC`)
-      .all() as Array<{ id: string; project_dir: string; task: string; status: SessionStatus; created_at: number }>
+      .prepare(`SELECT id, project_dir, task, model, status, created_at FROM sessions ORDER BY created_at DESC`)
+      .all() as Array<{ id: string; project_dir: string; task: string; model: string; status: SessionStatus; created_at: number }>
 
     return rows.map((r) => ({
       id: r.id,
       projectDir: r.project_dir,
       task: r.task,
+      model: r.model,
       status: r.status,
       createdAt: r.created_at,
     }))
@@ -128,7 +129,7 @@ export class SessionManager {
   attach(sessionId: string) {
     const row = this.db
       .prepare(
-        `SELECT id, project_dir, task, status, created_at,
+        `SELECT id, project_dir, task, model, status, created_at,
                 sandbox_enforced, sandbox_mechanism, sandbox_warnings
          FROM sessions WHERE id = ?`,
       )
@@ -137,6 +138,7 @@ export class SessionManager {
           id: string
           project_dir: string
           task: string
+          model: string
           status: SessionStatus
           created_at: number
           sandbox_enforced: number | null
@@ -176,6 +178,7 @@ export class SessionManager {
         id: row.id,
         projectDir: row.project_dir,
         task: row.task,
+        model: row.model,
         status: row.status,
         createdAt: row.created_at,
       },
@@ -209,6 +212,21 @@ export class SessionManager {
       this.handles.delete(sessionId)
     }
     this.setStatus(sessionId, 'stopped', Date.now())
+  }
+
+  delete(sessionId: string): void {
+    const handle = this.handles.get(sessionId)
+    if (handle) {
+      handle.stop()
+      this.handles.delete(sessionId)
+    }
+    const tx = this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM plan_steps WHERE session_id = ?`).run(sessionId)
+      this.db.prepare(`DELETE FROM messages WHERE session_id = ?`).run(sessionId)
+      this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(sessionId)
+    })
+    tx()
+    this.events.push('session.deleted', sessionId, { sessionId })
   }
 
   /**
@@ -272,7 +290,51 @@ export class SessionManager {
       const message = e instanceof Error ? e.message : String(e)
       this.setStatus(sessionId, 'failed', Date.now())
       this.events.push('session.failed', sessionId, { message })
-      this.handles.delete(sessionId)
+      // Keep the handle alive — the worker process is still running.
+      // The user can retry by sending a new message.
+      throw e
+    }
+  }
+
+  async sendMessage(sessionId: string, content: string, apiKey: string): Promise<void> {
+    const handle = this.handles.get(sessionId)
+    if (!handle) throw new Error(`Session ${sessionId} is not active`)
+    const row = this.db
+      .prepare(`SELECT project_dir, model FROM sessions WHERE id = ?`)
+      .get(sessionId) as { project_dir: string; model: string } | undefined
+    if (!row) throw new Error(`No such session ${sessionId}`)
+
+    // Append user message
+    const seqRow = this.db
+      .prepare(`SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM messages WHERE session_id = ?`)
+      .get(sessionId) as { next_seq: number }
+    this.db
+      .prepare(`INSERT INTO messages (session_id, seq, role, content, created_at) VALUES (?, ?, 'user', ?, ?)`)
+      .run(sessionId, seqRow.next_seq, content, Date.now())
+
+    const { loadPermissions } = await import('../native.js')
+    const permissions = loadPermissions(row.project_dir) ?? {
+      version: 1,
+      default: { read: true, write: false, edit: false, delete: false },
+      files: {},
+    }
+
+    this.setStatus(sessionId, 'executing')
+    try {
+      const result = await agentLoop({
+        session: { id: sessionId, projectDir: row.project_dir, task: content, model: row.model },
+        apiKey,
+        permissions,
+        handle,
+        events: this.events,
+        db: this.db,
+      })
+      this.setStatus(sessionId, 'done', Date.now())
+      this.events.push('session.completed', sessionId, { summary: result.summary })
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      this.setStatus(sessionId, 'failed', Date.now())
+      this.events.push('session.failed', sessionId, { message })
       throw e
     }
   }
@@ -285,6 +347,13 @@ export class SessionManager {
       .run(report.enforced ? 1 : 0, report.mechanism, JSON.stringify(report.warnings), sessionId)
 
     this.events.push('session.sandboxStatus', sessionId, report)
+  }
+
+  getStatus(sessionId: string): SessionStatus | undefined {
+    const row = this.db
+      .prepare(`SELECT status FROM sessions WHERE id = ?`)
+      .get(sessionId) as { status: SessionStatus } | undefined
+    return row?.status
   }
 
   private setStatus(sessionId: string, status: SessionStatus, endedAt?: number): void {

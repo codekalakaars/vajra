@@ -2,9 +2,8 @@
 
 import { VajraClient } from './client.js'
 import { Router } from './router.js'
-import { permissionsView } from './views/permissions.js'
-import { sessionsView } from './views/sessions.js'
-import { sessionDetailView } from './views/session-detail.js'
+import { initSidebar } from './components/sidebar.js'
+import { chatView } from './views/chat.js'
 
 // Option A: explicit WS port for split dev (web :8080, server :4820).
 // When served via esbuild on 8080, window.location.port is 8080 — would try
@@ -30,41 +29,24 @@ client.onStateChange((state) => {
 // Handle incoming messages
 client.onStateChange(() => {})
 
-// Route handlers
-router.on('/permissions', (params) => {
+// Route handlers — chat is the only main view; permissions/sessions are via sidebar.
+router.on('/', () => {
   currentCleanup?.()
-  currentCleanup = null
-  appRoot.innerHTML = ''
-  appRoot.appendChild(permissionsView(client, params))
-})
-
-router.on('/sessions', () => {
-  currentCleanup?.()
-  currentCleanup = null
-  appRoot.innerHTML = ''
-  appRoot.appendChild(sessionsView(client))
-})
-
-router.on('/session/:id', (params) => {
-  currentCleanup?.()
-  const { el, cleanup } = sessionDetailView(client, params)
+  const { el, cleanup } = chatView(client, {})
   currentCleanup = cleanup
   appRoot.innerHTML = ''
   appRoot.appendChild(el)
 })
 
-// Highlight active nav
-function updateNav() {
-  const hash = window.location.hash
-  for (const link of document.querySelectorAll('.nav-link')) {
-    const href = link.getAttribute('href')
-    link.className = `nav-link ${hash.startsWith(href!) ? 'active' : ''}`
-  }
-}
-
-window.addEventListener('hashchange', updateNav)
+router.on('/session/:id', (params) => {
+  currentCleanup?.()
+  const { el, cleanup } = chatView(client, params)
+  currentCleanup = cleanup
+  appRoot.innerHTML = ''
+  appRoot.appendChild(el)
+})
 
 // Boot
+initSidebar(client)
 client.connect()
 router.start()
-updateNav()
