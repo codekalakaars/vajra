@@ -19,6 +19,7 @@ export function useClient(): VajraClient {
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  thinking?: string
 }
 
 export interface SessionState {
@@ -74,9 +75,13 @@ export function useSession() {
         if (p.sessionId !== sessionId) return
         setState((s) => {
           const newMessages = [...s.messages]
-          // Flush the streaming accumulator as a completed assistant message
-          if (s._streamingText) {
-            newMessages.push({ role: 'assistant', content: s._streamingText })
+          // Always flush — even if only thinking, no content
+          if (s._streamingText || s.thinkingText) {
+            newMessages.push({
+              role: 'assistant',
+              content: s._streamingText,
+              thinking: s.thinkingText || undefined,
+            })
           }
           return {
             ...s,
@@ -95,8 +100,12 @@ export function useSession() {
         if (p.sessionId !== sessionId) return
         setState((s) => {
           const newMessages = [...s.messages]
-          if (s._streamingText) {
-            newMessages.push({ role: 'assistant', content: s._streamingText })
+          if (s._streamingText || s.thinkingText) {
+            newMessages.push({
+              role: 'assistant',
+              content: s._streamingText,
+              thinking: s.thinkingText || undefined,
+            })
           }
           return {
             ...s,
@@ -225,11 +234,22 @@ export function useSession() {
     await client.call('project.savePermissions', { projectDir, config: { version: 1, default: { read: true, write: false, edit: false, delete: false }, files: permissions } } as never)
   }, [client])
 
+  const stopSession = useCallback(async () => {
+    const sid = stateRef.current.sessionId
+    if (!sid) return
+    try {
+      await client.call('session.stop', { sessionId: sid })
+    } catch {
+      // ignore
+    }
+  }, [client])
+
   return {
     ...state,
     client,
     createSession,
     sendMessage,
+    stopSession,
     attach,
     loadPermissions,
     savePermissions,
