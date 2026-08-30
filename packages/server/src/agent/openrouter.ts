@@ -65,6 +65,22 @@ function isRateLimitError(err: unknown): boolean {
   return err instanceof Error && 'status' in err && (err as { status: number }).status === 429
 }
 
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  if (err && typeof err === 'object') {
+    const obj = err as Record<string, unknown>
+    if (typeof obj.message === 'string') return obj.message
+    if (obj.error && typeof obj.error === 'object') {
+      const inner = obj.error as Record<string, unknown>
+      if (typeof inner.message === 'string') return inner.message
+      return JSON.stringify(inner)
+    }
+    return JSON.stringify(err)
+  }
+  return String(err)
+}
+
 function retryAfterMs(err: unknown): number {
   const e = err as { headers?: Record<string, string>; error?: { metadata?: { retry_after_seconds?: number } } }
   const headerVal = e.headers?.['retry-after']
@@ -165,7 +181,7 @@ export async function chatCompletion(
         await sleep(delay)
         continue
       }
-      throw err
+      throw new Error(extractErrorMessage(err))
     }
   }
 }
@@ -201,7 +217,7 @@ export async function streamChatCompletion(
         await sleep(delay)
         continue
       }
-      throw err
+      throw new Error(extractErrorMessage(err))
     }
   }
 

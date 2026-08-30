@@ -6,6 +6,7 @@ test('every tool schema validates its own well-formed example', () => {
   const examples = {
     read_file: { path: 'a.txt' },
     list_files: { path: '.', recursive: false },
+    search_files: { query: 'function readFile' },
   }
 
   for (const [name, def] of Object.entries(toolDefinitions)) {

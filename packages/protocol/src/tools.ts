@@ -80,9 +80,28 @@ export const listFilesTool = defineTool({
   },
 })
 
+export const searchFilesTool = defineTool({
+  name: 'search_files',
+  description:
+    'Search the project summary index for files matching a query. ' +
+    'Returns file paths, their exported symbols, and a brief preview. ' +
+    'Use this to find relevant files before reading them.',
+  nativeFn: 'searchSummary',
+  schema: z.object({ query: z.string() }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Search terms to match against file paths and symbols.' },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  },
+})
+
 export const toolDefinitions = {
   read_file: readFileTool,
   list_files: listFilesTool,
+  search_files: searchFilesTool,
 } as const satisfies Record<string, ToolDefinition>
 
 export type ToolName = keyof typeof toolDefinitions
