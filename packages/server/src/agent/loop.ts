@@ -168,19 +168,9 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
       return { summary: content, toolCallCount }
     }
 
-    // Append assistant message with tool calls to conversation
+    // Append assistant message with tool calls to conversation (don't persist
+    // intermediate assistant messages — only the final response is shown to the user)
     messages.push(result.message)
-
-    // Persist assistant message
-    const assistantSeq = nextSeq(db, session.id)
-    appendMessage(
-      db,
-      session.id,
-      assistantSeq,
-      'assistant',
-      result.message.content ?? '',
-      JSON.stringify(result.message.tool_calls),
-    )
 
     // Process each tool call
     for (const toolCall of result.message.tool_calls) {
