@@ -135,7 +135,7 @@ export function Sidebar({ client }: { client: VajraClient }) {
                 key={s.id}
                 onClick={() => navigate(`/session/${s.id}`)}
                 title={collapsed ? `${s.projectDir.split('/').pop() || s.projectDir} — ${s.task}` : undefined}
-                className={`px-3 py-3 cursor-pointer border-b border-gray-800 transition-colors ${
+                className={`group px-3 py-3 cursor-pointer border-b border-gray-800 transition-colors ${
                   isActive ? 'bg-gray-800' : 'hover:bg-gray-800/50'
                 }`}
               >

@@ -91,7 +91,7 @@ export function useSession() {
 
     unsubs.push(
       client.on('session.failed', (payload) => {
-        const p = payload as { sessionId: string; error: string }
+        const p = payload as { sessionId: string; message: string }
         if (p.sessionId !== sessionId) return
         setState((s) => {
           const newMessages = [...s.messages]
@@ -102,7 +102,7 @@ export function useSession() {
             ...s,
             messages: newMessages,
             status: 'failed',
-            error: p.error,
+            error: p.message,
             thinkingText: '',
             _streamingText: '',
           }

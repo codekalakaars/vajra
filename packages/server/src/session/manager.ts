@@ -253,6 +253,11 @@ export class SessionManager {
       files: {},
     }
 
+    const handle = this.handles.get(sessionId)
+    if (!handle) {
+      throw new Error(`Session '${sessionId}' has no sandbox worker — the launcher may have failed. Create a new session.`)
+    }
+
     try {
       this.setStatus(sessionId, 'running')
       const result = await agentLoop({
@@ -263,6 +268,7 @@ export class SessionManager {
           model: row.model,
         },
         apiKey,
+        handle,
         permissions,
         events: this.events,
         db: this.db,
@@ -293,11 +299,27 @@ export class SessionManager {
       files: {},
     }
 
+    // Re-launch the sandbox worker if the previous one crashed or was stopped
+    let handle = this.handles.get(sessionId)
+    if (!handle) {
+      handle = await this.launcher(
+        {
+          sessionId,
+          projectDir: row.project_dir,
+          permissions,
+          allowUnenforced: false,
+        },
+        (report) => this.recordSandboxReport(sessionId, report),
+      )
+      this.handles.set(sessionId, handle)
+    }
+
     this.setStatus(sessionId, 'running')
     try {
       const result = await agentLoop({
         session: { id: sessionId, projectDir: row.project_dir, task: content, model: row.model },
         apiKey,
+        handle,
         permissions,
         events: this.events,
         db: this.db,
