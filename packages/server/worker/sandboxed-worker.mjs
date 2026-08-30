@@ -31,15 +31,7 @@ const native = require('vajra-native')
 // from silently calling the wrong native function incorrectly.
 const dispatchTable = {
   read_file: (args) => native.readFile(args.path),
-  write_file: (args) => native.writeFile(args.path, args.content),
-  edit_file: (args) => native.editFile(args.path, args.oldString, args.newString, args.replaceAll),
-  delete_file: (args) => native.deleteFile(args.path),
-  delete_dir: (args) => native.deleteDir(args.path, args.recursive),
-  create_dir: (args) => native.createDir(args.path),
   list_files: (args) => native.listFiles(args.path, args.recursive),
-  copy_file: (args) => native.copyFile(args.source, args.destination, args.overwrite),
-  rename_file: (args) => native.renameFile(args.source, args.destination, args.overwrite),
-  run_command: (args) => native.runCommand(args.command, args.args, args.cwd),
 }
 
 function send(message) {
