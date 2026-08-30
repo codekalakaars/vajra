@@ -44,9 +44,14 @@ export function registerSessionHandlers(router: RpcRouter<ServerContext>): void 
     return { ok: true as const }
   })
 
-  router.register('session.sendMessage', async (params: SessionSendMessageParams, ctx) => {
+  router.register('session.sendMessage', (params: SessionSendMessageParams, ctx) => {
     if (!ctx.apiKey) throw new Error('Server not configured with API key')
-    await ctx.sessions.sendMessage(params.sessionId, params.content, ctx.apiKey)
+    // Fire-and-forget: the agent loop runs in the background, emitting push
+    // events as it progresses. The RPC returns immediately so the client
+    // doesn't time out while the LLM is working.
+    ctx.sessions.sendMessage(params.sessionId, params.content, ctx.apiKey).catch((err) => {
+      console.error(`Agent loop failed for session ${params.sessionId}:`, err)
+    })
     return { ok: true as const }
   })
 }

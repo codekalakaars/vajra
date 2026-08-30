@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useSession } from '../hooks/useSession'
 import { StatusBadge } from '../components/StatusBadge'
 import { ThinkingBlock } from '../components/ThinkingBlock'
@@ -32,98 +32,57 @@ const MODELS = [
   ]},
 ]
 
-interface FilePerm {
-  read: boolean
-  write: boolean
-  edit: boolean
-  delete: boolean
-}
-
 export function ChatView({ connected }: { connected: boolean }) {
   const session = useSession()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
-  // Setup state
   const [projectDir, setProjectDir] = useState('')
   const [model, setModel] = useState('openrouter/free')
-  const [permissions, setPermissions] = useState<Record<string, FilePerm>>({})
-  const [files, setFiles] = useState<Array<{ name: string; path: string; isDir: boolean; isMasked: boolean }>>([])
-  const [setupMsg, setSetupMsg] = useState('')
-  const [setupMsgColor, setSetupMsgColor] = useState('')
-  const [listing, setListing] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [permissionsSaved, setPermissionsSaved] = useState(false)
-  const [showChat, setShowChat] = useState(false)
   const [inputValue, setInputValue] = useState('')
+  const lastKeyRef = useRef<{ key: string; time: number }>({ key: '', time: 0 })
 
-  // Auto-scroll during streaming
+  // Double-press Esc or Ctrl+C to stop streaming
+  const handleGlobalKeyDown = useCallback((e: KeyboardEvent) => {
+    if (!isStreaming) return
+    if (e.key === 'Escape' || (e.key === 'c' && e.ctrlKey)) {
+      const now = Date.now()
+      const prev = lastKeyRef.current
+      if (prev.key === e.key && now - prev.time < 500) {
+        session.stopSession()
+        lastKeyRef.current = { key: '', time: 0 }
+      } else {
+        lastKeyRef.current = { key: e.key, time: now }
+      }
+    }
+  }, [isStreaming, session.stopSession])
+
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [handleGlobalKeyDown])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
+    if (nearBottom) {
+      el.scrollTop = el.scrollHeight
     }
   }, [session.messages, session._streamingText, session.thinkingText])
 
-  // Focus input when not streaming
   useEffect(() => {
     if (!isStreaming && inputRef.current) {
       inputRef.current.focus()
     }
   }, [session.status])
 
-  const handleList = async () => {
-    if (!projectDir.trim()) return
-    setListing(true)
-    setSetupMsg('')
-    try {
-      const result = await session.loadPermissions(projectDir.trim())
-      setPermissions(result.permissions)
-      setFiles(result.files.filter(f => !f.isDir && !f.isMasked))
-      setSetupMsg(`${result.files.filter(f => !f.isDir && !f.isMasked).length} file(s) found. Toggle permissions, then Save or Skip.`)
-      setSetupMsgColor('text-gray-400')
-    } catch (e) {
-      setSetupMsg(String(e))
-      setSetupMsgColor('text-red-400')
-    } finally {
-      setListing(false)
-    }
-  }
-
-  const handleSave = async () => {
-    if (!projectDir.trim()) {
-      setSetupMsg('Set a project path first.')
-      setSetupMsgColor('text-red-400')
-      return
-    }
-    setSaving(true)
-    try {
-      await session.savePermissions(projectDir.trim(), permissions)
-      setPermissionsSaved(true)
-      setSetupMsg('Permissions saved.')
-      setSetupMsgColor('text-green-400')
-      setShowChat(true)
-    } catch (e) {
-      setSetupMsg(String(e))
-      setSetupMsgColor('text-red-400')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleSkip = () => {
-    if (!projectDir.trim()) setProjectDir('/tmp')
-    setPermissions({})
-    setPermissionsSaved(true)
-    setSetupMsg('Skipped — using read-only defaults.')
-    setSetupMsgColor('text-gray-500')
-    setShowChat(true)
-  }
-
   const handleStart = async () => {
+    if (!projectDir.trim()) return
     try {
       await session.createSession({
         projectDir: projectDir.trim(),
-        permissions,
+        permissions: {},
         model,
       })
     } catch {
@@ -145,48 +104,30 @@ export function ChatView({ connected }: { connected: boolean }) {
     }
   }
 
-  const togglePerm = (path: string, key: keyof FilePerm) => {
-    setPermissions((prev) => ({
-      ...prev,
-      [path]: { ...prev[path], [key]: !prev[path]?.[key] },
-    }))
-  }
-
   const hasSession = session.sessionId !== null
   const isStreaming = session.status === 'streaming' || session.status === 'creating'
 
   return (
     <div className="flex flex-col h-full">
-      {/* Setup panel — shown before session starts */}
-      {!showChat && !hasSession && (
+      {/* Setup — shown before session starts */}
+      {!hasSession && (
         <div className="p-6 max-w-2xl mx-auto w-full">
           <h2 className="text-xl font-bold text-white mb-6">New Session</h2>
 
-          {/* Project path */}
-          <label className="block text-sm font-medium text-gray-300 mb-1">1. Project path</label>
-          <div className="flex gap-2 mb-4">
-            <input
-              type="text"
-              value={projectDir}
-              onChange={(e) => setProjectDir(e.target.value)}
-              placeholder="/path/to/project"
-              className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
-            />
-            <button
-              onClick={handleList}
-              disabled={listing}
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-white transition-colors disabled:opacity-50"
-            >
-              {listing ? 'Listing...' : 'List'}
-            </button>
-          </div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Project path</label>
+          <input
+            type="text"
+            value={projectDir}
+            onChange={(e) => setProjectDir(e.target.value)}
+            placeholder="/path/to/project"
+            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 mb-4"
+          />
 
-          {/* Model */}
-          <label className="block text-sm font-medium text-gray-300 mb-1">2. Model</label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Model</label>
           <select
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm mb-4 focus:outline-none focus:border-blue-500"
+            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm mb-6 focus:outline-none focus:border-blue-500"
           >
             {MODELS.map((group) => (
               <optgroup key={group.group} label={group.group}>
@@ -197,80 +138,28 @@ export function ChatView({ connected }: { connected: boolean }) {
             ))}
           </select>
 
-          {/* Permissions */}
-          <label className="block text-sm font-medium text-gray-300 mb-1">3. Permissions</label>
-          <div className="border border-gray-700 rounded bg-gray-800/50 max-h-64 overflow-y-auto mb-4">
-            {files.length === 0 ? (
-              <div className="p-3 text-sm text-gray-500">Click "List" to scan files</div>
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-700 text-gray-400">
-                    <th className="px-3 py-2 text-left">File</th>
-                    <th className="px-3 py-2 text-center w-12">R</th>
-                    <th className="px-3 py-2 text-center w-12">W</th>
-                    <th className="px-3 py-2 text-center w-12">E</th>
-                    <th className="px-3 py-2 text-center w-12">D</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {files.map((f) => (
-                    <tr key={f.path} className="border-b border-gray-700/50">
-                      <td className="px-3 py-1.5 text-gray-300 truncate max-w-[200px]">{f.name}</td>
-                      {(['read', 'write', 'edit', 'delete'] as const).map((key) => (
-                        <td key={key} className="text-center">
-                          <input
-                            type="checkbox"
-                            checked={permissions[f.path]?.[key] ?? (key === 'read')}
-                            onChange={() => togglePerm(f.path, key)}
-                            className="rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500"
-                          />
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-
-          {/* Actions */}
-          <div className="flex gap-2 mb-2">
-            <button
-              onClick={handleSave}
-              disabled={!files.length || saving}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm text-white transition-colors disabled:opacity-50"
-            >
-              {saving ? 'Saving...' : 'Save Permissions'}
-            </button>
-            <button
-              onClick={handleSkip}
-              disabled={!files.length}
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-white transition-colors disabled:opacity-50"
-            >
-              Skip (read-only)
-            </button>
-          </div>
-          {setupMsg && <p className={`text-xs ${setupMsgColor}`}>{setupMsg}</p>}
+          <button
+            onClick={handleStart}
+            disabled={!projectDir.trim() || isStreaming}
+            className="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-medium transition-colors disabled:opacity-50"
+          >
+            {session.status === 'creating' ? 'Analyzing project...' : 'Start'}
+          </button>
         </div>
       )}
 
-      {/* Chat area — shown after setup or when viewing existing session */}
-      {(showChat || hasSession) && (
+      {/* Chat area — shown after session starts */}
+      {hasSession && (
         <>
           {/* Header */}
           <div className="px-6 py-3 border-b border-gray-800 flex items-center gap-3">
             <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
             <span className="text-xs text-gray-500">{connected ? 'Connected' : 'Disconnected'}</span>
-            {hasSession && (
-              <>
-                <span className="text-gray-700">·</span>
-                <h2 className="text-sm font-medium text-white">
-                  Session {session.sessionId!.slice(0, 8)}
-                </h2>
-                <StatusBadge status={session.status} />
-              </>
-            )}
+            <span className="text-gray-700">·</span>
+            <h2 className="text-sm font-medium text-white">
+              Session {session.sessionId!.slice(0, 8)}
+            </h2>
+            <StatusBadge status={session.status} />
           </div>
 
           {/* Messages */}
@@ -298,6 +187,7 @@ export function ChatView({ connected }: { connected: boolean }) {
                       V
                     </div>
                     <div className="flex-1 min-w-0">
+                      {msg.thinking && <ThinkingBlock text={msg.thinking} />}
                       <MarkdownRenderer content={msg.content} />
                     </div>
                   </div>
@@ -306,6 +196,10 @@ export function ChatView({ connected }: { connected: boolean }) {
             ))}
 
             {/* Live streaming bubble */}
+            {session.thinkingText && (
+              <ThinkingBlock text={session.thinkingText} defaultOpen />
+            )}
+
             {session._streamingText && (
               <div>
                 <div className="flex items-start gap-3">
@@ -319,10 +213,6 @@ export function ChatView({ connected }: { connected: boolean }) {
               </div>
             )}
 
-            {session.thinkingText && (
-              <ThinkingBlock text={session.thinkingText} />
-            )}
-
             {session.error && (
               <div className="p-3 bg-red-900/30 border border-red-800 rounded text-red-300 text-sm">
                 {session.error}
@@ -330,21 +220,24 @@ export function ChatView({ connected }: { connected: boolean }) {
             )}
           </div>
 
-          {/* Start button — shown when setup is done but session hasn't started */}
-          {showChat && !hasSession && (
-            <div className="p-6 flex justify-center">
+          {/* Stop button — shown during streaming */}
+          {isStreaming && (
+            <div className="px-4 py-2 border-t border-gray-800 flex justify-center">
               <button
-                onClick={handleStart}
-                disabled={isStreaming}
-                className="px-8 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-lg text-white transition-colors disabled:opacity-50"
+                onClick={session.stopSession}
+                className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm text-gray-300 transition-colors flex items-center gap-2"
               >
-                {session.status === 'creating' ? 'Analyzing project...' : 'Start'}
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                  <rect x="6" y="6" width="12" height="12" rx="1" />
+                </svg>
+                Stop
+                <span className="text-xs text-gray-500 ml-1">Esc Esc / Ctrl+C Ctrl+C</span>
               </button>
             </div>
           )}
 
-          {/* Input — shown whenever agent is not actively streaming */}
-          {showChat && !isStreaming && (
+          {/* Input */}
+          {!isStreaming && (
             <div className="p-4 border-t border-gray-800">
               <div className="max-w-3xl mx-auto flex gap-2">
                 <textarea
