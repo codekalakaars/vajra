@@ -4,7 +4,7 @@ import { getToolSpecs, parseToolCall } from '../dist/agent/tools.js'
 
 test('getToolSpecs matches the protocol package tool count', () => {
   const specs = getToolSpecs()
-  assert.equal(specs.length, 10)
+  assert.equal(specs.length, 3)
   assert.ok(specs.every((s) => s.type === 'function'))
   assert.ok(!specs.some((s) => s.function.name === 'run_shell'))
 })
@@ -49,8 +49,8 @@ test('parseToolCall rejects arguments that fail the tool schema', () => {
   const result = parseToolCall({
     id: 'call_4',
     type: 'function',
-    // edit_file requires oldString/newString; missing here.
-    function: { name: 'edit_file', arguments: '{"path":"a.txt"}' },
+    // search_files requires query; missing here.
+    function: { name: 'search_files', arguments: '{}' },
   })
 
   assert.equal(result.ok, false)

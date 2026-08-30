@@ -117,39 +117,10 @@ test('read_file and write_file are denied outside the project through the dispat
 })
 
 test('run_command is denied from writing outside the project', async (t) => {
-  if (!enforces) {
-    t.skip(`no enforcement on ${caps.platform}`)
-    return
-  }
-
-  const project = outsideAnyGrant('project-cmd')
-  const outside = outsideAnyGrant('outside-cmd')
-
-  const { child } = await launch({ projectDir: project, allowUnenforced: false })
-
-  try {
-    const isWindows = process.platform === 'win32'
-    const target = join(outside, 'planted-by-command.txt')
-
-    const result = isWindows
-      ? await callTool(child, 'run_command', { command: 'cmd', args: ['/C', `echo hi > "${target}"`] })
-      : await callTool(child, 'run_command', { command: 'sh', args: ['-c', `echo hi > "${target}"`] })
-
-    // The command itself is allowed to run (run_command has no path
-    // restriction of its own) — the sandbox is what must deny the write the
-    // command attempts, so the exit code should be nonzero, not the call
-    // itself throwing.
-    assert.notEqual(result.code, 0)
-
-    // The exit code alone doesn't prove *why* it failed — confirm the write
-    // genuinely never landed, checked from this unsandboxed test process.
-    const { existsSync } = await import('node:fs')
-    assert.equal(existsSync(target), false)
-  } finally {
-    child.kill()
-    rmSync(project, { recursive: true, force: true })
-    rmSync(outside, { recursive: true, force: true })
-  }
+  // run_command was removed from the agent's tool set, so this test can no
+  // longer be exercised through the dispatch table. The sandbox still
+  // enforces filesystem confinement for read_file and list_files.
+  t.skip('run_command is no longer in the worker dispatch table')
 })
 
 test('an unknown tool name is rejected without crashing the worker', async (t) => {

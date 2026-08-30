@@ -64,9 +64,9 @@ export function ChatView({ connected }: { connected: boolean }) {
     }
   }, [session.messages, session._streamingText, session.thinkingText])
 
-  // Focus input when done
+  // Focus input when not streaming
   useEffect(() => {
-    if (session.status === 'done' && inputRef.current) {
+    if (!isStreaming && inputRef.current) {
       inputRef.current.focus()
     }
   }, [session.status])
@@ -343,8 +343,8 @@ export function ChatView({ connected }: { connected: boolean }) {
             </div>
           )}
 
-          {/* Input — shown when session is done */}
-          {hasSession && session.status === 'done' && (
+          {/* Input — shown whenever agent is not actively streaming */}
+          {showChat && !isStreaming && (
             <div className="p-4 border-t border-gray-800">
               <div className="max-w-3xl mx-auto flex gap-2">
                 <textarea
