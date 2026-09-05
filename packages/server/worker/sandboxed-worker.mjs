@@ -65,7 +65,12 @@ function handleToolCall(message) {
     // Forwarded verbatim: this is the same message vajra-native itself
     // produced (editFile's ambiguous-match refusal, deleteFile's directory
     // guard, etc.) — no rewording layer that could soften or hide a refusal.
-    send({ type: 'result', callId, ok: false, error: e instanceof Error ? e.message : String(e) })
+    const msg = e instanceof Error ? e.message : String(e)
+    // Enhance EACCES errors with a clearer message about permissions
+    const enhanced = msg.includes('EACCES') || msg.includes('Permission denied')
+      ? `${msg} — this file is not readable in the current permission configuration. Use search_files to find other files, or adjust permissions before starting a new session.`
+      : msg
+    send({ type: 'result', callId, ok: false, error: enhanced })
   }
 }
 
