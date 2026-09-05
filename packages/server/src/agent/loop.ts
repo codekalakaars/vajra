@@ -13,7 +13,8 @@ import { scanProject } from '../native.js'
 import { buildNestedTree } from './tree.js'
 import { buildSummaryIndex, formatSummaryIndex, type SummaryEntry } from './summary.js'
 
-const MAX_TOOL_CALLS = 50
+const MAX_TOOL_CALLS = 150
+const FREE_TOOLS = new Set(['search_files'])
 
 export interface AgentLoopInput {
   session: {
@@ -39,6 +40,7 @@ function buildSystemPrompt(
   task: string,
   tree: string,
   summary: string,
+  maxToolCalls: number,
 ): string {
   return [
     'You are a software engineering agent working inside a project directory.',
@@ -50,14 +52,17 @@ function buildSystemPrompt(
     summary,
     '',
     'You have access to these tools:',
-    '- search_files(query): search the summary index to find relevant files by name or symbol',
+    '- search_files(query): search the summary index to find relevant files by name or symbol (FREE — does not count toward your budget)',
     '- read_file(path): read the full contents of a file',
     '- list_files(path): list directory contents',
     '',
-    'IMPORTANT: The summary above contains file paths, line counts, and symbols for every indexed file.',
-    'Use search_files to find relevant files FIRST. Only call read_file on files you need to inspect in detail.',
-    'Do NOT read every file — the summary already tells you what each file contains.',
-    'When you have enough information, stop calling tools and provide your response.',
+    `TOOL CALL BUDGET: You have ${maxToolCalls} file-reading calls available. search_files is free and unlimited.`,
+    '',
+    'STRATEGY:',
+    '1. Use search_files FIRST to find relevant files by name, symbol, or concept.',
+    '2. Only call read_file on files you need to inspect in detail — the summary already tells you what each file contains.',
+    '3. Do NOT read every file. The summary index is your primary reference.',
+    '4. When you have enough information, stop calling tools and provide your response.',
     '',
     `Your task: ${task}`,
   ].join('\n')
@@ -129,7 +134,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
   }
 
   const summaryText = formatSummaryIndex(summaryIndex)
-  const systemPrompt = buildSystemPrompt(session.projectDir, session.task, tree, summaryText)
+  const systemPrompt = buildSystemPrompt(session.projectDir, session.task, tree, summaryText, MAX_TOOL_CALLS)
 
   const messages: OpenRouterMessage[] = [
     { role: 'system', content: systemPrompt },
@@ -174,8 +179,11 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
 
     // Process each tool call
     for (const toolCall of result.message.tool_calls) {
-      toolCallCount++
-      if (toolCallCount > MAX_TOOL_CALLS) break
+      const isFree = FREE_TOOLS.has(toolCall.function.name)
+      if (!isFree) {
+        toolCallCount++
+        if (toolCallCount > MAX_TOOL_CALLS) break
+      }
 
       const parsed = parseToolCall(toolCall)
       events.push('session.toolCall', session.id, {
