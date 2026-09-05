@@ -98,17 +98,93 @@ export const searchFilesTool = defineTool({
   },
 })
 
+export const runCommandTool = defineTool({
+  name: 'run_command',
+  description:
+    'Execute a command (argv-based, no shell parsing). Returns stdout and stderr. ' +
+    'Use this for running tests, linters, build commands, or any validation.',
+  nativeFn: 'runCommand',
+  schema: z.object({
+    command: z.string(),
+    cwd: z.string().optional(),
+    timeout: z.number().optional(),
+  }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      command: { type: 'string', description: 'The command to execute (space-separated argv).' },
+      cwd: { type: 'string', description: 'Working directory (defaults to project root).' },
+      timeout: { type: 'number', description: 'Timeout in milliseconds (default: 30000).' },
+    },
+    required: ['command'],
+    additionalProperties: false,
+  },
+})
+
+export const writeFileTool = defineTool({
+  name: 'write_file',
+  description: 'Write content to a file, creating it if it does not exist.',
+  nativeFn: 'writeFile',
+  schema: z.object({ path: z.string(), content: z.string() }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'Project-relative or absolute path.' },
+      content: { type: 'string', description: 'File contents to write.' },
+    },
+    required: ['path', 'content'],
+    additionalProperties: false,
+  },
+})
+
+export const editFileTool = defineTool({
+  name: 'edit_file',
+  description:
+    'Replace old_string with new_string in a file. Fails on absent or ambiguous match.',
+  nativeFn: 'editFile',
+  schema: z.object({
+    path: z.string(),
+    oldString: z.string(),
+    newString: z.string(),
+    replaceAll: z.boolean().optional(),
+  }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string' },
+      oldString: { type: 'string', description: 'Exact text to find and replace.' },
+      newString: { type: 'string', description: 'Replacement text.' },
+      replaceAll: { type: 'boolean', description: 'Replace all occurrences (default: false).' },
+    },
+    required: ['path', 'oldString', 'newString'],
+    additionalProperties: false,
+  },
+})
+
 export const toolDefinitions = {
   read_file: readFileTool,
   list_files: listFilesTool,
   search_files: searchFilesTool,
+  run_command: runCommandTool,
+  write_file: writeFileTool,
+  edit_file: editFileTool,
 } as const satisfies Record<string, ToolDefinition>
 
 export type ToolName = keyof typeof toolDefinitions
 
+/** Tools available to each agent role. */
+export const roleTools: Record<string, ToolName[]> = {
+  manager: ['read_file', 'list_files', 'search_files'],
+  master: ['read_file', 'list_files', 'search_files', 'run_command'],
+  worker: ['read_file', 'list_files', 'search_files', 'write_file', 'edit_file'],
+}
+
 /** The `tools` array shape OpenRouter's OpenAI-compatible API expects. */
-export function toOpenAiToolSpecs() {
-  return Object.values(toolDefinitions).map((def) => ({
+export function toOpenAiToolSpecs(tools?: ToolName[]) {
+  const defs = tools
+    ? tools.map((name) => toolDefinitions[name]).filter(Boolean)
+    : Object.values(toolDefinitions)
+  return defs.map((def) => ({
     type: 'function' as const,
     function: {
       name: def.name,

@@ -139,6 +139,24 @@ function checkFilePermission(tool, args, fileRules, defaultPermissions) {
 const dispatchTable = {
   read_file: (args) => native.readFile(args.path),
   list_files: (args) => native.listFiles(args.path, args.recursive),
+  search_files: (args) => native.searchSummary(args.query),
+  write_file: (args) => native.writeFile(args.path, args.content),
+  edit_file: (args) => native.editFile(args.path, args.oldString, args.newString, args.replaceAll),
+  run_command: (args) => {
+    const { execSync } = require('child_process')
+    const cmd = args.command
+    const cwd = args.cwd || process.env.VAJRA_PROJECT_DIR || process.cwd()
+    const timeout = args.timeout || 30000
+    try {
+      const stdout = execSync(cmd, { cwd, timeout, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] })
+      return stdout || '(command completed successfully)'
+    } catch (e) {
+      // execSync throws on non-zero exit — include stdout/stderr
+      const stdout = e.stdout ? `\nstdout:\n${e.stdout}` : ''
+      const stderr = e.stderr ? `\nstderr:\n${e.stderr}` : ''
+      throw new Error(`Command failed (exit ${e.status}): ${e.message}${stdout}${stderr}`)
+    }
+  },
 }
 
 // Set of tools this worker is allowed to call. Populated from the job.
