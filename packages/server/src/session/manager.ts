@@ -2,12 +2,17 @@ import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
 import type { PermissionsConfig, SessionStatus, SessionListResult, AttachMessage } from '@vajra/protocol'
 import { agentLoop, type AgentLoopResult } from '../agent/loop.js'
+import { managerLoop } from '../agent/manager.js'
+import { masterLoop, type MasterInput } from '../agent/master.js'
+import { AgentRegistry } from '../agent/registry.js'
 
 export interface LaunchJob {
   sessionId: string
   projectDir: string
   permissions: PermissionsConfig
   allowUnenforced: boolean
+  /** If set, restricts the worker to only these tools. */
+  allowedTools?: string[]
 }
 
 export interface LaunchHandle {
@@ -232,9 +237,10 @@ export class SessionManager {
   }
 
   /**
-   * Start the agent loop for a session. Reads the session data from SQLite,
-   * runs the plan-then-execute loop, and updates the session status on
-   * completion or failure.
+   * Start the agent loop for a session. Uses multi-agent architecture:
+   * 1. Manager analyzes the task and creates a plan
+   * 2. Master orchestrates task execution
+   * 3. Workers execute individual tasks in sandboxed workers
    *
    * Must be called after the creating connection is subscribed (see `create`).
    * The API key is held in this process — the worker never sees it.
@@ -249,15 +255,8 @@ export class SessionManager {
     }
 
     // Load permissions from the project
-    const permRow = this.db
-      .prepare(`SELECT project_dir FROM sessions WHERE id = ?`)
-      .get(sessionId) as { project_dir: string }
-
-    // Use the default permissions — the caller should have set these via
-    // savePermissions before creating the session. We read them from the
-    // native layer which loads from .vajra-perms.json.
     const { loadPermissions } = await import('../native.js')
-    const permissions = loadPermissions(permRow.project_dir) ?? {
+    const permissions = loadPermissions(row.project_dir) ?? {
       version: 1,
       default: { read: true, write: false, edit: false, delete: false },
       files: {},
@@ -268,24 +267,60 @@ export class SessionManager {
       throw new Error(`Session '${sessionId}' has no sandbox worker — the launcher may have failed. Create a new session.`)
     }
 
+    // Create the agent registry for this session
+    const registry = new AgentRegistry(this.db)
+
     try {
-      this.setStatus(sessionId, 'running')
-      const result = await agentLoop({
-        session: {
-          id: sessionId,
-          projectDir: row.project_dir,
-          task: row.task,
-          model: row.model,
-        },
+      this.setStatus(sessionId, 'planning')
+
+      // Phase 1: Manager analyzes and decomposes
+      const plan = await managerLoop({
+        sessionId,
+        projectDir: row.project_dir,
+        task: row.task,
+        model: row.model,
         apiKey,
-        handle,
-        permissions,
         events: this.events,
         db: this.db,
       })
+
+      this.setStatus(sessionId, 'executing')
+
+      // Phase 2: Master orchestrates and executes
+      const masterResult = await masterLoop({
+        sessionId,
+        projectDir: row.project_dir,
+        plan,
+        model: row.model,
+        apiKey,
+        events: this.events,
+        db: this.db,
+        registry,
+        launchWorker: async (job) => {
+          const workerHandle = await this.launcher(
+            {
+              sessionId,
+              projectDir: job.projectDir,
+              permissions: job.permissions,
+              allowUnenforced: false,
+              allowedTools: job.allowedTools,
+            },
+            (report) => this.recordSandboxReport(sessionId, report),
+          )
+          return workerHandle
+        },
+      })
+
+      // Store the result summary as the final assistant message
+      this.appendMessage(sessionId, masterResult.summary)
+
       this.setStatus(sessionId, 'done', Date.now())
       this.events.push('session.completed', sessionId, {})
-      return result
+
+      return {
+        toolCallCount: masterResult.totalToolCalls,
+        summary: masterResult.summary,
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       this.setStatus(sessionId, 'failed', Date.now())
@@ -294,6 +329,22 @@ export class SessionManager {
       // The user can retry by sending a new message.
       throw e
     }
+  }
+
+  /**
+   * Append a message to the session's message log.
+   */
+  private appendMessage(sessionId: string, content: string): void {
+    const seq = this.db
+      .prepare(`SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM messages WHERE session_id = ?`)
+      .get(sessionId) as { next_seq: number }
+
+    this.db
+      .prepare(
+        `INSERT INTO messages (session_id, seq, role, content, created_at)
+         VALUES (?, ?, 'assistant', ?, ?)`,
+      )
+      .run(sessionId, seq.next_seq, content, Date.now())
   }
 
   async sendMessage(sessionId: string, content: string, apiKey: string): Promise<void> {
