@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { VajraClient } from '../client'
+import type { PlannedTask, AgentStatePayload, ConflictPayload, ManagerPlan } from '@vajra/protocol'
 
 // Singleton client — persists across re-renders
 let clientSingleton: VajraClient | null = null
@@ -24,10 +25,14 @@ export interface ChatMessage {
 
 export interface SessionState {
   sessionId: string | null
-  status: 'idle' | 'creating' | 'streaming' | 'done' | 'failed'
+  status: 'idle' | 'creating' | 'planning' | 'executing' | 'streaming' | 'done' | 'failed'
   messages: ChatMessage[]
   thinkingText: string
   error: string | null
+  // Multi-agent state
+  planTasks: PlannedTask[]
+  agents: AgentStatePayload[]
+  conflicts: ConflictPayload[]
   // Accumulator for the current streaming response
   _streamingText: string
 }
@@ -40,6 +45,9 @@ export function useSession() {
     messages: [],
     thinkingText: '',
     error: null,
+    planTasks: [],
+    agents: [],
+    conflicts: [],
     _streamingText: '',
   })
   const stateRef = useRef(state)
@@ -66,6 +74,81 @@ export function useSession() {
         const p = payload as { sessionId: string; text: string }
         if (p.sessionId !== sessionId) return
         setState((s) => ({ ...s, thinkingText: s.thinkingText + p.text }))
+      }),
+    )
+
+    // Manager events
+    unsubs.push(
+      client.on('session.planStarted', (payload) => {
+        const p = payload as { sessionId: string }
+        if (p.sessionId !== sessionId) return
+        setState((s) => ({ ...s, status: 'planning', planTasks: [] }))
+      }),
+    )
+
+    unsubs.push(
+      client.on('session.planTask', (payload) => {
+        const p = payload as { sessionId: string; task: PlannedTask }
+        if (p.sessionId !== sessionId) return
+        setState((s) => ({ ...s, planTasks: [...s.planTasks, p.task] }))
+      }),
+    )
+
+    unsubs.push(
+      client.on('session.planComplete', (payload) => {
+        const p = payload as { sessionId: string; plan: ManagerPlan }
+        if (p.sessionId !== sessionId) return
+        setState((s) => ({ ...s, status: 'executing', planTasks: p.plan.tasks }))
+      }),
+    )
+
+    // Worker events
+    unsubs.push(
+      client.on('session.workerStarted', (payload) => {
+        const p = payload as { sessionId: string; agentId: string; taskId: string }
+        if (p.sessionId !== sessionId) return
+        setState((s) => ({
+          ...s,
+          agents: [...s.agents, { id: p.agentId, role: 'worker', status: 'running', taskSummary: p.taskId }],
+        }))
+      }),
+    )
+
+    unsubs.push(
+      client.on('session.workerCompleted', (payload) => {
+        const p = payload as { sessionId: string; agentId: string; taskId: string; validationPassed: boolean }
+        if (p.sessionId !== sessionId) return
+        setState((s) => ({
+          ...s,
+          agents: s.agents.map((a) =>
+            a.id === p.agentId ? { ...a, status: 'done' as const } : a
+          ),
+        }))
+      }),
+    )
+
+    unsubs.push(
+      client.on('session.workerFailed', (payload) => {
+        const p = payload as { sessionId: string; agentId: string; taskId: string; error: string }
+        if (p.sessionId !== sessionId) return
+        setState((s) => ({
+          ...s,
+          agents: s.agents.map((a) =>
+            a.id === p.agentId ? { ...a, status: 'failed' as const } : a
+          ),
+        }))
+      }),
+    )
+
+    // Conflict events
+    unsubs.push(
+      client.on('session.conflictDetected', (payload) => {
+        const p = payload as { sessionId: string } & ConflictPayload
+        if (p.sessionId !== sessionId) return
+        setState((s) => ({
+          ...s,
+          conflicts: [...s.conflicts, { task1: p.task1, task2: p.task2, files: p.files }],
+        }))
       }),
     )
 

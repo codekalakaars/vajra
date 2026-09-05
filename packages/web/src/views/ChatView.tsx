@@ -3,6 +3,9 @@ import { useSession } from '../hooks/useSession'
 import { StatusBadge } from '../components/StatusBadge'
 import { ThinkingBlock } from '../components/ThinkingBlock'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
+import { PlanView } from '../components/PlanView'
+import { WorkerStatus } from '../components/WorkerStatus'
+import { ConflictAlert } from '../components/ConflictAlert'
 
 const SUMMARIZE_TASK = 'Analyze this project thoroughly. Read all source files, configuration files, and documentation. Provide a comprehensive summary covering: 1) What the project does, 2) Tech stack and dependencies, 3) Directory structure and file purposes, 4) Key architecture and patterns, 5) Entry points and main flows.'
 
@@ -159,7 +162,7 @@ export function ChatView({ connected }: { connected: boolean }) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
 
   const hasSession = session.sessionId !== null
-  const isStreaming = session.status === 'streaming' || session.status === 'creating'
+  const isStreaming = session.status === 'streaming' || session.status === 'creating' || session.status === 'planning' || session.status === 'executing'
   const showPermissions = !hasSession && permLoaded
 
   const permTree = useMemo(() => {
@@ -453,7 +456,7 @@ export function ChatView({ connected }: { connected: boolean }) {
             disabled={!projectDir.trim() || isStreaming || (permLoaded && noneChecked)}
             className="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-medium transition-colors disabled:opacity-50"
           >
-            {session.status === 'creating' ? 'Analyzing project...' : 'Start'}
+            {session.status === 'creating' ? 'Analyzing project...' : session.status === 'planning' ? 'Planning tasks...' : session.status === 'executing' ? 'Executing plan...' : 'Start'}
           </button>
         </div>
       )}
@@ -474,6 +477,21 @@ export function ChatView({ connected }: { connected: boolean }) {
 
           {/* Messages */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-hidden p-6 space-y-4">
+            {/* Multi-agent status views */}
+            {(session.status === 'planning' || session.status === 'executing') && (
+              <div className="space-y-3">
+                {session.planTasks.length > 0 && (
+                  <PlanView tasks={session.planTasks} />
+                )}
+                {session.agents.length > 0 && (
+                  <WorkerStatus agents={session.agents} />
+                )}
+                {session.conflicts.length > 0 && (
+                  <ConflictAlert conflicts={session.conflicts} />
+                )}
+              </div>
+            )}
+
             {session.status === 'idle' && session.messages.length === 0 && (
               <div className="text-gray-500 text-center mt-20">Waiting for response...</div>
             )}
