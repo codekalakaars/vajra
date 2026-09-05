@@ -68,6 +68,12 @@ enum Commands {
         /// Show what would happen without actually launching the sandbox
         #[arg(long)]
         dry_run: bool,
+        /// Open the file permissions GUI before launching the sandbox
+        #[arg(long)]
+        permissions: bool,
+        /// TCP port for the permissions GUI (default: 4823)
+        #[arg(long, default_value_t = 4823)]
+        port: u16,
     },
     /// Run the project app via the supervisor (use inside the sandbox)
     Run {
@@ -81,6 +87,12 @@ enum Commands {
     Status,
     /// Validate .vajra.toml configuration without launching
     Validate,
+    /// Open the file permissions GUI
+    Permissions {
+        /// TCP port for the GUI (default: 4823)
+        #[arg(long, default_value_t = 4823)]
+        port: u16,
+    },
 }
 
 struct LaunchConfig {
@@ -89,6 +101,18 @@ struct LaunchConfig {
     allow_dirs: Vec<String>,
     allow_rw_dirs: Vec<String>,
     picker_ran: bool,
+}
+
+struct LaunchArgs {
+    env: Option<String>,
+    sample: Option<String>,
+    allow_flags: Vec<String>,
+    allow_rw_flags: Vec<String>,
+    reconfigure: bool,
+    verbose: bool,
+    dry_run: bool,
+    permissions: bool,
+    port: u16,
 }
 
 fn load_and_merge_config(
@@ -175,11 +199,16 @@ fn save_config_if_needed(
     }
 
     let file_name = |p: &std::path::PathBuf| p.file_name().map(|n| n.to_string_lossy().to_string());
+    // Preserve existing permissions if the config already has them
+    let existing_permissions = config::load(project_dir)
+        .unwrap_or(None)
+        .and_then(|c| c.permissions);
     let cfg = config::Config {
         env: selection.original.as_ref().and_then(&file_name),
         sample: selection.sample.as_ref().and_then(&file_name),
         allow: allow_dirs.to_vec(),
         allow_rw: allow_rw_dirs.to_vec(),
+        permissions: existing_permissions,
     };
     config::save(project_dir, &cfg)?;
     println!("vajra: saved choices to {}", config::FILE_NAME);
@@ -375,26 +404,18 @@ fn print_dry_run_summary(
     println!("No sandbox was launched, no files were modified.");
 }
 
-fn launch(
-    env: Option<String>,
-    sample: Option<String>,
-    allow_flags: Vec<String>,
-    allow_rw_flags: Vec<String>,
-    reconfigure: bool,
-    verbose: bool,
-    dry_run: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn launch(args: LaunchArgs) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = std::env::current_dir()?;
 
     // Load and merge config
     let config = load_and_merge_config(
         &project_dir,
-        env,
-        sample,
-        &allow_flags,
-        &allow_rw_flags,
-        reconfigure,
-        verbose,
+        args.env,
+        args.sample,
+        &args.allow_flags,
+        &args.allow_rw_flags,
+        args.reconfigure,
+        args.verbose,
     )?;
 
     // Run env picker
@@ -402,7 +423,7 @@ fn launch(
         &project_dir,
         config.env_choice,
         config.sample_choice,
-        verbose,
+        args.verbose,
     )?;
 
     // Collect allowed paths and forwarded env
@@ -410,7 +431,7 @@ fn launch(
     let forwarded_env = get_and_print_forwarded_env();
 
     // Dry-run: print summary and exit
-    if dry_run {
+    if args.dry_run {
         print_dry_run_summary(
             &project_dir,
             &selection,
@@ -434,13 +455,15 @@ fn launch(
     generate_sample_env_if_needed(&selection)?;
 
     // Setup supervisor
-    let (sup, listener, sock_path) = setup_supervisor(&project_dir, &selection, verbose)?;
+    let (sup, listener, sock_path) = setup_supervisor(&project_dir, &selection, args.verbose)?;
 
-    // Start permissions GUI in a background thread
-    let gui_project_dir = project_dir.clone();
-    thread::spawn(move || {
-        let _ = vajra::gui::start(&gui_project_dir, "127.0.0.1", 4823);
-    });
+    // Start permissions GUI only when --permissions is passed
+    if args.permissions {
+        let gui_project_dir = project_dir.clone();
+        thread::spawn(move || {
+            let _ = vajra::gui::start(&gui_project_dir, "127.0.0.1", args.port);
+        });
+    }
 
     // Fork and run sandbox
     fork_and_run_sandbox(
@@ -450,7 +473,7 @@ fn launch(
         &sock_path,
         sup,
         listener,
-        verbose,
+        args.verbose,
     )
 }
 
@@ -586,12 +609,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             allow_rw,
             reconfigure,
             dry_run,
-        } => launch(env, sample, allow, allow_rw, reconfigure, verbose, dry_run),
+            permissions,
+            port,
+        } => launch(LaunchArgs {
+            env,
+            sample,
+            allow_flags: allow,
+            allow_rw_flags: allow_rw,
+            reconfigure,
+            verbose,
+            dry_run,
+            permissions,
+            port,
+        }),
         Commands::Run { script, stop } => {
             let code = supervisor::run_client(script, stop)?;
             std::process::exit(code);
         }
         Commands::Status => status(verbose),
         Commands::Validate => validate(verbose),
+        Commands::Permissions { port } => {
+            let project_dir = std::env::current_dir()?;
+            vajra::gui::start(&project_dir, "127.0.0.1", port)?;
+            Ok(())
+        }
     }
 }

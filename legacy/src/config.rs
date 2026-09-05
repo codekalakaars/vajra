@@ -20,6 +20,9 @@ pub struct Config {
     /// Extra read+write dirs, same meaning as repeated --allow-rw flags.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_rw: Vec<String>,
+    /// Per-file permissions for the Landlock sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::permissions::PermissionsConfig>,
 }
 
 fn path_in(project_dir: &Path) -> PathBuf {
@@ -63,6 +66,7 @@ mod tests {
             sample: Some(".sample.env".into()),
             allow: vec!["/opt/tools".into()],
             allow_rw: vec!["/opt/state".into()],
+            permissions: None,
         };
         save(&dir, &config).unwrap();
         assert_eq!(load(&dir).unwrap(), Some(config));

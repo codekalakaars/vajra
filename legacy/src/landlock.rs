@@ -175,6 +175,12 @@ fn apply_per_file_rules(
 ) -> Result<(), String> {
     let root = std::path::Path::new(project_dir);
 
+    // Add a rule for the project root itself so the agent can traverse into it.
+    // Without this, the empty relative path ("") fails to open and the root
+    // gets no Landlock rule, blocking all access to the project directory.
+    let root_bits = perms_to_bits(&perms.default, true, *supported);
+    let _ = add_path_rule(ruleset_fd, project_dir, root_bits);
+
     let mut stack: Vec<(std::path::PathBuf, u32)> = vec![(root.to_path_buf(), 0)];
 
     while let Some((dir, depth)) = stack.pop() {

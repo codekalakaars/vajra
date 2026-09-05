@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FilePermissions {
     pub read: bool,
     pub write: bool,
@@ -10,7 +10,7 @@ pub struct FilePermissions {
     pub delete: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionsConfig {
     pub version: u8,
     pub default: FilePermissions,

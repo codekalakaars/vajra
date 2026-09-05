@@ -241,7 +241,9 @@ pub fn launch_sandbox(config: SandboxConfig) -> Result<(), String> {
 
     mask_env_files(&config.masked_files)?;
 
-    let file_perms = crate::permissions::load(std::path::Path::new(&config.project_dir));
+    let file_perms = crate::config::load(std::path::Path::new(&config.project_dir))
+        .unwrap_or(None)
+        .and_then(|cfg| cfg.permissions);
 
     crate::landlock::restrict_filesystem(
         &config.project_dir,

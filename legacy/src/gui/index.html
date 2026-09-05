@@ -70,6 +70,11 @@ details > summary .name { flex: 1; overflow: hidden; text-overflow: ellipsis; wh
 
 <div class="tree" id="tree"></div>
 
+<div id="system-paths" style="padding:12px 20px;border-top:1px solid var(--border);">
+  <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;font-weight:600;">System Paths (auto-detected, read-only)</div>
+  <div id="system-paths-content" style="font-size:12px;color:var(--text-muted);"></div>
+</div>
+
 <div class="footer">
   <span class="default-label">Default for new files:</span>
   <div class="toggles" id="default-toggles"></div>
@@ -87,13 +92,30 @@ function init() {
   Promise.all([
     fetch('/api/tree').then(r => r.json()),
     fetch('/api/permissions').then(r => r.json()),
-  ]).then(([t, c]) => {
+    fetch('/api/system-paths').then(r => r.json()),
+  ]).then(([t, c, sp]) => {
     tree = t;
     config = c;
+    renderSystemPaths(sp);
     render();
   }).catch(e => {
     document.getElementById('tree').innerHTML = `<div class="empty">Failed to load: ${e.message}</div>`;
   });
+}
+
+function renderSystemPaths(sp) {
+  const el = document.getElementById('system-paths-content');
+  const sections = [];
+  if (sp.toolchain_rx && sp.toolchain_rx.length) {
+    sections.push(`<div style="margin-bottom:4px;"><span style="color:var(--accent);">Read+Execute:</span> ${sp.toolchain_rx.map(esc).join(', ')}</div>`);
+  }
+  if (sp.agent_state_rw && sp.agent_state_rw.length) {
+    sections.push(`<div style="margin-bottom:4px;"><span style="color:var(--green);">Read+Write:</span> ${sp.agent_state_rw.map(esc).join(', ')}</div>`);
+  }
+  if (sp.git_config && sp.git_config.length) {
+    sections.push(`<div><span style="color:var(--text-muted);">Git config:</span> ${sp.git_config.map(esc).join(', ')}</div>`);
+  }
+  el.innerHTML = sections.length ? sections.join('') : '<span style="font-style:italic;">No system paths detected</span>';
 }
 
 function getPerm(path) {
@@ -142,7 +164,7 @@ function renderDir(dirPath, entries, depth) {
 
     if (entry.is_dir) {
       const badge = entry.children.length ? `<span class="badge">${entry.children.length}</span>` : '';
-      html += `<details ${childMatch || nameMatch ? 'open' : ''} data-match="${match}">
+      html += `<details data-path="${esc(entry.path)}" ${childMatch || nameMatch ? 'open' : ''} data-match="${match}">
         <summary>
           <span class="chevron">▶</span>
           <span class="icon">📁</span>
@@ -153,7 +175,7 @@ function renderDir(dirPath, entries, depth) {
         <div class="children">${childHtml || '<div class="empty" style="padding:8px 0;font-size:12px;">empty</div>'}</div>
       </details>`;
     } else {
-      html += `<div class="tree-item" data-match="${match}">
+      html += `<div class="tree-item" data-path="${esc(entry.path)}" data-match="${match}">
         <div class="row">
           <span class="icon">📄</span>
           <span class="name">${esc(entry.name)}</span>
@@ -187,33 +209,9 @@ function render() {
 
   renderDefaultToggles();
 
-  // Re-bind events
+  // Re-bind events: any checkbox change triggers a full UI resync
   document.querySelectorAll('.toggles input').forEach(inp => {
-    const label = inp.closest('label');
-    if (!label) return;
-    const key = Object.keys(TOGGLE_LABELS).find(k => TOGGLE_LABELS[k] === label.textContent.trim());
-    if (!key) return;
     inp.addEventListener('change', function() {
-      const row = this.closest('.row, summary');
-      if (!row) return;
-      // Find path
-      let pathEl = row.querySelector('.name');
-      if (!pathEl) return;
-      // Walk up to find details with stored path
-      let path = '';
-      let el = row.closest('details') || row.closest('.tree-item');
-      // Actually, we need to get the path from the tree data
-      // Better approach: look up by the structure
-      const name = pathEl.textContent.trim();
-      const dirEl = row.closest('details');
-      let dirPath = '';
-      if (dirEl) {
-        const summary = dirEl.querySelector('summary .name');
-        if (summary) {
-          // We need parent chain — let's use a different approach
-        }
-      }
-      // Simplest: find the FileEntry by traversing
       updatePermFromUI();
     });
   });
@@ -244,34 +242,15 @@ function renderDefaultToggles() {
 }
 
 function updatePermFromUI() {
-  // Rebuild file permissions from DOM
   const newFiles = {};
-  document.querySelectorAll('details').forEach(details => {
-    const summary = details.querySelector('summary');
-    if (!summary) return;
-    const nameEl = summary.querySelector('.name');
-    if (!nameEl) return;
-    // Build path from parent chain
-    const pathParts = [];
-    let current = details.parentElement;
-    while (current) {
-      const parentDetails = current.closest('details');
-      if (parentDetails) {
-        const pName = parentDetails.querySelector('summary .name');
-        if (pName) pathParts.unshift(pName.textContent.trim());
-        current = parentDetails.parentElement;
-      } else {
-        break;
-      }
-    }
-    const name = nameEl.textContent.trim();
-    pathParts.push(name);
-    const path = pathParts.join('/');
 
-    const toggles = summary.querySelectorAll('.toggles input');
-    if (toggles.length === 0) return;
+  // Directories (details elements)
+  document.querySelectorAll('details[data-path]').forEach(el => {
+    const path = el.dataset.path;
+    const toggles = el.querySelector('summary .toggles input');
+    if (!toggles) return;
     const perm = {};
-    toggles.forEach(inp => {
+    el.querySelectorAll('summary .toggles input').forEach(inp => {
       const label = inp.closest('label');
       if (!label) return;
       const key = Object.keys(TOGGLE_LABELS).find(k => TOGGLE_LABELS[k] === label.textContent.trim());
@@ -280,31 +259,11 @@ function updatePermFromUI() {
     if (Object.keys(perm).length) newFiles[path] = perm;
   });
 
-  document.querySelectorAll('.tree-item').forEach(item => {
-    const row = item.querySelector('.row');
-    if (!row) return;
-    const nameEl = row.querySelector('.name');
-    if (!nameEl) return;
-    const pathParts = [];
-    let current = item.parentElement;
-    while (current) {
-      const parentDetails = current.closest('details');
-      if (parentDetails) {
-        const pName = parentDetails.querySelector('summary .name');
-        if (pName) pathParts.unshift(pName.textContent.trim());
-        current = parentDetails.parentElement;
-      } else {
-        break;
-      }
-    }
-    const name = nameEl.textContent.trim();
-    pathParts.push(name);
-    const path = pathParts.join('/');
-
-    const toggles = row.querySelectorAll('.toggles input');
-    if (toggles.length === 0) return;
+  // Files (tree-item elements)
+  document.querySelectorAll('.tree-item[data-path]').forEach(el => {
+    const path = el.dataset.path;
     const perm = {};
-    toggles.forEach(inp => {
+    el.querySelectorAll('.toggles input').forEach(inp => {
       const label = inp.closest('label');
       if (!label) return;
       const key = Object.keys(TOGGLE_LABELS).find(k => TOGGLE_LABELS[k] === label.textContent.trim());

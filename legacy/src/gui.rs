@@ -13,7 +13,6 @@ pub fn start(project_dir: &Path, host: &str, port: u16) -> Result<(), String> {
         TcpListener::bind(&addr).map_err(|e| format!("bind {}: {}", addr, e))?;
 
     eprintln!("vajra permissions GUI at http://{}", addr);
-    eprintln!("Press Ctrl+C to stop");
 
     let url = format!("http://{}", addr);
     std::thread::spawn(move || {
@@ -101,30 +100,47 @@ fn handle_client(mut stream: TcpStream, project_dir: &Path) -> Result<(), String
             }
         },
         ("GET", "/api/permissions") => {
-            let config = permissions::load(project_dir).unwrap_or_else(|| {
-                let def = permissions::default_config();
-                let _ = permissions::save(project_dir, &def);
-                def
-            });
+            let cfg = crate::config::load(project_dir)
+                .unwrap_or(None)
+                .unwrap_or_default();
+            let config = cfg.permissions.unwrap_or_else(permissions::default_config);
             let json = serde_json::to_string(&config).unwrap_or_else(|_| "null".to_string());
             let _ = respond(&mut stream, 200, "application/json", json.as_bytes());
         }
         ("PUT", "/api/permissions") => {
             match serde_json::from_slice::<permissions::PermissionsConfig>(&body) {
-                Ok(config) => match permissions::save(project_dir, &config) {
-                    Ok(_) => {
-                        let _ = respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+                Ok(perms) => {
+                    let mut cfg = crate::config::load(project_dir)
+                        .unwrap_or(None)
+                        .unwrap_or_default();
+                    cfg.permissions = Some(perms);
+                    match crate::config::save(project_dir, &cfg) {
+                        Ok(_) => {
+                            let _ = respond(&mut stream, 200, "application/json", b"{\"ok\":true}");
+                        }
+                        Err(e) => {
+                            let err = format!(r#"{{"error":"{}"}}"#, e);
+                            let _ = respond(&mut stream, 500, "application/json", err.as_bytes());
+                        }
                     }
-                    Err(e) => {
-                        let err = format!(r#"{{"error":"{}"}}"#, e);
-                        let _ = respond(&mut stream, 500, "application/json", err.as_bytes());
-                    }
-                },
+                }
                 Err(e) => {
                     let err = format!(r#"{{"error":"invalid JSON: {}"}}"#, e);
                     let _ = respond(&mut stream, 400, "application/json", err.as_bytes());
                 }
             }
+        }
+        ("GET", "/api/system-paths") => {
+            let rx = crate::allow::detect_toolchain_dirs();
+            let rw = crate::allow::detect_agent_state_dirs();
+            let git = crate::allow::detect_git_config_paths();
+            let obj = serde_json::json!({
+                "toolchain_rx": rx,
+                "agent_state_rw": rw,
+                "git_config": git,
+            });
+            let json = obj.to_string();
+            let _ = respond(&mut stream, 200, "application/json", json.as_bytes());
         }
         _ => {
             let _ = respond(&mut stream, 404, "text/plain", b"Not Found");
