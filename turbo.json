@@ -6,6 +6,7 @@
       "outputs": ["dist/**", "*.node", "index.js", "index.d.ts"]
     },
     "dev": {
+      "dependsOn": ["^build"],
       "cache": false,
       "persistent": true
     },
