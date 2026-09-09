@@ -8,6 +8,8 @@ import type { SandboxConfig, FileRule } from './config.js'
 import type { FilePermissions } from '@vajra/protocol'
 import { resolveFilePermissions } from './file-rules.js'
 import { resolveAllowedTools } from './tool-rules.js'
+import type { ResourceLimits } from './resources.js'
+import { resolveResourceLimits } from './resources.js'
 
 /** The shape sandboxed-worker.mjs receives via IPC as its initial job. */
 export interface LaunchJob {
@@ -24,6 +26,8 @@ export interface LaunchJob {
   defaultFilePermissions: FilePermissions
   allowUnenforced: boolean
   allowedTools?: string[]
+  /** Resource limits for this worker. */
+  resourceLimits: Required<ResourceLimits>
 }
 
 /**
@@ -51,5 +55,6 @@ export function buildLaunchJob(
     defaultFilePermissions: config.defaultPermissions,
     allowUnenforced: config.allowUnenforced,
     allowedTools,
+    resourceLimits: resolveResourceLimits(),
   }
 }

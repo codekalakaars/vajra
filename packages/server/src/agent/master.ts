@@ -14,9 +14,11 @@
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../session/manager.js'
 import type { ManagerPlan, PlannedTask, PermissionsConfig } from '@vajra/protocol'
+import { FileLockManager, type ResourceLimits } from '@vajra/sandbox'
 import { TaskQueue, type TaskState } from './taskqueue.js'
 import { AgentRegistry, type AgentState } from './registry.js'
 import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
+import type { WorkerPool } from '../session/pool.js'
 
 export interface MasterInput {
   sessionId: string
@@ -29,6 +31,12 @@ export interface MasterInput {
   registry: AgentRegistry
   /** Launch a sandboxed worker for a specific task. Returns a handle for tool calls. */
   launchWorker: (job: WorkerJob) => Promise<LaunchHandle>
+  /** File lock manager for coordinating parallel access. */
+  fileLocks?: FileLockManager
+  /** Resource limits for workers. */
+  resourceLimits?: ResourceLimits
+  /** Worker pool for reuse (optional). If not provided, workers are destroyed after each task. */
+  pool?: WorkerPool
 }
 
 export interface WorkerJob {
@@ -38,6 +46,7 @@ export interface WorkerJob {
   permissions: PermissionsConfig
   allowedTools: string[]
   taskId: string
+  resourceLimits?: ResourceLimits
 }
 
 export interface MasterResult {
@@ -52,7 +61,10 @@ const MAX_RETRIES = 2
 const VALIDATION_TIMEOUT = 60000
 
 export async function masterLoop(input: MasterInput): Promise<MasterResult> {
-  const { sessionId, projectDir, plan, model, apiKey, events, db, registry, launchWorker } = input
+  const { sessionId, projectDir, plan, model, apiKey, events, db, registry, launchWorker, resourceLimits, pool } = input
+
+  // Use provided file lock manager or create a new one
+  const fileLocks = input.fileLocks ?? new FileLockManager()
 
   // Create master agent
   const masterAgent = registry.createAgent(sessionId, 'master', 'Orchestrate task execution')
@@ -70,9 +82,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   const failedTasks: string[] = []
   let totalToolCalls = 0
 
-  // File lock map: tracks which files are currently being written
-  const fileLocks = new Map<string, string>() // file -> taskId
-
   // Process loop: assign ready tasks, wait for completions
   while (true) {
     const status = queue.getStatus()
@@ -81,34 +90,36 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     // Get tasks ready to run
     const readyTasks = queue.getReadyTasks()
 
-    // Filter out tasks that conflict with currently running tasks
-    const assignable = readyTasks.filter((task) => {
-      // Check if any of this task's files are locked by another task
-      for (const file of task.files) {
-        const owner = fileLocks.get(file)
-        if (owner && owner !== task.id) {
-          events.push('session.conflictDetected', sessionId, {
-            sessionId,
-            task1: task.id,
-            task2: owner,
-            files: [file],
-          })
-          return false
+    // Atomically check conflicts AND acquire locks for non-conflicting tasks
+    const assignable: TaskState[] = []
+    for (const task of readyTasks) {
+      // Try to acquire locks atomically - this prevents race conditions
+      // where two tasks both pass the filter then both acquire locks
+      if (fileLocks.tryAcquire(task.files, task.id, 'write')) {
+        assignable.push(task)
+      } else {
+        // Could not acquire locks - check which files are causing conflict
+        for (const file of task.files) {
+          const owners = fileLocks.getOwners(file)
+          const otherOwner = owners.find((o) => o !== task.id)
+          if (otherOwner) {
+            events.push('session.conflictDetected', sessionId, {
+              sessionId,
+              task1: task.id,
+              task2: otherOwner,
+              files: [file],
+            })
+            break
+          }
         }
       }
-      return true
-    })
+    }
 
     // Assign ready tasks
     for (const task of assignable) {
       const agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
       queue.assignTask(task.id, agent.id)
       registry.updateStatus(agent.id, 'running')
-
-      // Lock files
-      for (const file of task.files) {
-        fileLocks.set(file, task.id)
-      }
 
       // Compute scoped permissions for this worker
       const permissions = computeTaskPermissions(task)
@@ -135,7 +146,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         queue.startTask(task.id)
 
         // Start task execution in background
-        executeTask(agent.id, task, handle, apiKey, model, events, db, queue, registry, sessionId, fileLocks, activeWorkers, completedTasks, failedTasks)
+        executeTask(agent.id, task, handle, apiKey, model, events, db, queue, registry, sessionId, fileLocks, activeWorkers, completedTasks, failedTasks, resourceLimits, pool)
           .catch((e) => {
             console.error(`Worker ${agent.id} failed:`, e)
           })
@@ -145,9 +156,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         queue.failTask(task.id)
         failedTasks.push(task.id)
 
-        for (const file of task.files) {
-          fileLocks.delete(file)
-        }
+        // Release file locks
+        fileLocks.release(task.id)
 
         events.push('session.workerFailed', sessionId, {
           sessionId,
@@ -196,12 +206,14 @@ async function executeTask(
   queue: TaskQueue,
   registry: AgentRegistry,
   sessionId: string,
-  fileLocks: Map<string, string>,
+  fileLocks: FileLockManager,
   activeWorkers: Map<string, { agent: AgentState; handle: LaunchHandle; taskId: string }>,
   completedTasks: string[],
   failedTasks: string[],
+  resourceLimits?: ResourceLimits,
+  pool?: WorkerPool,
 ): Promise<void> {
-  const MAX_WORKER_TOOL_CALLS = 50
+  const MAX_WORKER_TOOL_CALLS = resourceLimits?.maxToolCalls ?? 50
   let toolCallCount = 0
 
   try {
@@ -323,14 +335,18 @@ async function executeTask(
     })
   } finally {
     // Release file locks
-    for (const file of task.files) {
-      fileLocks.delete(file)
-    }
+    fileLocks.release(task.id)
 
-    // Clean up worker
+    // Clean up worker - release back to pool for reuse, or stop if no pool
     const worker = activeWorkers.get(agentId)
     if (worker) {
-      worker.handle.stop()
+      if (pool) {
+        // Release back to pool for reuse
+        pool.release(worker.handle)
+      } else {
+        // No pool - destroy the worker
+        worker.handle.stop()
+      }
       activeWorkers.delete(agentId)
     }
   }
