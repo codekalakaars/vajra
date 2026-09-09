@@ -103,7 +103,7 @@ export function placeFootprints(
         rotation: 0,
         layer: 'F.Cu',
       })
-      occupied.add(pointKey(pos.x, pos.y))
+      occupied.add(`${pos.x},${pos.y}`)
     }
   }
 
@@ -142,7 +142,7 @@ export function placeFootprints(
         rotation: edge === 1 || edge === 3 ? 90 : 0,
         layer: 'F.Cu',
       })
-      occupied.add(pointKey(pos.x, pos.y))
+      occupied.add(`${pos.x},${pos.y}`)
     }
   }
 
@@ -178,7 +178,7 @@ export function placeFootprints(
       rotation: 0,
       layer: 'F.Cu',
     })
-    occupied.add(pointKey(pos.x, pos.y))
+    occupied.add(`${pos.x},${pos.y}`)
   }
 
   return placed
