@@ -43,17 +43,16 @@ export function generatePcbContent(
   lines.push(`  (paper "A4")`)
   lines.push('')
 
-  // Layers
+  // KiCad layer IDs: F.Cu=0, B.Cu=31, In1.Cu=32, In2.Cu=33
+  // User layers: B.Adhes=34, F.Adhes=35, B.Paste=36, F.Paste=37, etc.
+  // Note: In3.Cu(34) and In4.Cu(35) conflict with B.Adhes/F.Adhes,
+  // so we cap at 4 copper layers for generated PCBs.
   lines.push('  (layers')
   lines.push('    (0 "F.Cu" signal)')
   if (constraints.layers >= 2) lines.push('    (31 "B.Cu" signal)')
   if (constraints.layers >= 4) {
     lines.push('    (32 "In1.Cu" signal)')
     lines.push('    (33 "In2.Cu" signal)')
-  }
-  if (constraints.layers >= 6) {
-    lines.push('    (34 "In3.Cu" signal)')
-    lines.push('    (35 "In4.Cu" signal)')
   }
   lines.push('    (34 "B.Adhes" user "B.Adhesive")')
   lines.push('    (35 "F.Adhes" user "F.Adhesive")')

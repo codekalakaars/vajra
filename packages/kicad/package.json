@@ -10,9 +10,7 @@
     "test": "node --test \"test/*.test.mjs\"",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": {
-    "@vajra/protocol": "workspace:*"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.5.4",
     "typescript": "^5.5.4"
