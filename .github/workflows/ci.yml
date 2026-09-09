@@ -53,3 +53,15 @@ jobs:
 
       - name: Node smoke tests
         run: pnpm test
+
+      # Build all TypeScript packages (protocol, sandbox, kicad, server, web)
+      - name: Build packages
+        run: pnpm turbo build
+
+      # Lint all TypeScript packages
+      - name: Lint packages
+        run: pnpm turbo lint
+
+      # Test all packages that have a test script
+      - name: Test packages
+        run: pnpm turbo test
