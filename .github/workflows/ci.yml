@@ -27,15 +27,16 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install stable --profile minimal --component clippy
 
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-
       # v6 runs on node24; v4 targeted node20, which GitHub has deprecated and
       # was force-running on node24 with a warning on every job.
       - uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 11
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
 
       - name: Cache cargo
         uses: actions/cache@v5
