@@ -5,24 +5,20 @@ import { toolDefinitions, toOpenAiToolSpecs } from '../dist/index.js'
 test('every tool schema validates its own well-formed example', () => {
   const examples = {
     read_file: { path: 'a.txt' },
+    write_file: { path: 'a.txt', content: 'hi' },
+    edit_file: { path: 'a.txt', oldString: 'x', newString: 'y' },
+    delete_file: { path: 'a.txt' },
+    delete_dir: { path: 'a', recursive: true },
+    create_dir: { path: 'a/b/c' },
     list_files: { path: '.', recursive: false },
-    search_files: { query: 'function readFile' },
-    run_command: { command: 'cargo test', cwd: '.', timeout: 30000 },
-    write_file: { path: 'a.txt', content: 'hello' },
-    edit_file: { path: 'a.txt', oldString: 'foo', newString: 'bar' },
-    propose_plan: {
-      tasks: [
-        {
-          title: 'Add auth middleware',
-          description: 'Create JWT auth middleware',
-          files: ['src/middleware/auth.ts'],
-          validation: 'cargo test',
-          dependsOn: [],
-          type: 'create',
-        },
-      ],
-      summary: 'Add JWT authentication',
-    },
+    copy_file: { source: 'a', destination: 'b' },
+    rename_file: { source: 'a', destination: 'b', overwrite: true },
+    run_command: { command: 'git', args: ['status'] },
+    parse_schematic: { path: 'design.kicad_sch' },
+    generate_pcb: { schematicPath: 'design.kicad_sch', constraints: { width: 100, height: 80, layers: 2 } },
+    run_drc: { path: 'design.kicad_pcb' },
+    export_gerbers: { pcbPath: 'design.kicad_pcb', outputDir: 'gerbers' },
+    export_bom: { schPath: 'design.kicad_sch', outputPath: 'bom.csv' },
   }
 
   for (const [name, def] of Object.entries(toolDefinitions)) {
@@ -34,6 +30,8 @@ test('every tool schema validates its own well-formed example', () => {
 
 test('tool schemas reject malformed arguments', () => {
   assert.throws(() => toolDefinitions.read_file.schema.parse({}))
+  assert.throws(() => toolDefinitions.edit_file.schema.parse({ path: 'a' }))
+  assert.throws(() => toolDefinitions.run_command.schema.parse({ command: 5 }))
 })
 
 test('run_shell is deliberately not offered', () => {
@@ -52,6 +50,6 @@ test('toOpenAiToolSpecs produces the OpenAI-compatible tools[] shape', () => {
     assert.equal(spec.function.parameters.additionalProperties, false)
   }
 
-  const readFile = specs.find((s) => s.function.name === 'read_file')
-  assert.deepEqual(readFile.function.parameters.required, ['path'])
+  const runCommand = specs.find((s) => s.function.name === 'run_command')
+  assert.deepEqual(runCommand.function.parameters.required, ['command'])
 })
