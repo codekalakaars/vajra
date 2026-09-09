@@ -7,8 +7,6 @@ import { PlanView } from '../components/PlanView'
 import { WorkerStatus } from '../components/WorkerStatus'
 import { ConflictAlert } from '../components/ConflictAlert'
 
-const SUMMARIZE_TASK = 'Analyze this project thoroughly. Read all source files, configuration files, and documentation. Provide a comprehensive summary covering: 1) What the project does, 2) Tech stack and dependencies, 3) Directory structure and file purposes, 4) Key architecture and patterns, 5) Entry points and main flows.'
-
 const MODELS = [
   { group: 'Auto (Recommended)', options: [{ value: 'openrouter/free', label: 'Auto-route free models' }] },
   { group: 'Strong (1M context)', options: [
@@ -456,7 +454,7 @@ export function ChatView({ connected }: { connected: boolean }) {
             disabled={!projectDir.trim() || isStreaming || (permLoaded && noneChecked)}
             className="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-medium transition-colors disabled:opacity-50"
           >
-            {session.status === 'creating' ? 'Analyzing project...' : session.status === 'planning' ? 'Planning tasks...' : session.status === 'executing' ? 'Executing plan...' : 'Start'}
+            {session.status === 'creating' ? 'Starting...' : 'Start'}
           </button>
         </div>
       )}
@@ -478,10 +476,28 @@ export function ChatView({ connected }: { connected: boolean }) {
           {/* Messages */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-hidden p-6 space-y-4">
             {/* Multi-agent status views */}
-            {(session.status === 'planning' || session.status === 'executing') && (
+            {(session.status === 'planning' || session.status === 'executing' || session.status === 'confirming') && (
               <div className="space-y-3">
                 {session.planTasks.length > 0 && (
-                  <PlanView tasks={session.planTasks} />
+                  <div>
+                    <PlanView tasks={session.planTasks} />
+                    {session.status === 'confirming' && (
+                      <div className="mt-4 flex gap-3">
+                        <button
+                          onClick={() => session.confirmPlan()}
+                          className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-medium transition-colors"
+                        >
+                          Confirm & Execute
+                        </button>
+                        <button
+                          onClick={() => session.rejectPlan()}
+                          className="px-4 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-gray-300 transition-colors"
+                        >
+                          Keep Talking
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 )}
                 {session.agents.length > 0 && (
                   <WorkerStatus agents={session.agents} />
@@ -493,7 +509,7 @@ export function ChatView({ connected }: { connected: boolean }) {
             )}
 
             {session.status === 'idle' && session.messages.length === 0 && (
-              <div className="text-gray-500 text-center mt-20">Waiting for response...</div>
+              <div className="text-gray-500 text-center mt-20">Start a conversation to plan your task...</div>
             )}
 
             {session.messages.map((msg, i) => (
@@ -565,7 +581,7 @@ export function ChatView({ connected }: { connected: boolean }) {
           )}
 
           {/* Input */}
-          {!isStreaming && (
+          {!isStreaming && session.status !== 'confirming' && (
             <div className="p-4 border-t border-gray-800">
               <div className="max-w-3xl mx-auto flex gap-2">
                 <textarea
