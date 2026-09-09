@@ -170,14 +170,10 @@ const dispatchTable = {
   // KiCad tools — async, loaded from @vajra/kicad
   parse_schematic: async (args) => {
     const kicad = await loadKicad()
-    const available = await kicad.isKicadCliAvailable()
-    if (!available) throw new Error('kicad-cli is not installed or not on PATH')
     return kicad.parseSchematic(args.path)
   },
   generate_pcb: async (args) => {
     const kicad = await loadKicad()
-    const available = await kicad.isKicadCliAvailable()
-    if (!available) throw new Error('kicad-cli is not installed or not on PATH')
     const { parseSchematic, placeFootprints, generateUnroutedConnections, generatePcb } = kicad
     const schematic = await parseSchematic(args.schematicPath)
     const placed = placeFootprints(schematic, args.constraints)
@@ -188,21 +184,15 @@ const dispatchTable = {
   },
   run_drc: async (args) => {
     const kicad = await loadKicad()
-    const available = await kicad.isKicadCliAvailable()
-    if (!available) throw new Error('kicad-cli is not installed or not on PATH')
     return kicad.runDrc(args.path)
   },
   export_gerbers: async (args) => {
     const kicad = await loadKicad()
-    const available = await kicad.isKicadCliAvailable()
-    if (!available) throw new Error('kicad-cli is not installed or not on PATH')
     await kicad.exportGerbers(args.pcbPath, args.outputDir)
     return { outputDir: args.outputDir }
   },
   export_bom: async (args) => {
     const kicad = await loadKicad()
-    const available = await kicad.isKicadCliAvailable()
-    if (!available) throw new Error('kicad-cli is not installed or not on PATH')
     const csv = await kicad.exportBom(args.schPath, args.outputPath)
     return { outputPath: args.outputPath, content: csv }
   },

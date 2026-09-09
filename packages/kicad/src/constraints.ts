@@ -3,8 +3,8 @@
 // These define the physical and electrical parameters the agent uses
 // when generating a PCB from a schematic.
 
-/** Copper layer count (capped at 4 due to KiCad layer ID conflicts at 6) */
-export type LayerCount = 1 | 2 | 4
+/** Copper layer count */
+export type LayerCount = 1 | 2 | 4 | 6
 
 /** Board outline point (mm) */
 export interface Point {

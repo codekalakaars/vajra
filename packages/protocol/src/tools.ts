@@ -260,14 +260,12 @@ export const generatePcbTool = defineTool({
     constraints: z.object({
       width: z.number().describe('Board width in mm'),
       height: z.number().describe('Board height in mm'),
-      layers: z.union([z.literal(1), z.literal(2), z.literal(4)]),
+      layers: z.union([z.literal(1), z.literal(2), z.literal(4), z.literal(6)]),
+      minTraceWidth: z.number().optional(),
+      minClearance: z.number().optional(),
+      minViaDrill: z.number().optional(),
+      minViaSize: z.number().optional(),
       groundPlane: z.boolean().optional(),
-      designRules: z.object({
-        minTraceWidth: z.number().optional(),
-        minClearance: z.number().optional(),
-        minViaDrill: z.number().optional(),
-        minViaSize: z.number().optional(),
-      }).optional(),
     }),
   }),
   jsonSchema: {
@@ -277,7 +275,7 @@ export const generatePcbTool = defineTool({
       outputPath: { type: 'string', description: 'Output path for the .kicad_pcb file.' },
       constraints: {
         type: 'object',
-        description: 'Board constraints: { width: number, height: number, layers: 1|2|4, groundPlane?: boolean, designRules?: { minTraceWidth?: number, minClearance?: number, minViaDrill?: number, minViaSize?: number } }',
+        description: 'Board constraints: { width: number, height: number, layers: 1|2|4|6, minTraceWidth?: number, minClearance?: number, minViaDrill?: number, minViaSize?: number, groundPlane?: boolean }',
       },
     },
     required: ['schematicPath', 'constraints'],
