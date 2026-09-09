@@ -10,3 +10,5 @@ export { matchesPattern, resolveFilePermission, resolveFilePermissions, filterFi
 export { resolveAllowedTools } from './tool-rules.js'
 export { buildLaunchJob, type LaunchJob } from './sandbox-builder.js'
 export { loadSandboxConfig, loadSandboxEnvironments, saveSandboxConfig, saveSandboxEnvironments, DEFAULT_CONFIG_FILE } from './file-config.js'
+export { FileLockManager, type Lock, type LockMode } from './file-locks.js'
+export { type ResourceLimits, type ConcurrencyConfig, DEFAULT_RESOURCE_LIMITS, DEFAULT_CONCURRENCY, resolveResourceLimits, resolveConcurrencyConfig } from './resources.js'

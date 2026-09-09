@@ -165,12 +165,27 @@ let allowedTools = null
 let fileRules = []
 let defaultFilePermissions = { read: true, write: false, edit: false, delete: false }
 
+// Resource limits for this worker
+let resourceLimits = null
+let toolCallCount = 0
+let cpuTimeTimer = null
+
 function send(message) {
   if (process.send) process.send(message)
 }
 
 function handleToolCall(message) {
   const { callId, tool, args } = message
+
+  // Check tool call limit
+  if (resourceLimits && resourceLimits.maxToolCalls !== undefined && resourceLimits.maxToolCalls !== null) {
+    toolCallCount++
+    if (toolCallCount > resourceLimits.maxToolCalls) {
+      send({ type: 'result', callId, ok: false, error: `Tool call limit exceeded (${resourceLimits.maxToolCalls})` })
+      return
+    }
+  }
+
   const def = toolDefinitions[tool]
 
   if (!def) {
@@ -235,6 +250,24 @@ function main(job) {
   }
   if (job.defaultFilePermissions) {
     defaultFilePermissions = job.defaultFilePermissions
+  }
+
+  // Set up resource limits if provided
+  if (job.resourceLimits) {
+    resourceLimits = {
+      maxMemoryMB: job.resourceLimits.maxMemoryMB ?? 512,
+      maxCpuTimeMs: job.resourceLimits.maxCpuTimeMs ?? 300000,
+      maxToolCalls: job.resourceLimits.maxToolCalls ?? 100,
+      maxSpawnRetries: job.resourceLimits.maxSpawnRetries ?? 2,
+    }
+
+    // Start CPU time watchdog
+    if (resourceLimits.maxCpuTimeMs > 0) {
+      cpuTimeTimer = setTimeout(() => {
+        send({ type: 'result', callId: 'cpu-timeout', ok: false, error: `CPU time limit exceeded (${resourceLimits.maxCpuTimeMs}ms)` })
+        process.exit(1)
+      }, resourceLimits.maxCpuTimeMs)
+    }
   }
 
   const capabilities = native.sandboxCapabilities()

@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
 import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage, ManagerPlan, PlannedTask } from '@vajra/protocol'
-import type { FileRule } from '@vajra/sandbox'
+import type { FileRule, ResourceLimits } from '@vajra/sandbox'
+import { FileLockManager } from '@vajra/sandbox'
 import type { OpenRouterMessage } from '../agent/openrouter.js'
 import { managerConversationTurn, type ManagerTurnResult } from '../agent/manager.js'
 import { masterLoop } from '../agent/master.js'
 import { AgentRegistry } from '../agent/registry.js'
 import type { SummaryEntry } from '../agent/summary.js'
+import { WorkerPool } from './pool.js'
 
 export interface LaunchJob {
   sessionId: string
@@ -19,6 +21,8 @@ export interface LaunchJob {
   allowUnenforced: boolean
   /** If set, restricts the worker to only these tools. */
   allowedTools?: string[]
+  /** Resource limits for this worker. */
+  resourceLimits?: ResourceLimits
 }
 
 export interface LaunchHandle {
@@ -76,11 +80,14 @@ interface ConversationState {
   proposedPlan?: ManagerPlan
   /** The sandboxed worker handle for file tool dispatch. */
   handle: LaunchHandle
+  /** File lock manager for coordinating parallel access. */
+  fileLocks: FileLockManager
 }
 
 export class SessionManager {
   private handles = new Map<string, LaunchHandle>()
   private conversations = new Map<string, ConversationState>()
+  private pools = new Map<string, WorkerPool>()
 
   constructor(
     private db: SqliteDb,
@@ -136,11 +143,19 @@ export class SessionManager {
       )
       this.handles.set(sessionId, handle)
 
+      // Initialize worker pool for parallel task execution
+      const pool = new WorkerPool(
+        { maxConcurrentWorkers: 4, maxIdleWorkers: 1 },
+        this.launcher,
+      )
+      this.pools.set(sessionId, pool)
+
       // Initialize conversation state
       this.conversations.set(sessionId, {
         history: [],
         summaryIndex: [],
         handle,
+        fileLocks: new FileLockManager(),
       })
 
       // Transition to talking — the user can now chat with the Manager
@@ -247,6 +262,14 @@ export class SessionManager {
       handle.stop()
       this.handles.delete(sessionId)
     }
+
+    // Drain the worker pool
+    const pool = this.pools.get(sessionId)
+    if (pool) {
+      pool.drain().catch(() => {}) // Best effort drain
+      this.pools.delete(sessionId)
+    }
+
     this.conversations.delete(sessionId)
     this.setStatus(sessionId, 'stopped', Date.now())
   }
@@ -257,6 +280,14 @@ export class SessionManager {
       handle.stop()
       this.handles.delete(sessionId)
     }
+
+    // Drain the worker pool
+    const pool = this.pools.get(sessionId)
+    if (pool) {
+      pool.drain().catch(() => {}) // Best effort drain
+      this.pools.delete(sessionId)
+    }
+
     this.conversations.delete(sessionId)
     const tx = this.db.transaction(() => {
       this.db.prepare(`DELETE FROM plan_steps WHERE session_id = ?`).run(sessionId)
@@ -322,6 +353,7 @@ export class SessionManager {
         .get(sessionId) as { project_dir: string; model: string }
 
       const registry = new AgentRegistry(this.db)
+      const pool = this.pools.get(sessionId)
 
       masterLoop({
         sessionId,
@@ -332,7 +364,21 @@ export class SessionManager {
         events: this.events,
         db: this.db,
         registry,
+        fileLocks: conv.fileLocks,
+        pool,
         launchWorker: async (job) => {
+          // Use pool if available, otherwise fall back to direct launch
+          if (pool) {
+            return pool.acquire({
+              sessionId,
+              projectDir: job.projectDir,
+              permissions: job.permissions,
+              allowUnenforced: false,
+              allowedTools: job.allowedTools,
+            })
+          }
+
+          // Fallback: direct launch (no pooling)
           const workerHandle = await this.launcher(
             {
               sessionId,

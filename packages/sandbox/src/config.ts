@@ -6,6 +6,8 @@
 // modifies it.
 
 import type { FilePermissions } from '@vajra/protocol'
+import type { ConcurrencyConfig } from './resources.js'
+import { resolveConcurrencyConfig } from './resources.js'
 
 /** A single file access rule, matched against project-relative paths. */
 export interface FileRule {
@@ -31,6 +33,8 @@ export interface CreateSandboxInput {
   readExecutePaths?: string[]
   /** Extra paths granted read+write (agent state, logs). */
   readWritePaths?: string[]
+  /** Concurrency config for parallel worker execution. */
+  concurrency?: Partial<ConcurrencyConfig>
 }
 
 export interface SandboxConfig {
@@ -42,6 +46,7 @@ export interface SandboxConfig {
   readonly allowUnenforced: boolean
   readonly readExecutePaths: readonly string[]
   readonly readWritePaths: readonly string[]
+  readonly concurrency: Required<ConcurrencyConfig>
 }
 
 /** Map of environment name → sandbox config. */
@@ -71,6 +76,7 @@ export function createSandboxConfig(input: CreateSandboxInput): SandboxConfig {
     allowUnenforced: input.allowUnenforced ?? false,
     readExecutePaths: Object.freeze([...(input.readExecutePaths ?? [])]),
     readWritePaths: Object.freeze([...(input.readWritePaths ?? [])]),
+    concurrency: resolveConcurrencyConfig(input.concurrency),
   }
   return Object.freeze(config)
 }
