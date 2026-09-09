@@ -29,9 +29,8 @@ jobs:
 
       # v6 runs on node24; v4 targeted node20, which GitHub has deprecated and
       # was force-running on node24 with a warning on every job.
+      # Version is auto-detected from package.json's "packageManager" field.
       - uses: pnpm/action-setup@v6
-        with:
-          version: 11
 
       - uses: actions/setup-node@v5
         with:
