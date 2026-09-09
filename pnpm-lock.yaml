@@ -25,11 +25,27 @@ importers:
         specifier: ^5.5.4
         version: 5.9.3
 
+  packages/sandbox:
+    dependencies:
+      '@vajra/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^22.5.4
+        version: 22.20.1
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+
   packages/server:
     dependencies:
       '@vajra/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@vajra/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
       better-sqlite3:
         specifier: ^11.3.0
         version: 11.10.0
