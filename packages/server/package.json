@@ -13,7 +13,6 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@vajra/kicad": "workspace:*",
     "@vajra/protocol": "workspace:*",
     "@vajra/sandbox": "workspace:*",
     "better-sqlite3": "^11.3.0",
