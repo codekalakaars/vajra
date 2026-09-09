@@ -18,6 +18,7 @@ target/
 node_modules/
 vendor/
 .cache/
+.turbo/
 
 # napi build artifacts
 *.node
