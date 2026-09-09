@@ -227,115 +227,6 @@ export const runCommandTool = defineTool({
   },
 })
 
-// ---------------------------------------------------------------------------
-// KiCad tools — schematic → PCB generation
-// ---------------------------------------------------------------------------
-
-export const parseSchematicTool = defineTool({
-  name: 'parse_schematic',
-  description:
-    'Parse a .kicad_sch file and return its components, nets, and connections. ' +
-    'This is the first step before generating a PCB layout.',
-  nativeFn: 'parseSchematic',
-  schema: z.object({ path: z.string() }),
-  jsonSchema: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'Path to the .kicad_sch file.' },
-    },
-    required: ['path'],
-    additionalProperties: false,
-  },
-})
-
-export const generatePcbTool = defineTool({
-  name: 'generate_pcb',
-  description:
-    'Generate a .kicad_pcb file from a schematic and board constraints. ' +
-    'The generated file can be opened in KiCad for manual routing.',
-  nativeFn: 'generatePcb',
-  schema: z.object({
-    schematicPath: z.string(),
-    outputPath: z.string().optional(),
-    constraints: z.object({
-      width: z.number().describe('Board width in mm'),
-      height: z.number().describe('Board height in mm'),
-      layers: z.union([z.literal(1), z.literal(2), z.literal(4)]),
-      groundPlane: z.boolean().optional(),
-      designRules: z.object({
-        minTraceWidth: z.number().optional(),
-        minClearance: z.number().optional(),
-        minViaDrill: z.number().optional(),
-        minViaSize: z.number().optional(),
-      }).optional(),
-    }),
-  }),
-  jsonSchema: {
-    type: 'object',
-    properties: {
-      schematicPath: { type: 'string', description: 'Path to the .kicad_sch file.' },
-      outputPath: { type: 'string', description: 'Output path for the .kicad_pcb file.' },
-      constraints: {
-        type: 'object',
-        description: 'Board constraints: { width: number, height: number, layers: 1|2|4, groundPlane?: boolean, designRules?: { minTraceWidth?: number, minClearance?: number, minViaDrill?: number, minViaSize?: number } }',
-      },
-    },
-    required: ['schematicPath', 'constraints'],
-    additionalProperties: false,
-  },
-})
-
-export const runDrcTool = defineTool({
-  name: 'run_drc',
-  description:
-    'Run Design Rule Check on a .kicad_pcb file. Returns a report of violations ' +
-    '(clearance errors, track width issues, etc.).',
-  nativeFn: 'runDrc',
-  schema: z.object({ path: z.string() }),
-  jsonSchema: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'Path to the .kicad_pcb file.' },
-    },
-    required: ['path'],
-    additionalProperties: false,
-  },
-})
-
-export const exportGerbersTool = defineTool({
-  name: 'export_gerbers',
-  description:
-    'Export Gerber and drill files from a .kicad_pcb for PCB fabrication.',
-  nativeFn: 'exportGerbers',
-  schema: z.object({ pcbPath: z.string(), outputDir: z.string() }),
-  jsonSchema: {
-    type: 'object',
-    properties: {
-      pcbPath: { type: 'string', description: 'Path to the .kicad_pcb file.' },
-      outputDir: { type: 'string', description: 'Directory to write Gerber files to.' },
-    },
-    required: ['pcbPath', 'outputDir'],
-    additionalProperties: false,
-  },
-})
-
-export const exportBomTool = defineTool({
-  name: 'export_bom',
-  description:
-    'Export a Bill of Materials from a .kicad_sch file.',
-  nativeFn: 'exportBom',
-  schema: z.object({ schPath: z.string(), outputPath: z.string() }),
-  jsonSchema: {
-    type: 'object',
-    properties: {
-      schPath: { type: 'string', description: 'Path to the .kicad_sch file.' },
-      outputPath: { type: 'string', description: 'Output path for the BOM CSV.' },
-    },
-    required: ['schPath', 'outputPath'],
-    additionalProperties: false,
-  },
-})
-
 export const toolDefinitions = {
   read_file: readFileTool,
   write_file: writeFileTool,
@@ -347,11 +238,6 @@ export const toolDefinitions = {
   copy_file: copyFileTool,
   rename_file: renameFileTool,
   run_command: runCommandTool,
-  parse_schematic: parseSchematicTool,
-  generate_pcb: generatePcbTool,
-  run_drc: runDrcTool,
-  export_gerbers: exportGerbersTool,
-  export_bom: exportBomTool,
 } as const satisfies Record<string, ToolDefinition>
 
 export type ToolName = keyof typeof toolDefinitions

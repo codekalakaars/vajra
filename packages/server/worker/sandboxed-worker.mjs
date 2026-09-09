@@ -107,16 +107,6 @@ function extractPaths(tool, args) {
     case 'copy_file':
     case 'rename_file':
       return [args.source, args.destination]
-    case 'parse_schematic':
-      return [args.path]
-    case 'generate_pcb':
-      return [args.schematicPath, args.outputPath].filter(Boolean)
-    case 'run_drc':
-      return [args.path]
-    case 'export_gerbers':
-      return [args.pcbPath, args.outputDir]
-    case 'export_bom':
-      return [args.schPath, args.outputPath]
     default:
       return [] // run_command has no file path
   }
@@ -146,16 +136,6 @@ function checkFilePermission(tool, args, fileRules, defaultPermissions) {
 // Tool dispatch
 // ---------------------------------------------------------------------------
 
-// KiCad tools are loaded dynamically since they're ESM-only
-let kicadModule = null
-
-async function loadKicad() {
-  if (!kicadModule) {
-    kicadModule = await import('@vajra/kicad')
-  }
-  return kicadModule
-}
-
 const dispatchTable = {
   read_file: (args) => native.readFile(args.path),
   write_file: (args) => native.writeFile(args.path, args.content),
@@ -167,45 +147,6 @@ const dispatchTable = {
   copy_file: (args) => native.copyFile(args.source, args.destination, args.overwrite),
   rename_file: (args) => native.renameFile(args.source, args.destination, args.overwrite),
   run_command: (args) => native.runCommand(args.command, args.args, args.cwd),
-  // KiCad tools — async, loaded from @vajra/kicad
-  parse_schematic: async (args) => {
-    const kicad = await loadKicad()
-    const available = await kicad.isKicadCliAvailable()
-    if (!available) throw new Error('kicad-cli is not installed or not on PATH')
-    return kicad.parseSchematic(args.path)
-  },
-  generate_pcb: async (args) => {
-    const kicad = await loadKicad()
-    const available = await kicad.isKicadCliAvailable()
-    if (!available) throw new Error('kicad-cli is not installed or not on PATH')
-    const { parseSchematic, placeFootprints, generateUnroutedConnections, generatePcb } = kicad
-    const schematic = await parseSchematic(args.schematicPath)
-    const placed = placeFootprints(schematic, args.constraints)
-    const connections = generateUnroutedConnections(placed, schematic.nets)
-    const outputPath = args.outputPath || args.schematicPath.replace(/\.kicad_sch$/, '.kicad_pcb')
-    await generatePcb(schematic, placed, connections, args.constraints, outputPath)
-    return { outputPath, componentCount: schematic.componentCount, netCount: schematic.netCount }
-  },
-  run_drc: async (args) => {
-    const kicad = await loadKicad()
-    const available = await kicad.isKicadCliAvailable()
-    if (!available) throw new Error('kicad-cli is not installed or not on PATH')
-    return kicad.runDrc(args.path)
-  },
-  export_gerbers: async (args) => {
-    const kicad = await loadKicad()
-    const available = await kicad.isKicadCliAvailable()
-    if (!available) throw new Error('kicad-cli is not installed or not on PATH')
-    await kicad.exportGerbers(args.pcbPath, args.outputDir)
-    return { outputDir: args.outputDir }
-  },
-  export_bom: async (args) => {
-    const kicad = await loadKicad()
-    const available = await kicad.isKicadCliAvailable()
-    if (!available) throw new Error('kicad-cli is not installed or not on PATH')
-    const csv = await kicad.exportBom(args.schPath, args.outputPath)
-    return { outputPath: args.outputPath, content: csv }
-  },
 }
 
 // Set of tools this worker is allowed to call. Populated from the job.
@@ -255,17 +196,7 @@ function handleToolCall(message) {
 
   try {
     const result = dispatchTable[tool](parsedArgs)
-    // Handle both sync and async dispatch
-    if (result && typeof result.then === 'function') {
-      result
-        .then((resolved) => send({ type: 'result', callId, ok: true, result: resolved }))
-        .catch((e) => {
-          const msg = e instanceof Error ? e.message : String(e)
-          send({ type: 'result', callId, ok: false, error: msg })
-        })
-    } else {
-      send({ type: 'result', callId, ok: true, result })
-    }
+    send({ type: 'result', callId, ok: true, result })
   } catch (e) {
     // Forwarded verbatim: this is the same message vajra-native itself
     // produced (editFile's ambiguous-match refusal, deleteFile's directory
