@@ -24,11 +24,118 @@ import { toolDefinitions } from '@vajra/protocol'
 const require = createRequire(import.meta.url)
 const native = require('vajra-native')
 
-// Explicit positional-argument mapping per tool, rather than generically
-// spreading a parsed object in declaration order — argument order matters
-// (e.g. deleteDir's `recursive` is the second positional argument, not
-// alphabetically first) and a generic spread would be one field-reorder away
-// from silently calling the wrong native function incorrectly.
+// ---------------------------------------------------------------------------
+// Glob matching (inline — worker cannot import @vajra/sandbox ESM cleanly)
+// ---------------------------------------------------------------------------
+
+function matchSimpleGlob(text, pat, ti, pi) {
+  if (ti >= text.length && pi >= pat.length) return true
+  if (pi >= pat.length) return false
+
+  const p = pat[pi]
+
+  if (p === '*') {
+    for (let skip = ti; skip <= text.length; skip++) {
+      if (text[skip] === '/') break
+      if (matchSimpleGlob(text, pat, skip, pi + 1)) return true
+    }
+    return false
+  }
+
+  if (p === '?') {
+    if (ti >= text.length || text[ti] === '/') return false
+    return matchSimpleGlob(text, pat, ti + 1, pi + 1)
+  }
+
+  if (ti >= text.length || text[ti] !== p) return false
+  return matchSimpleGlob(text, pat, ti + 1, pi + 1)
+}
+
+function matchSegments(path, pattern, pi, si) {
+  if (si >= pattern.length) return pi >= path.length
+  const seg = pattern[si]
+  if (seg === '**') {
+    for (let skip = pi; skip <= path.length; skip++) {
+      if (matchSegments(path, pattern, skip, si + 1)) return true
+    }
+    return false
+  }
+  if (pi >= path.length) return false
+  if (!matchSimpleGlob(path[pi], seg, 0, 0)) return false
+  return matchSegments(path, pattern, pi + 1, si + 1)
+}
+
+function matchesPattern(filePath, pattern) {
+  let pat = pattern
+  let negated = false
+  if (pat.startsWith('!')) {
+    negated = true
+    pat = pat.slice(1)
+  }
+  const result = matchSegments(filePath.split('/'), pat.split('/'), 0, 0)
+  return negated ? !result : result
+}
+
+// ---------------------------------------------------------------------------
+// File permission check
+// ---------------------------------------------------------------------------
+
+function resolveFilePermission(filePath, fileRules, defaultPermissions) {
+  const result = { ...defaultPermissions }
+  for (const rule of fileRules) {
+    if (matchesPattern(filePath, rule.pattern)) {
+      if (rule.read !== undefined) result.read = rule.read
+      if (rule.write !== undefined) result.write = rule.write
+      if (rule.edit !== undefined) result.edit = rule.edit
+      if (rule.delete !== undefined) result.delete = rule.delete
+    }
+  }
+  return result
+}
+
+// Extract the file path(s) a tool call targets
+function extractPaths(tool, args) {
+  switch (tool) {
+    case 'read_file':
+    case 'write_file':
+    case 'edit_file':
+    case 'delete_file':
+    case 'delete_dir':
+    case 'create_dir':
+    case 'list_files':
+      return [args.path]
+    case 'copy_file':
+    case 'rename_file':
+      return [args.source, args.destination]
+    default:
+      return [] // run_command has no file path
+  }
+}
+
+// Tools that modify state (write/edit/delete/create/copy/rename)
+const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'delete_dir', 'create_dir', 'copy_file', 'rename_file'])
+
+function checkFilePermission(tool, args, fileRules, defaultPermissions) {
+  const paths = extractPaths(tool, args)
+  for (const filePath of paths) {
+    const perm = resolveFilePermission(filePath, fileRules, defaultPermissions)
+    if (!perm.read) {
+      return `Access denied: '${filePath}' is not readable in the current sandbox configuration.`
+    }
+    if (WRITE_TOOLS.has(tool) && !perm.write) {
+      return `Access denied: '${filePath}' is not writable in the current sandbox configuration.`
+    }
+    if (tool === 'edit_file' && !perm.edit) {
+      return `Access denied: '${filePath}' is not editable in the current sandbox configuration.`
+    }
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Tool dispatch
+// ---------------------------------------------------------------------------
+
 const dispatchTable = {
   read_file: (args) => native.readFile(args.path),
   write_file: (args) => native.writeFile(args.path, args.content),
@@ -41,6 +148,12 @@ const dispatchTable = {
   rename_file: (args) => native.renameFile(args.source, args.destination, args.overwrite),
   run_command: (args) => native.runCommand(args.command, args.args, args.cwd),
 }
+
+// Set of tools this worker is allowed to call. Populated from the job.
+let allowedTools = null
+// File rules from the sandbox config
+let fileRules = []
+let defaultFilePermissions = { read: true, write: false, edit: false, delete: false }
 
 function send(message) {
   if (process.send) process.send(message)
@@ -55,6 +168,12 @@ function handleToolCall(message) {
     return
   }
 
+  // Tool permission check: if allowedTools is set, only those tools are permitted
+  if (allowedTools !== null && !allowedTools.includes(tool)) {
+    send({ type: 'result', callId, ok: false, error: `Tool '${tool}' is not permitted for this worker` })
+    return
+  }
+
   // Validated again here, not just wherever the call originated — this
   // process is the security boundary, so it cannot trust that whatever sent
   // this message upheld the tool's contract.
@@ -64,6 +183,15 @@ function handleToolCall(message) {
   } catch (e) {
     send({ type: 'result', callId, ok: false, error: `Invalid arguments for '${tool}': ${e.message}` })
     return
+  }
+
+  // File permission check via sandbox rules
+  if (fileRules.length > 0) {
+    const denied = checkFilePermission(tool, parsedArgs, fileRules, defaultFilePermissions)
+    if (denied) {
+      send({ type: 'result', callId, ok: false, error: denied })
+      return
+    }
   }
 
   try {
@@ -78,6 +206,22 @@ function handleToolCall(message) {
 }
 
 function main(job) {
+  // Store the project dir for run_command
+  process.env.VAJRA_PROJECT_DIR = job.projectDir
+
+  // Set up tool permissions if provided
+  if (job.allowedTools) {
+    allowedTools = Array.isArray(job.allowedTools) ? job.allowedTools : null
+  }
+
+  // Set up file rules if provided
+  if (job.fileRules && Array.isArray(job.fileRules)) {
+    fileRules = job.fileRules
+  }
+  if (job.defaultFilePermissions) {
+    defaultFilePermissions = job.defaultFilePermissions
+  }
+
   const capabilities = native.sandboxCapabilities()
 
   if (capabilities.filesystem === 'unsupported' && !job.allowUnenforced) {

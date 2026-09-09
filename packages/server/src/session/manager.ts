@@ -1,12 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
-import type { PermissionsConfig, SessionStatus, SessionListResult, AttachMessage } from '@vajra/protocol'
+import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage } from '@vajra/protocol'
+import type { FileRule } from '@vajra/sandbox'
 import { agentLoop, type AgentLoopResult } from '../agent/loop.js'
 
 export interface LaunchJob {
   sessionId: string
   projectDir: string
   permissions: PermissionsConfig
+  /** Glob-based file rules evaluated per tool call by the worker. */
+  fileRules?: readonly FileRule[]
+  /** Default permissions for files with no matching rule. */
+  defaultFilePermissions?: FilePermissions
   allowUnenforced: boolean
 }
 
