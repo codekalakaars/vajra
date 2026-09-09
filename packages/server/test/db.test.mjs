@@ -10,14 +10,20 @@ function scratchDb() {
   return { db: openDb(join(dir, 'test.db')), dir }
 }
 
-test('schema creates all three tables and foreign keys are enforced', () => {
+test('schema creates all tables and foreign keys are enforced', () => {
   const { db, dir } = scratchDb()
 
   const tables = db
     .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`)
     .all()
     .map((r) => r.name)
-  assert.deepEqual(tables, ['messages', 'plan_steps', 'sessions'])
+  assert.ok(tables.includes('sessions'), 'sessions table exists')
+  assert.ok(tables.includes('messages'), 'messages table exists')
+  assert.ok(tables.includes('plan_steps'), 'plan_steps table exists')
+  assert.ok(tables.includes('agents'), 'agents table exists')
+  assert.ok(tables.includes('tasks'), 'tasks table exists')
+  assert.ok(tables.includes('task_dependencies'), 'task_dependencies table exists')
+  assert.ok(tables.includes('agent_messages'), 'agent_messages table exists')
 
   // A plan_steps row referencing a nonexistent session must be rejected —
   // this is what proves `PRAGMA foreign_keys = ON` actually took effect.

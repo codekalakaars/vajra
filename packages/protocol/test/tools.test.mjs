@@ -7,6 +7,22 @@ test('every tool schema validates its own well-formed example', () => {
     read_file: { path: 'a.txt' },
     list_files: { path: '.', recursive: false },
     search_files: { query: 'function readFile' },
+    run_command: { command: 'cargo test', cwd: '.', timeout: 30000 },
+    write_file: { path: 'a.txt', content: 'hello' },
+    edit_file: { path: 'a.txt', oldString: 'foo', newString: 'bar' },
+    propose_plan: {
+      tasks: [
+        {
+          title: 'Add auth middleware',
+          description: 'Create JWT auth middleware',
+          files: ['src/middleware/auth.ts'],
+          validation: 'cargo test',
+          dependsOn: [],
+          type: 'create',
+        },
+      ],
+      summary: 'Add JWT authentication',
+    },
   }
 
   for (const [name, def] of Object.entries(toolDefinitions)) {

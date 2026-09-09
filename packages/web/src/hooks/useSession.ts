@@ -25,7 +25,7 @@ export interface ChatMessage {
 
 export interface SessionState {
   sessionId: string | null
-  status: 'idle' | 'creating' | 'planning' | 'executing' | 'streaming' | 'done' | 'failed'
+  status: 'idle' | 'creating' | 'talking' | 'confirming' | 'planning' | 'executing' | 'streaming' | 'done' | 'failed'
   messages: ChatMessage[]
   thinkingText: string
   error: string | null
@@ -58,13 +58,27 @@ export function useSession() {
     const unsubs: Array<() => void> = []
 
     unsubs.push(
+      client.on('session.statusChanged', (payload) => {
+        const p = payload as { sessionId: string; status: string }
+        if (p.sessionId !== sessionId) return
+        setState((s) => ({
+          ...s,
+          status: p.status as SessionState['status'],
+          // Clear streaming state on status transitions
+          _streamingText: '',
+          thinkingText: '',
+        }))
+      }),
+    )
+
+    unsubs.push(
       client.on('session.assistantDelta', (payload) => {
         const p = payload as { sessionId: string; text: string }
         if (p.sessionId !== sessionId) return
         setState((s) => ({
           ...s,
           _streamingText: s._streamingText + p.text,
-          status: 'streaming',
+          status: s.status === 'talking' || s.status === 'confirming' ? 'streaming' : s.status,
         }))
       }),
     )
@@ -77,7 +91,7 @@ export function useSession() {
       }),
     )
 
-    // Manager events
+    // Plan events
     unsubs.push(
       client.on('session.planStarted', (payload) => {
         const p = payload as { sessionId: string }
@@ -99,6 +113,35 @@ export function useSession() {
         const p = payload as { sessionId: string; plan: ManagerPlan }
         if (p.sessionId !== sessionId) return
         setState((s) => ({ ...s, status: 'executing', planTasks: p.plan.tasks }))
+      }),
+    )
+
+    // New: plan proposed (Manager called propose_plan)
+    unsubs.push(
+      client.on('session.planProposed', (payload) => {
+        const p = payload as { sessionId: string; plan: ManagerPlan }
+        if (p.sessionId !== sessionId) return
+        setState((s) => ({
+          ...s,
+          status: 'confirming',
+          planTasks: p.plan.tasks,
+          _streamingText: '',
+          thinkingText: '',
+        }))
+      }),
+    )
+
+    // New: plan confirmed by user
+    unsubs.push(
+      client.on('session.planConfirmed', (payload) => {
+        const p = payload as { sessionId: string }
+        if (p.sessionId !== sessionId) return
+        setState((s) => ({
+          ...s,
+          status: 'executing',
+          _streamingText: '',
+          thinkingText: '',
+        }))
       }),
     )
 
@@ -158,7 +201,6 @@ export function useSession() {
         if (p.sessionId !== sessionId) return
         setState((s) => {
           const newMessages = [...s.messages]
-          // Always flush — even if only thinking, no content
           if (s._streamingText || s.thinkingText) {
             newMessages.push({
               role: 'assistant',
@@ -207,34 +249,39 @@ export function useSession() {
     }
   }, [client])
 
-  // Create a new session and start summarizing
+  // Create a new session — enters conversation mode
   const createSession = useCallback(async (params: {
     projectDir: string
     permissions: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }>
     model: string
   }) => {
-    const SUMMARIZE_TASK = 'Analyze this project thoroughly. Read all source files, configuration files, and documentation. Provide a comprehensive summary covering: 1) What the project does, 2) Tech stack and dependencies, 3) Directory structure and file purposes, 4) Key architecture and patterns, 5) Entry points and main flows.'
-
     setState({
       sessionId: null,
       status: 'creating',
-      messages: [{ role: 'user', content: SUMMARIZE_TASK }],
+      messages: [],
       thinkingText: '',
       error: null,
+      planTasks: [],
+      agents: [],
+      conflicts: [],
       _streamingText: '',
     })
 
     try {
       const result = await client.call('session.create', {
         projectDir: params.projectDir,
-        task: SUMMARIZE_TASK,
+        task: '',
         model: params.model,
         permissions: { version: 1, default: { read: true, write: false, edit: false, delete: false }, files: params.permissions },
       }) as { sessionId: string }
 
-      setState((s) => ({ ...s, sessionId: result.sessionId }))
+      setState((s) => ({
+        ...s,
+        sessionId: result.sessionId,
+        status: 'talking',
+      }))
 
-      // Subscribe to events — must happen before startSession begins streaming
+      // Subscribe to events
       subscribe(result.sessionId)
 
       return result.sessionId
@@ -244,12 +291,11 @@ export function useSession() {
     }
   }, [client, subscribe])
 
-  // Send a follow-up message
+  // Send a message to the Manager conversation
   const sendMessage = useCallback(async (content: string) => {
     const sid = stateRef.current.sessionId
     if (!sid) return
 
-    // Add user message immediately
     setState((s) => ({
       ...s,
       messages: [...s.messages, { role: 'user', content }],
@@ -265,6 +311,39 @@ export function useSession() {
     }
   }, [client])
 
+  // Confirm the proposed plan (optionally with user edits)
+  const confirmPlan = useCallback(async (editedTasks?: PlannedTask[]) => {
+    const sid = stateRef.current.sessionId
+    if (!sid) return
+
+    setState((s) => ({ ...s, status: 'executing' }))
+
+    try {
+      await client.call('session.confirmPlan', { sessionId: sid, tasks: editedTasks })
+    } catch (e) {
+      setState((s) => ({ ...s, status: 'failed', error: String(e) }))
+    }
+  }, [client])
+
+  // Reject the proposed plan and return to conversation
+  const rejectPlan = useCallback(async () => {
+    const sid = stateRef.current.sessionId
+    if (!sid) return
+
+    try {
+      await client.call('session.rejectPlan', { sessionId: sid })
+      setState((s) => ({
+        ...s,
+        status: 'talking',
+        planTasks: [],
+        _streamingText: '',
+        thinkingText: '',
+      }))
+    } catch (e) {
+      setState((s) => ({ ...s, status: 'failed', error: String(e) }))
+    }
+  }, [client])
+
   // Attach to existing session (for reconnect / direct navigation)
   const attach = useCallback(async (sessionId: string) => {
     setState({
@@ -273,6 +352,9 @@ export function useSession() {
       messages: [],
       thinkingText: '',
       error: null,
+      planTasks: [],
+      agents: [],
+      conflicts: [],
       _streamingText: '',
     })
 
@@ -289,6 +371,9 @@ export function useSession() {
 
       const status = result.session.status === 'done' ? 'done'
         : result.session.status === 'failed' ? 'failed'
+        : result.session.status === 'talking' ? 'talking'
+        : result.session.status === 'confirming' ? 'confirming'
+        : result.session.status === 'executing' ? 'executing'
         : 'idle'
 
       setState((s) => ({
@@ -332,6 +417,8 @@ export function useSession() {
     client,
     createSession,
     sendMessage,
+    confirmPlan,
+    rejectPlan,
     stopSession,
     attach,
     loadPermissions,

@@ -26,7 +26,12 @@ interface JsonSchemaProperty {
   type: string
   description?: string
   /** Present when `type` is `'array'`. */
-  items?: { type: string }
+  items?: JsonSchemaProperty
+  /** Present when `type` is `'object'`. */
+  properties?: Record<string, JsonSchemaProperty>
+  required?: string[]
+  additionalProperties?: boolean
+  enum?: string[]
 }
 
 export interface JsonSchema {
@@ -161,6 +166,64 @@ export const editFileTool = defineTool({
   },
 })
 
+export interface PlannedTaskInput {
+  title: string
+  description: string
+  files: string[]
+  validation: string
+  dependsOn: string[]
+  type: 'create' | 'modify' | 'delete' | 'refactor'
+}
+
+export interface ProposePlanArgs {
+  tasks: PlannedTaskInput[]
+  summary: string
+}
+
+export const proposePlanTool = defineTool<ProposePlanArgs>({
+  name: 'propose_plan',
+  description:
+    'Propose a structured plan for the user\'s task. Call this when you have ' +
+    'gathered enough context through conversation. Do NOT call on the first message — ' +
+    'gather context first by asking clarifying questions and exploring the codebase.',
+  nativeFn: '',
+  schema: z.object({
+    tasks: z.array(z.object({
+      title: z.string(),
+      description: z.string(),
+      files: z.array(z.string()),
+      validation: z.string(),
+      dependsOn: z.array(z.string()),
+      type: z.enum(['create', 'modify', 'delete', 'refactor']),
+    })),
+    summary: z.string(),
+  }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      tasks: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Short title for the task.' },
+            description: { type: 'string', description: 'What needs to be done.' },
+            files: { type: 'array', items: { type: 'string' }, description: 'Project-relative file paths this task touches.' },
+            validation: { type: 'string', description: 'Command to verify task completion (e.g. "cargo test", "npm test").' },
+            dependsOn: { type: 'array', items: { type: 'string' }, description: 'Task indices this depends on (empty if independent).' },
+            type: { type: 'string', description: 'Task type: create, modify, delete, or refactor.' },
+          },
+          required: ['title', 'description', 'files', 'validation', 'dependsOn', 'type'],
+          additionalProperties: false,
+        },
+      },
+      summary: { type: 'string', description: 'Brief summary of the overall plan.' },
+    },
+    required: ['tasks', 'summary'],
+    additionalProperties: false,
+  },
+})
+
 export const toolDefinitions = {
   read_file: readFileTool,
   list_files: listFilesTool,
@@ -168,13 +231,14 @@ export const toolDefinitions = {
   run_command: runCommandTool,
   write_file: writeFileTool,
   edit_file: editFileTool,
+  propose_plan: proposePlanTool,
 } as const satisfies Record<string, ToolDefinition>
 
 export type ToolName = keyof typeof toolDefinitions
 
 /** Tools available to each agent role. */
 export const roleTools: Record<string, ToolName[]> = {
-  manager: ['read_file', 'list_files', 'search_files'],
+  manager: ['read_file', 'list_files', 'search_files', 'propose_plan'],
   master: ['read_file', 'list_files', 'search_files', 'run_command'],
   worker: ['read_file', 'list_files', 'search_files', 'write_file', 'edit_file'],
 }

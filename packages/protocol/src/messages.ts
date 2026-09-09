@@ -25,7 +25,7 @@ export interface ProjectFileEntry {
   isMasked: boolean
 }
 
-export type SessionStatus = 'starting' | 'planning' | 'executing' | 'running' | 'done' | 'failed' | 'stopped'
+export type SessionStatus = 'starting' | 'talking' | 'confirming' | 'planning' | 'executing' | 'running' | 'done' | 'failed' | 'stopped'
 
 // ---- Multi-agent types ----
 
@@ -150,6 +150,18 @@ export interface SessionSendMessageParams {
 }
 export type SessionSendMessageResult = { ok: true }
 
+export interface SessionConfirmPlanParams {
+  sessionId: string
+  /** User-edited task list. When absent, the originally proposed plan is used. */
+  tasks?: PlannedTask[]
+}
+export type SessionConfirmPlanResult = { ok: true }
+
+export interface SessionRejectPlanParams {
+  sessionId: string
+}
+export type SessionRejectPlanResult = { ok: true }
+
 // ---- Push event payloads ----
 
 export interface SandboxStatusPayload {
@@ -172,7 +184,8 @@ export interface ThinkingDeltaPayload {
 
 /** Maps each push-event name to its payload type, for a typed subscriber. */
 export interface PushEventPayloads {
-  // Existing events
+  // Session lifecycle
+  'session.statusChanged': { status: SessionStatus }
   'session.sandboxStatus': SandboxStatusPayload
   'session.assistantDelta': AssistantDeltaPayload
   'session.thinkingDelta': ThinkingDeltaPayload
@@ -184,6 +197,8 @@ export interface PushEventPayloads {
   'session.planStarted': { sessionId: string }
   'session.planTask': { sessionId: string; task: PlannedTask }
   'session.planComplete': { sessionId: string; plan: ManagerPlan }
+  'session.planProposed': { sessionId: string; plan: ManagerPlan }
+  'session.planConfirmed': Record<string, never>
 
   // Worker events
   'session.workerStarted': { sessionId: string; agentId: string; taskId: string }
