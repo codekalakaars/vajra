@@ -6,7 +6,6 @@
 // Requires kicad-cli to be installed and on PATH.
 
 import { execFile } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -89,7 +88,7 @@ export async function runDrc(
   pcbPath: string,
   outputPath: string,
 ): Promise<void> {
-  await runToFile('pcb', 'export', ['drc', pcbPath, '--output', outputPath])
+  await runToFile('pcb', 'drc', [pcbPath, '--output', outputPath])
 }
 
 /** Export Gerber files from a PCB */
