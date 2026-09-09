@@ -1,0 +1,17 @@
+// @vajra/kicad — KiCad integration for schematic → PCB generation.
+
+export { isKicadCliAvailable, getVersion } from './cli.js'
+export type { BoardConstraints, LayerCount, Point, MountingHole, DesignRules } from './constraints.js'
+export { DEFAULT_DESIGN_RULES, resolveDesignRules } from './constraints.js'
+export type { SchematicComponent, SchematicNet, ParsedSchematic } from './schematic.js'
+export { parseSchematic } from './schematic.js'
+export { exportNetlist } from './netlist.js'
+export type { PlacedFootprint } from './placement.js'
+export { placeFootprints } from './placement.js'
+export type { UnroutedConnection } from './routing.js'
+export { generateUnroutedConnections } from './routing.js'
+export { generatePcb, generatePcbContent } from './pcb-generator.js'
+export type { DrcViolation, DrcReport } from './drc.js'
+export { runDrc } from './drc.js'
+export { exportGerbers } from './gerber.js'
+export { exportBom } from './bom.js'
