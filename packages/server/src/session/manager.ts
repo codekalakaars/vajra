@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
 import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage, ManagerPlan, PlannedTask } from '@vajra/protocol'
 import type { FileRule, ResourceLimits } from '@vajra/sandbox'
-import { FileLockManager } from '@vajra/sandbox'
+import { FileLockManager, resolveConcurrencyConfig } from '@vajra/sandbox'
 import type { OpenRouterMessage } from '../agent/openrouter.js'
 import { managerConversationTurn, type ManagerTurnResult } from '../agent/manager.js'
 import { masterLoop } from '../agent/master.js'
@@ -144,8 +144,9 @@ export class SessionManager {
       this.handles.set(sessionId, handle)
 
       // Initialize worker pool for parallel task execution
+      const concurrency = resolveConcurrencyConfig()
       const pool = new WorkerPool(
-        { maxConcurrentWorkers: 4, maxIdleWorkers: 1 },
+        { maxConcurrentWorkers: concurrency.maxConcurrentWorkers, maxIdleWorkers: concurrency.maxIdleWorkers },
         this.launcher,
       )
       this.pools.set(sessionId, pool)

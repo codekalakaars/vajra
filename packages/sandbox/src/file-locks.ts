@@ -17,10 +17,14 @@ type Waiter = () => void
 /**
  * Manages file-level locks for parallel task execution.
  *
+ * Uses a reverse index (owner → files) for O(k) release where k is the
+ * number of files the owner holds, and per-file wait queues to avoid
+ * thundering-herd wake-ups.
+ *
  * Usage:
  *   const locks = new FileLockManager()
  *   if (locks.canAcquire(files, 'write')) {
- *     locks.acquire(files, taskId, 'write')
+ *     locks.tryAcquire(files, taskId, 'write')
  *     // ... do work ...
  *     locks.release(taskId)
  *   }
@@ -29,8 +33,11 @@ export class FileLockManager {
   /** file path → array of active locks */
   private locks = new Map<string, Lock[]>()
 
-  /** queue of pending acquire requests, notified on release */
-  private waiters: Waiter[] = []
+  /** owner → set of files they hold locks on (reverse index) */
+  private ownerFiles = new Map<string, Set<string>>()
+
+  /** file path → queue of pending acquire requests */
+  private waiters = new Map<string, Waiter[]>()
 
   /**
    * Check if acquiring locks on files would succeed without blocking.
@@ -70,6 +77,14 @@ export class FileLockManager {
       const fileLocks = this.locks.get(file) ?? []
       fileLocks.push({ owner, mode, acquiredAt: now })
       this.locks.set(file, fileLocks)
+
+      // Update reverse index
+      let ownerSet = this.ownerFiles.get(owner)
+      if (!ownerSet) {
+        ownerSet = new Set()
+        this.ownerFiles.set(owner, ownerSet)
+      }
+      ownerSet.add(file)
     }
     return true
   }
@@ -80,29 +95,17 @@ export class FileLockManager {
    */
   async acquireOrWait(files: string[], owner: string, mode: LockMode): Promise<void> {
     while (!this.tryAcquire(files, owner, mode)) {
-      await this.waitForRelease()
+      await this.waitForRelease(files)
     }
   }
 
   /**
-   * Release all locks held by an owner.
+   * Release all locks held by an owner. O(k) where k = files held by owner.
    */
   release(owner: string): void {
-    for (const [file, fileLocks] of this.locks) {
-      const remaining = fileLocks.filter((l) => l.owner !== owner)
-      if (remaining.length === 0) {
-        this.locks.delete(file)
-      } else {
-        this.locks.set(file, remaining)
-      }
-    }
-    this.notifyWaiters()
-  }
+    const files = this.ownerFiles.get(owner)
+    if (!files) return
 
-  /**
-   * Release specific files held by an owner.
-   */
-  releaseFiles(files: string[], owner: string): void {
     for (const file of files) {
       const fileLocks = this.locks.get(file)
       if (!fileLocks) continue
@@ -114,7 +117,40 @@ export class FileLockManager {
         this.locks.set(file, remaining)
       }
     }
-    this.notifyWaiters()
+
+    this.ownerFiles.delete(owner)
+
+    // Notify waiters for each released file
+    this.notifyWaitersForFiles(files)
+  }
+
+  /**
+   * Release specific files held by an owner.
+   */
+  releaseFiles(files: string[], owner: string): void {
+    const ownerSet = this.ownerFiles.get(owner)
+
+    for (const file of files) {
+      const fileLocks = this.locks.get(file)
+      if (!fileLocks) continue
+
+      const remaining = fileLocks.filter((l) => l.owner !== owner)
+      if (remaining.length === 0) {
+        this.locks.delete(file)
+      } else {
+        this.locks.set(file, remaining)
+      }
+
+      // Update reverse index
+      ownerSet?.delete(file)
+    }
+
+    if (ownerSet && ownerSet.size === 0) {
+      this.ownerFiles.delete(owner)
+    }
+
+    // Notify waiters for each released file
+    this.notifyWaitersForFiles(files)
   }
 
   /**
@@ -134,21 +170,26 @@ export class FileLockManager {
   }
 
   /**
-   * Check if an owner holds any locks.
+   * Check if an owner holds any locks. O(1) via reverse index.
    */
   hasLocks(owner: string): boolean {
-    for (const fileLocks of this.locks.values()) {
-      if (fileLocks.some((l) => l.owner === owner)) return true
-    }
-    return false
+    const files = this.ownerFiles.get(owner)
+    return files !== undefined && files.size > 0
   }
 
   /**
-   * Wait for any lock to be released. Resolves on the next release event.
+   * Wait for locks on specific files to be released.
    */
-  waitForRelease(): Promise<void> {
+  waitForRelease(files: string[]): Promise<void> {
     return new Promise((resolve) => {
-      this.waiters.push(resolve)
+      for (const file of files) {
+        let queue = this.waiters.get(file)
+        if (!queue) {
+          queue = []
+          this.waiters.set(file, queue)
+        }
+        queue.push(resolve)
+      }
     })
   }
 
@@ -158,13 +199,28 @@ export class FileLockManager {
    */
   drain(): void {
     this.locks.clear()
+    this.ownerFiles.clear()
+
     // Reject all waiters by resolving them (they'll fail on next tryAcquire)
-    const waiters = this.waiters.splice(0)
-    for (const w of waiters) w()
+    for (const queue of this.waiters.values()) {
+      for (const w of queue) w()
+    }
+    this.waiters.clear()
   }
 
-  private notifyWaiters(): void {
-    const waiters = this.waiters.splice(0)
-    for (const w of waiters) w()
+  private notifyWaitersForFiles(files: Set<string> | string[]): void {
+    const notified = new Set<Waiter>()
+    for (const file of files) {
+      const queue = this.waiters.get(file)
+      if (!queue) continue
+
+      for (const w of queue) {
+        if (!notified.has(w)) {
+          notified.add(w)
+          w()
+        }
+      }
+      this.waiters.delete(file)
+    }
   }
 }
