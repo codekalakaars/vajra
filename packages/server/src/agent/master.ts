@@ -13,11 +13,12 @@
 
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../session/manager.js'
-import type { ManagerPlan, PlannedTask, PermissionsConfig } from '@vajra/protocol'
+import type { ManagerPlan, PlannedTask, PermissionsConfig, ToolName } from '@vajra/protocol'
 import { FileLockManager, type ResourceLimits } from '@vajra/sandbox'
 import { TaskQueue, type TaskState } from './taskqueue.js'
 import { AgentRegistry, type AgentState } from './registry.js'
 import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
+import { toOpenAiToolSpecs, roleTools } from '@vajra/protocol'
 import type { WorkerPool } from '../session/pool.js'
 
 export interface MasterInput {
@@ -59,6 +60,9 @@ export interface MasterResult {
 
 const MAX_RETRIES = 2
 const VALIDATION_TIMEOUT = 60000
+
+// Worker-role tool specs for the LLM — these are the tools workers can request
+const WORKER_TOOL_SPECS = toOpenAiToolSpecs(roleTools.worker as ToolName[])
 
 export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   const { sessionId, projectDir, plan, model, apiKey, events, db, registry, launchWorker, resourceLimits, pool } = input

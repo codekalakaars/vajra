@@ -5,6 +5,23 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "vajra-sandbox": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./daemon": {
+      "import": "./dist/daemon.js",
+      "types": "./dist/daemon.d.ts"
+    },
+    "./client": {
+      "import": "./dist/client.js",
+      "types": "./dist/client.d.ts"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test \"test/*.test.mjs\"",
