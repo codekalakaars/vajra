@@ -6,20 +6,12 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "vajra-sandbox": "dist/cli.js"
+    "vajra": "dist/cli.js"
   },
   "exports": {
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    },
-    "./daemon": {
-      "import": "./dist/daemon.js",
-      "types": "./dist/daemon.d.ts"
-    },
-    "./client": {
-      "import": "./dist/client.js",
-      "types": "./dist/client.d.ts"
     }
   },
   "scripts": {
@@ -28,7 +20,8 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@vajra/protocol": "workspace:*"
+    "@vajra/protocol": "workspace:*",
+    "vajra-native": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.5.4",

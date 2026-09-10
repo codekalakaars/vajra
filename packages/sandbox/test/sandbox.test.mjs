@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { matchesPattern } from '../dist/file-rules.js'
+import { matchesPattern, resolveFilePermission, resolveFilePermissions, filterFileEntries } from '../dist/file-rules.js'
 import { createSandboxConfig } from '../dist/config.js'
 import { resolveAllowedTools } from '../dist/tool-rules.js'
 import { buildLaunchJob } from '../dist/sandbox-builder.js'
@@ -14,6 +14,7 @@ import {
   saveSandboxConfig,
   saveSandboxEnvironments,
 } from '../dist/file-config.js'
+import { resolveResourceLimits, resolveConcurrencyConfig, DEFAULT_RESOURCE_LIMITS, DEFAULT_CONCURRENCY } from '../dist/resources.js'
 
 // ---------------------------------------------------------------------------
 // matchesPattern
@@ -230,5 +231,161 @@ describe('file config persistence', () => {
 
   it('cleanup', () => {
     rmSync(tempDir, { recursive: true, force: true })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveFilePermission
+// ---------------------------------------------------------------------------
+
+describe('resolveFilePermission', () => {
+  it('returns default permissions when no rules match', () => {
+    const config = createSandboxConfig({
+      projectDir: '/test',
+      defaultPermissions: { read: true, write: false, edit: false, delete: false },
+    })
+    const perm = resolveFilePermission(config, 'src/index.ts')
+    assert.deepEqual(perm, { read: true, write: false, edit: false, delete: false })
+  })
+
+  it('applies matching rules in order', () => {
+    const config = createSandboxConfig({
+      projectDir: '/test',
+      defaultPermissions: { read: true, write: false, edit: false, delete: false },
+      fileRules: [
+        { pattern: 'src/**', write: true },
+        { pattern: 'src/secret.ts', write: false },
+      ],
+    })
+    // src/index.ts matches first rule only
+    const perm1 = resolveFilePermission(config, 'src/index.ts')
+    assert.equal(perm1.write, true)
+
+    // src/secret.ts matches both rules; second overrides
+    const perm2 = resolveFilePermission(config, 'src/secret.ts')
+    assert.equal(perm2.write, false)
+  })
+
+  it('handles negation patterns', () => {
+    const config = createSandboxConfig({
+      projectDir: '/test',
+      defaultPermissions: { read: true, write: true, edit: true, delete: false },
+      fileRules: [
+        { pattern: '!.env', write: false },
+      ],
+    })
+    // .env does NOT match !.env (negated), so default write=true applies
+    const perm1 = resolveFilePermission(config, '.env')
+    assert.equal(perm1.write, true)
+
+    // src/index.ts matches !.env (it's not .env), so write=false
+    const perm2 = resolveFilePermission(config, 'src/index.ts')
+    assert.equal(perm2.write, false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveFilePermissions
+// ---------------------------------------------------------------------------
+
+describe('resolveFilePermissions', () => {
+  it('returns PermissionsConfig with default permissions', () => {
+    const config = createSandboxConfig({
+      projectDir: '/test',
+      defaultPermissions: { read: true, write: false, edit: false, delete: false },
+    })
+    const result = resolveFilePermissions(config)
+    assert.equal(result.version, 1)
+    assert.deepEqual(result.default, { read: true, write: false, edit: false, delete: false })
+    assert.deepEqual(result.files, {})
+  })
+})
+
+// ---------------------------------------------------------------------------
+// filterFileEntries
+// ---------------------------------------------------------------------------
+
+describe('filterFileEntries', () => {
+  it('includes directories always', () => {
+    const config = createSandboxConfig({
+      projectDir: '/test',
+      defaultPermissions: { read: false, write: false, edit: false, delete: false },
+    })
+    const entries = [
+      { name: 'src', path: 'src', isDir: true, isMasked: false },
+      { name: 'index.ts', path: 'src/index.ts', isDir: false, isMasked: false },
+    ]
+    const filtered = filterFileEntries(entries, config)
+    assert.equal(filtered.length, 1)
+    assert.equal(filtered[0].name, 'src')
+  })
+
+  it('filters files by read permission', () => {
+    const config = createSandboxConfig({
+      projectDir: '/test',
+      defaultPermissions: { read: true, write: false, edit: false, delete: false },
+      fileRules: [
+        { pattern: '.env', read: false },
+      ],
+    })
+    const entries = [
+      { name: 'index.ts', path: 'src/index.ts', isDir: false, isMasked: false },
+      { name: '.env', path: '.env', isDir: false, isMasked: false },
+      { name: 'config.ts', path: 'src/config.ts', isDir: false, isMasked: false },
+    ]
+    const filtered = filterFileEntries(entries, config)
+    assert.equal(filtered.length, 2)
+    assert.ok(filtered.every(e => e.path !== '.env'))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveResourceLimits
+// ---------------------------------------------------------------------------
+
+describe('resolveResourceLimits', () => {
+  it('returns defaults when no input', () => {
+    const limits = resolveResourceLimits()
+    assert.deepEqual(limits, DEFAULT_RESOURCE_LIMITS)
+  })
+
+  it('merges partial input with defaults', () => {
+    const limits = resolveResourceLimits({ maxMemoryMB: 1024, maxToolCalls: 50 })
+    assert.equal(limits.maxMemoryMB, 1024)
+    assert.equal(limits.maxToolCalls, 50)
+    assert.equal(limits.maxCpuTimeMs, DEFAULT_RESOURCE_LIMITS.maxCpuTimeMs)
+    assert.equal(limits.maxSpawnRetries, DEFAULT_RESOURCE_LIMITS.maxSpawnRetries)
+  })
+
+  it('overrides all values', () => {
+    const limits = resolveResourceLimits({
+      maxMemoryMB: 256,
+      maxCpuTimeMs: 60000,
+      maxToolCalls: 10,
+      maxSpawnRetries: 5,
+    })
+    assert.equal(limits.maxMemoryMB, 256)
+    assert.equal(limits.maxCpuTimeMs, 60000)
+    assert.equal(limits.maxToolCalls, 10)
+    assert.equal(limits.maxSpawnRetries, 5)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveConcurrencyConfig
+// ---------------------------------------------------------------------------
+
+describe('resolveConcurrencyConfig', () => {
+  it('returns defaults when no input', () => {
+    const config = resolveConcurrencyConfig()
+    assert.deepEqual(config, DEFAULT_CONCURRENCY)
+  })
+
+  it('merges partial input with defaults', () => {
+    const config = resolveConcurrencyConfig({ maxConcurrentWorkers: 8 })
+    assert.equal(config.maxConcurrentWorkers, 8)
+    assert.equal(config.maxIdleWorkers, DEFAULT_CONCURRENCY.maxIdleWorkers)
+    assert.equal(config.idleTimeoutMs, DEFAULT_CONCURRENCY.idleTimeoutMs)
+    assert.equal(config.healthCheckIntervalMs, DEFAULT_CONCURRENCY.healthCheckIntervalMs)
   })
 })
