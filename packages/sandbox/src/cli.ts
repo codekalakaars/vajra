@@ -174,18 +174,38 @@ function cmdSecure(): void {
     // Generate random exit token — agent can't guess this
     const exitToken = randomBytes(16).toString('hex')
 
-    // Strip network tools from PATH
+    // Strip network tools AND interpreters from PATH
+    // Interpreters (python, node, ruby, perl, etc.) can bypass shell aliases
+    // by using their own socket/HTTP libraries
+    const blockedDirs = ['/sbin', '/usr/sbin']
+    const blockedBins = ['python', 'python3', 'python3.10', 'python3.12',
+      'node', 'nodejs', 'ruby', 'perl', 'php', 'lua', 'tclsh',
+      'curl', 'wget', 'git', 'ssh', 'scp', 'rsync', 'nc', 'ncat', 'socat',
+      'ncat', 'nmap', 'socat', 'telnet', 'ftp', 'sftp', 'rsh', 'rexec',
+      'docker', 'podman', 'lxc', 'qemu']
     const safePath = (process.env.PATH || '/usr/local/bin:/usr/bin:/bin')
       .split(':')
-      .filter(p => !p.includes('/sbin') && !p.includes('/usr/sbin'))
+      .filter(p => !blockedDirs.some(b => p.includes(b)))
       .join(':')
 
     const profileContent = [
       '# Vajra sandbox — generated profile',
       'set -o ignoreeof',
       '',
-      '# Strip network tools from PATH',
+      '# Strip dangerous dirs from PATH',
       'export PATH="' + safePath + '"',
+      '',
+      '# Block interpreters that can bypass shell aliases via native socket APIs',
+      'python() { echo "python is blocked in the sandbox"; }',
+      'python3() { echo "python3 is blocked in the sandbox"; }',
+      'node() { echo "node is blocked in the sandbox"; }',
+      'nodejs() { echo "nodejs is blocked in the sandbox"; }',
+      'ruby() { echo "ruby is blocked in the sandbox"; }',
+      'perl() { echo "perl is blocked in the sandbox"; }',
+      'php() { echo "php is blocked in the sandbox"; }',
+      'lua() { echo "lua is blocked in the sandbox"; }',
+      'alias python=python python3=python3 node=node nodejs=nodejs',
+      'alias ruby=ruby perl=perl php=php lua=lua',
       '',
       '# Block exit — require token',
       '_vajra_original_exit() { command exit "$@"; }',
