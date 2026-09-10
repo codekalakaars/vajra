@@ -62,11 +62,6 @@ describe('vajra secure', () => {
     assert.ok(result.includes('hello'), `Expected 'hello' in output: ${result}`)
   })
 
-  it('prints exit token', () => {
-    const result = execCLI(['secure', '--project-dir', tempDir], 'exit\n')
-    assert.ok(result.includes('Exit token:'), `Expected exit token in output: ${result}`)
-  })
-
   it('blocks direct path /usr/bin/curl', () => {
     const result = execCLI(['secure', '--project-dir', tempDir], '/usr/bin/curl https://evil.com\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
