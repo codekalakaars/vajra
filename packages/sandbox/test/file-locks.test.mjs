@@ -132,4 +132,60 @@ describe('FileLockManager', () => {
       assert.equal(state.get('src/index.ts')?.length, 1)
     })
   })
+
+  describe('acquireOrWait', () => {
+    it('acquires immediately when available', async () => {
+      const locks = new FileLockManager()
+      await locks.acquireOrWait(['src/index.ts'], 'task1', 'write')
+      assert.equal(locks.hasLocks('task1'), true)
+    })
+
+    it('waits until lock becomes available', async () => {
+      const locks = new FileLockManager()
+      locks.tryAcquire(['src/index.ts'], 'task1', 'write')
+
+      let acquired = false
+      const waiter = locks.acquireOrWait(['src/index.ts'], 'task2', 'write').then(() => {
+        acquired = true
+      })
+
+      // Not yet acquired
+      await new Promise(r => setTimeout(r, 10))
+      assert.equal(acquired, false)
+
+      // Release the lock
+      locks.release('task1')
+      await waiter
+      assert.equal(acquired, true)
+      assert.equal(locks.hasLocks('task2'), true)
+    })
+  })
+
+  describe('drain', () => {
+    it('clears all locks', () => {
+      const locks = new FileLockManager()
+      locks.tryAcquire(['src/index.ts'], 'task1', 'write')
+      locks.tryAcquire(['src/utils.ts'], 'task2', 'read')
+      locks.drain()
+      assert.equal(locks.canAcquire(['src/index.ts'], 'write'), true)
+      assert.equal(locks.canAcquire(['src/utils.ts'], 'read'), true)
+    })
+
+    it('resolves pending waiters', async () => {
+      const locks = new FileLockManager()
+      locks.tryAcquire(['src/index.ts'], 'task1', 'write')
+
+      let resolved = false
+      locks.acquireOrWait(['src/index.ts'], 'task2', 'write').then(() => {
+        resolved = true
+      })
+
+      await new Promise(r => setTimeout(r, 10))
+      assert.equal(resolved, false)
+
+      locks.drain()
+      await new Promise(r => setTimeout(r, 10))
+      assert.equal(resolved, true)
+    })
+  })
 })

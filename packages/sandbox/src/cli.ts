@@ -3,21 +3,24 @@
 // Standalone sandbox CLI.
 //
 // Usage:
-//   vajra-sandbox start [--project-dir <dir>] [--env <name>]
-//   vajra-sandbox stop [--project-dir <dir>]
-//   vajra-sandbox status [--project-dir <dir>]
-//   vajra-sandbox locks [--project-dir <dir>]
-//   vajra-sandbox agents [--project-dir <dir>]
+//   vajra secure [--project-dir <dir>] [-- <command>]
+//   vajra status
+//   vajra config [--project-dir]
+//   vajra test  [--project-dir]
 //
-// The daemon runs in the background and manages file locks and permissions
-// for AI coding assistants (Claude Code, Cursor, Copilot, etc.) that run
-// inside the sandbox.
+// The sandbox uses kernel-level confinement (Landlock on Linux, Seatbelt on
+// macOS) to restrict file access. The `secure` command applies the sandbox
+// and runs a command inside it.
 
-import { SandboxDaemon, type DaemonConfig } from './daemon.js'
-import { SandboxClient } from './client.js'
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 
-// ---- Config ----
+const require = createRequire(import.meta.url)
+const native = require('vajra-native')
+
+// ---- Helpers ----
 
 function getProjectDir(): string {
   const idx = process.argv.indexOf('--project-dir')
@@ -27,252 +30,184 @@ function getProjectDir(): string {
   return process.cwd()
 }
 
-function getEnvironment(): string | undefined {
-  const idx = process.argv.indexOf('--env')
-  if (idx !== -1 && process.argv[idx + 1]) {
-    return process.argv[idx + 1]
-  }
-  return undefined
-}
-
-function getSocketPath(projectDir: string): string {
-  const hash = Buffer.from(projectDir).toString('base64url').slice(0, 32)
-  return `/tmp/vajra-sandbox-${hash}.sock`
-}
-
-function getDaemonPidPath(projectDir: string): string {
-  const hash = Buffer.from(projectDir).toString('base64url').slice(0, 32)
-  return `/tmp/vajra-sandbox-${hash}.pid`
-}
-
-function saveDaemonPid(projectDir: string, pid: number): void {
-  writeFileSync(getDaemonPidPath(projectDir), String(pid), 'utf-8')
-}
-
-function loadDaemonPid(projectDir: string): number | null {
-  const path = getDaemonPidPath(projectDir)
-  if (!existsSync(path)) return null
-  try {
-    return parseInt(readFileSync(path, 'utf-8').trim(), 10)
-  } catch {
-    return null
-  }
-}
-
-function removeDaemonPid(projectDir: string): void {
-  try {
-    unlinkSync(getDaemonPidPath(projectDir))
-  } catch {
-    // Ignore
-  }
-}
-
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
 // ---- Commands ----
 
-async function cmdStart(): Promise<void> {
+function cmdStatus(): void {
+  const caps = native.sandboxCapabilities()
+
+  console.log('Vajra Sandbox — capabilities\n')
+  console.log(`  Platform:   ${caps.platform}`)
+  console.log(`  Filesystem: ${caps.filesystem}`)
+  console.log(`  Mechanism:  ${caps.mechanism}`)
+  console.log(`  Details:    ${caps.details}`)
+  if (caps.abi) {
+    console.log(`  ABI:        ${caps.abi}`)
+  }
+
+  if (caps.filesystem === 'unsupported') {
+    console.log('\n  ⚠️  No sandbox mechanism available on this platform.')
+    console.log('     An agent run here can read and write anything the user can.')
+  } else if (caps.filesystem === 'partial') {
+    console.log('\n  ⚠️  Partial enforcement — some restrictions may not work.')
+  } else {
+    console.log('\n  ✅ Full sandbox enforcement available.')
+  }
+}
+
+function cmdConfig(): void {
   const projectDir = getProjectDir()
-  const environment = getEnvironment()
-  const socketPath = getSocketPath(projectDir)
-  const pidPath = getDaemonPidPath(projectDir)
+  const configPath = join(projectDir, '.vajra-sandbox.json')
 
-  // Check if already running
-  const existingPid = loadDaemonPid(projectDir)
-  if (existingPid && isProcessRunning(existingPid)) {
-    console.log(`Sandbox daemon already running (PID: ${existingPid})`)
-    console.log(`Socket: ${socketPath}`)
-    console.log(`Project: ${projectDir}`)
-    return
+  if (existsSync(configPath)) {
+    // Show existing config
+    try {
+      const raw = readFileSync(configPath, 'utf-8')
+      const config = JSON.parse(raw)
+      console.log(`Configuration: ${configPath}\n`)
+      console.log(JSON.stringify(config, null, 2))
+    } catch (e) {
+      console.error(`Error reading config: ${e instanceof Error ? e.message : String(e)}`)
+      process.exit(1)
+    }
+  } else {
+    // Create default config
+    const defaultConfig = {
+      version: 1,
+      projectDir,
+      defaultPermissions: { read: true, write: false, edit: false, delete: false },
+      fileRules: [],
+      allowedTools: null,
+      allowUnenforced: false,
+    }
+
+    try {
+      writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2) + '\n', 'utf-8')
+      console.log(`Created: ${configPath}`)
+      console.log('\nDefault configuration:')
+      console.log('  - Read: allowed')
+      console.log('  - Write: denied')
+      console.log('  - Edit: denied')
+      console.log('  - Delete: denied')
+      console.log('\nEdit .vajra-sandbox.json to customize permissions.')
+    } catch (e) {
+      console.error(`Error creating config: ${e instanceof Error ? e.message : String(e)}`)
+      process.exit(1)
+    }
+  }
+}
+
+function cmdTest(): void {
+  const projectDir = getProjectDir()
+  const caps = native.sandboxCapabilities()
+
+  console.log('Vajra — testing sandbox\n')
+  console.log(`  Project: ${projectDir}`)
+  console.log(`  Platform: ${caps.platform}`)
+  console.log(`  Mechanism: ${caps.mechanism}`)
+
+  if (caps.filesystem === 'unsupported') {
+    console.log('\n  ❌ Cannot test — no sandbox mechanism available.')
+    console.log('     On Linux, requires kernel 5.13+ with Landlock.')
+    console.log('     On macOS, Seatbelt is always available.')
+    process.exit(1)
   }
 
-  // Clean up stale PID file
-  removeDaemonPid(projectDir)
-
-  console.log(`Starting sandbox daemon...`)
-  console.log(`Project: ${projectDir}`)
-  if (environment) console.log(`Environment: ${environment}`)
-  console.log(`Socket: ${socketPath}`)
-
-  const config: DaemonConfig = {
-    projectDir,
-    socketPath,
-    environment,
-  }
-
-  const daemon = new SandboxDaemon(config)
+  console.log('\n  Testing sandbox confinement...')
 
   try {
-    await daemon.start()
-
-    // Save PID for status/stop commands
-    saveDaemonPid(projectDir, process.pid)
-
-    console.log(`\nSandbox daemon started (PID: ${process.pid})`)
-    console.log(`\nAI agents can now connect to:`)
-    console.log(`  Socket: ${socketPath}`)
-    console.log(`\nTo stop: vajra-sandbox stop`)
-    console.log(`To check status: vajra-sandbox status`)
-
-    // Keep the process running
-    process.on('SIGINT', async () => {
-      console.log('\nShutting down...')
-      await daemon.stop()
-      removeDaemonPid(projectDir)
-      process.exit(0)
+    const result = native.applySandbox({
+      projectDir,
+      permissions: {
+        version: 1,
+        default: { read: true, write: false, edit: false, delete: false },
+        files: {},
+      },
+      allowUnenforced: false,
     })
 
-    process.on('SIGTERM', async () => {
-      await daemon.stop()
-      removeDaemonPid(projectDir)
-      process.exit(0)
-    })
+    if (result.enforced) {
+      console.log(`\n  ✅ Sandbox applied: ${result.mechanism}`)
+    } else {
+      console.log(`\n  ⚠️  Sandbox not enforced: ${result.mechanism}`)
+    }
+
+    if (result.warnings.length > 0) {
+      console.log('\n  Warnings:')
+      for (const w of result.warnings) {
+        console.log(`    - ${w}`)
+      }
+    }
+
+    console.log('\n  This process is now confined to:')
+    console.log(`    ${projectDir}`)
+    console.log('\n  Note: Sandbox is irreversible for this process.')
   } catch (e) {
-    console.error(`Failed to start sandbox daemon: ${e instanceof Error ? e.message : String(e)}`)
+    console.error(`\n  ❌ Failed to apply sandbox: ${e instanceof Error ? e.message : String(e)}`)
     process.exit(1)
   }
 }
 
-async function cmdStop(): Promise<void> {
+function cmdSecure(): void {
   const projectDir = getProjectDir()
-  const pid = loadDaemonPid(projectDir)
+  const caps = native.sandboxCapabilities()
 
-  if (!pid || !isProcessRunning(pid)) {
-    console.log('No sandbox daemon running for this project')
-    removeDaemonPid(projectDir)
-    return
+  if (caps.filesystem === 'unsupported') {
+    console.error('❌ Cannot secure — no sandbox mechanism available.')
+    console.error('   On Linux, requires kernel 5.13+ with Landlock.')
+    console.error('   On macOS, Seatbelt is always available.')
+    process.exit(1)
   }
 
-  console.log(`Stopping sandbox daemon (PID: ${pid})...`)
-
+  // Apply sandbox
+  let result
   try {
-    process.kill(pid, 'SIGTERM')
-    // Wait for process to exit
-    await new Promise<void>((resolve) => {
-      const check = setInterval(() => {
-        if (!isProcessRunning(pid)) {
-          clearInterval(check)
-          resolve()
-        }
-      }, 100)
-      // Timeout after 5 seconds
-      setTimeout(() => {
-        clearInterval(check)
-        resolve()
-      }, 5000)
+    result = native.applySandbox({
+      projectDir,
+      permissions: {
+        version: 1,
+        default: { read: true, write: false, edit: false, delete: false },
+        files: {},
+      },
+      allowUnenforced: false,
     })
-    removeDaemonPid(projectDir)
-    console.log('Sandbox daemon stopped')
   } catch (e) {
-    console.error(`Failed to stop daemon: ${e instanceof Error ? e.message : String(e)}`)
-    removeDaemonPid(projectDir)
-  }
-}
-
-async function cmdStatus(): Promise<void> {
-  const projectDir = getProjectDir()
-  const socketPath = getSocketPath(projectDir)
-  const pid = loadDaemonPid(projectDir)
-
-  if (!pid || !isProcessRunning(pid)) {
-    console.log('Status: NOT RUNNING')
-    console.log(`Project: ${projectDir}`)
-    console.log(`Socket: ${socketPath}`)
-    return
-  }
-
-  const client = new SandboxClient({ socketPath })
-  try {
-    await client.connect()
-    const response = await client.getStatus()
-    await client.disconnect()
-
-    const status = response.status
-    console.log('Status: RUNNING')
-    console.log(`PID: ${pid}`)
-    console.log(`Project: ${status.projectDir}`)
-    console.log(`Socket: ${status.socketPath}`)
-    console.log(`\nConnected agents: ${status.agents.length}`)
-    for (const agent of status.agents) {
-      const uptime = Math.round((Date.now() - agent.connectedAt) / 1000)
-      console.log(`  - ${agent.name} (ID: ${agent.id.slice(0, 8)}..., uptime: ${uptime}s)`)
-    }
-    console.log(`\nActive locks: ${status.locks.length}`)
-    for (const lock of status.locks) {
-      console.log(`  - ${lock.file} [${lock.mode}] owned by ${lock.owner.slice(0, 8)}...`)
-    }
-    console.log(`\nConfig:`)
-    console.log(`  Default permissions: R=${status.config.defaultPermissions.read} W=${status.config.defaultPermissions.write} E=${status.config.defaultPermissions.edit} D=${status.config.defaultPermissions.delete}`)
-    console.log(`  File rules: ${status.config.fileRulesCount}`)
-    console.log(`  Allowed tools: ${status.config.allowedTools ? status.config.allowedTools.join(', ') : '(all)'}`)
-  } catch (e) {
-    console.log('Status: ERROR (daemon may be starting up)')
-    console.log(`PID: ${pid}`)
-    console.log(`Error: ${e instanceof Error ? e.message : String(e)}`)
-  }
-}
-
-async function cmdLocks(): Promise<void> {
-  const projectDir = getProjectDir()
-  const socketPath = getSocketPath(projectDir)
-
-  const client = new SandboxClient({ socketPath })
-  try {
-    await client.connect()
-    const response = await client.listLocks()
-    await client.disconnect()
-
-    const locks = response.locks
-    if (locks.length === 0) {
-      console.log('No active file locks')
-      return
-    }
-
-    console.log(`Active file locks (${locks.length}):`)
-    for (const lock of locks) {
-      console.log(`  ${lock.file}`)
-      console.log(`    Mode: ${lock.mode} | Owner: ${lock.owner}`)
-    }
-  } catch (e) {
-    console.error(`Failed to query locks: ${e instanceof Error ? e.message : String(e)}`)
+    console.error(`❌ Failed to apply sandbox: ${e instanceof Error ? e.message : String(e)}`)
     process.exit(1)
   }
-}
 
-async function cmdAgents(): Promise<void> {
-  const projectDir = getProjectDir()
-  const socketPath = getSocketPath(projectDir)
+  if (result.enforced) {
+    console.log(`🔒 Secured: ${result.mechanism} (enforced)`)
+  } else {
+    console.log(`⚠️  Secured: ${result.mechanism} (not enforced)`)
+  }
+  console.log(`   Project: ${projectDir}`)
+  console.log('')
 
-  const client = new SandboxClient({ socketPath })
+  // Get command after -- separator
+  const dashDashIdx = process.argv.indexOf('--')
+  const commandArgs = dashDashIdx !== -1 ? process.argv.slice(dashDashIdx + 1) : []
+
+  if (commandArgs.length === 0) {
+    // No command — print instructions
+    console.log('   This process is now confined to the project directory.')
+    console.log('   Any child processes will also be confined.')
+    console.log('')
+    console.log('   Usage:')
+    console.log('     vajra secure -- npm test')
+    console.log('     vajra secure -- node server.js')
+    console.log('     vajra secure -- cargo build')
+    process.exit(0)
+  }
+
+  // Run the command inside the sandbox
+  const [command, ...args] = commandArgs
   try {
-    await client.connect()
-    const response = await client.listAgents()
-    await client.disconnect()
-
-    const agents = response.agents
-    if (agents.length === 0) {
-      console.log('No connected agents')
-      return
-    }
-
-    console.log(`Connected agents (${agents.length}):`)
-    for (const agent of agents) {
-      const uptime = Math.round((Date.now() - agent.connectedAt) / 1000)
-      console.log(`  ${agent.name}`)
-      console.log(`    ID: ${agent.id}`)
-      if (agent.pid) console.log(`    PID: ${agent.pid}`)
-      console.log(`    Connected: ${uptime}s ago`)
-    }
-  } catch (e) {
-    console.error(`Failed to query agents: ${e instanceof Error ? e.message : String(e)}`)
-    process.exit(1)
+    execFileSync(command, args, {
+      stdio: 'inherit',
+      cwd: projectDir,
+    })
+  } catch (e: any) {
+    process.exit(e.status || 1)
   }
 }
 
@@ -282,50 +217,51 @@ async function main(): Promise<void> {
   const command = process.argv[2]
 
   switch (command) {
-    case 'start':
-      await cmdStart()
-      break
-    case 'stop':
-      await cmdStop()
+    case 'secure':
+      cmdSecure()
       break
     case 'status':
-      await cmdStatus()
+      cmdStatus()
       break
-    case 'locks':
-      await cmdLocks()
+    case 'config':
+      cmdConfig()
       break
-    case 'agents':
-      await cmdAgents()
+    case 'test':
+      cmdTest()
       break
     default:
       console.log(`
-Vajra Sandbox — isolate AI coding assistants
+Vajra — kernel-level file confinement
 
 Usage:
-  vajra-sandbox <command> [options]
+  vajra <command> [options]
 
 Commands:
-  start    Start the sandbox daemon
-  stop     Stop the sandbox daemon
-  status   Show daemon status and active locks
-  locks    List active file locks
-  agents   List connected agents
+  secure   Apply sandbox and run a command inside it
+  status   Show sandbox capabilities (platform, mechanism, enforcement)
+  config   Show or create .vajra-sandbox.json configuration
+  test     Test if sandbox works on this platform
 
 Options:
   --project-dir <dir>  Project directory (default: current directory)
-  --env <name>         Sandbox environment name
+  -- <command>         Command to run inside the sandbox (secure only)
 
 Examples:
-  vajra-sandbox start                          # Start daemon in current project
-  vajra-sandbox start --project-dir ./my-app   # Start daemon for specific project
-  vajra-sandbox status                         # Check daemon status
-  vajra-sandbox stop                           # Stop the daemon
+  vajra secure -- npm test              # Run tests inside sandbox
+  vajra secure -- node server.js        # Run server inside sandbox
+  vajra secure --project-dir ./app -- cargo build
+  vajra status                          # Check what sandbox is available
+  vajra config                          # Create default config
+  vajra test                            # Test sandbox on current project
 
-AI Agent Integration:
-  1. Start the sandbox: vajra-sandbox start
-  2. Run your AI assistant inside the sandbox
-  3. The daemon manages file locks and permissions
-  4. Stop when done: vajra-sandbox stop
+How it works:
+  Vajra uses kernel-level sandboxing (Landlock on Linux, Seatbelt on macOS)
+  to confine AI coding assistants to a project directory. The sandbox is
+  applied when a session starts and is irreversible for that process.
+
+  1. Create a config: vajra config
+  2. Edit .vajra-sandbox.json to set permissions
+  3. Run your agent: vajra secure -- <agent-command>
 `)
       break
   }

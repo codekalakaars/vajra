@@ -30,6 +30,9 @@ importers:
       '@vajra/protocol':
         specifier: workspace:*
         version: link:../protocol
+      vajra-native:
+        specifier: workspace:*
+        version: link:../..
     devDependencies:
       '@types/node':
         specifier: ^22.5.4
