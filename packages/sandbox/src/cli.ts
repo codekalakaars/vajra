@@ -154,9 +154,19 @@ function cmdSecure(): void {
   const caps = native.sandboxCapabilities()
 
   if (caps.filesystem === 'unsupported') {
-    console.error('❌ Cannot secure — no sandbox mechanism available.')
-    console.error('   On Linux, requires kernel 5.13+ with Landlock.')
-    console.error('   On macOS, Seatbelt is always available.')
+    console.error('❌ Cannot secure — no sandbox mechanism available on this platform.')
+    console.error('')
+    console.error('   Supported platforms:')
+    console.error('     Linux:  Kernel 5.13+ with Landlock (filesystem + network)')
+    console.error('     macOS:  Seatbelt (filesystem)')
+    console.error('')
+    console.error('   Unsupported platforms:')
+    console.error('     Windows: No kernel-level sandbox. Use WSL2 or Docker instead.')
+    console.error('     Other:   No sandbox mechanism available.')
+    console.error('')
+    console.error('   The sandbox enforces file access restrictions at the kernel level,')
+    console.error('   preventing the agent from reading/writing outside the project.')
+    console.error('   Without it, the agent has full access to your filesystem.')
     process.exit(1)
   }
 
