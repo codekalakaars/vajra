@@ -63,6 +63,13 @@ pub mod access {
     pub const TRUNCATE: u64 = 1 << 14;
 }
 
+// Network access rights — separate namespace from filesystem rights.
+// These are used in handled_access_net, not handled_access_fs.
+pub mod net_access {
+    pub const NET_BIND_TCP: u64 = 1 << 0;
+    pub const NET_CONNECT_TCP: u64 = 1 << 1;
+}
+
 /// Directory-only rights. The kernel rejects a rule carrying any of these on a
 /// non-directory target with EINVAL — READ_DIR is meaningless on a regular
 /// file, for instance.
@@ -102,6 +109,7 @@ pub fn detect_abi() -> Result<i32, String> {
 /// rejected outright — so on an older kernel those operations are left
 /// unrestricted rather than failing the whole sandbox. ABI 1 (5.13) lacks
 /// REFER (cross-directory move/link); ABI 2 (5.19) lacks TRUNCATE (6.2+).
+/// ABI 4 (6.7) adds network restrictions.
 pub fn supported_bits(abi: i32) -> u64 {
     let mut mask = u64::MAX;
     if abi < 2 {
@@ -128,10 +136,10 @@ pub fn degraded_note(abi: i32) -> Option<String> {
     }
 }
 
-fn create_ruleset(handled: u64) -> Result<i32, String> {
+fn create_ruleset(handled_fs: u64, handled_net: u64) -> Result<i32, String> {
     let attr = LandlockRulesetAttr {
-        handled_access_fs: handled,
-        handled_access_net: 0,
+        handled_access_fs: handled_fs,
+        handled_access_net: handled_net,
         scoped: 0,
     };
 
@@ -341,9 +349,18 @@ pub fn apply(config: &SandboxConfig) -> Result<(Vec<String>, Option<String>), St
         | access::TRUNCATE)
         & supported;
 
+    // Network restrictions: on ABI 4+, declare NET_BIND_TCP and NET_CONNECT_TCP
+    // in the ruleset but never add any port rules → kernel denies all TCP.
+    // On older ABI, handled_access_net=0 means network is unrestricted.
+    let handled_net = if abi >= 4 {
+        net_access::NET_BIND_TCP | net_access::NET_CONNECT_TCP
+    } else {
+        0
+    };
+
     // The ruleset must declare every right it intends to govern; anything not
     // handled here stays unrestricted regardless of the rules added below.
-    let ruleset_fd = create_ruleset(rw_all)?;
+    let ruleset_fd = create_ruleset(rw_all, handled_net)?;
 
     match &config.permissions {
         Some(perms) => apply_per_file_rules(ruleset_fd, project_dir, perms, supported)?,
@@ -353,19 +370,23 @@ pub fn apply(config: &SandboxConfig) -> Result<(Vec<String>, Option<String>), St
     // System paths a process needs to keep functioning. Best-effort: a
     // distribution without /lib64 should not fail the sandbox.
     //
-    // /tmp is deliberately absent. The legacy CLI granted it read-write, but
-    // only because it also gave the sandbox a *private* /tmp via a mount
-    // namespace. There is no namespace here, so granting it would expose the
-    // real shared /tmp — every other process's scratch files — to the agent.
-    // A caller that needs scratch space should pass a private directory in
-    // readWritePaths.
+    // /tmp is deliberately absent — see module comment.
+    // /dev is narrowed to read-only — no write access to device files.
+    // /etc is narrowed to only the files a sandboxed process actually needs.
     for (path, bits) in [
         ("/usr", rx),
         ("/bin", rx),
         ("/sbin", rx),
         ("/lib", rx),
         ("/lib64", rx),
-        ("/etc", ro),
+        ("/etc/resolv.conf", ro),
+        ("/etc/ssl/certs", ro),
+        ("/etc/hosts", ro),
+        ("/etc/localtime", ro),
+        ("/etc/bash.bashrc", ro),
+        ("/etc/bash_completion", ro),
+        ("/etc/profile", ro),
+        ("/etc/profile.d", ro),
         ("/proc", ro),
         ("/dev", rw),
     ] {
