@@ -12,10 +12,11 @@
 // macOS) to restrict file access. The `secure` command applies the sandbox
 // and runs a command inside it.
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
 
 const require = createRequire(import.meta.url)
 const native = require('vajra-native')
@@ -158,6 +159,53 @@ function cmdSecure(): void {
     process.exit(1)
   }
 
+  // Get command after -- separator
+  const dashDashIdx = process.argv.indexOf('--')
+  const commandArgs = dashDashIdx !== -1 ? process.argv.slice(dashDashIdx + 1) : []
+
+  // Write profile file BEFORE applying sandbox (sandbox blocks writes outside project)
+  const profilePath = join(projectDir, `.vajra-profile-${process.pid}.sh`)
+  let needsProfile = commandArgs.length === 0
+
+  if (needsProfile) {
+    const shell = process.env.SHELL || '/bin/bash'
+    const profileContent = [
+      '# Vajra sandbox — generated profile',
+      'set -o ignoreeof',
+      '',
+      '# Block exit — require sudo exit',
+      '_vajra_original_exit() { command exit "$@"; }',
+      'exit() {',
+      '  echo "Type sudo exit to leave the sandbox"',
+      '}',
+      '',
+      '# sudo exit exits the shell, everything else passes through',
+      'sudo() {',
+      '  if [ "$1" = "exit" ]; then',
+      '    _vajra_original_exit',
+      '  else',
+      '    command sudo "$@"',
+      '  fi',
+      '}',
+      '',
+      '# Custom prompt',
+      'export PS1="\\[\\033[32m\\]🔒 \\[\\033[0m\\]$ "',
+      '',
+      '# Welcome message',
+      'echo ""',
+      'echo "Sandboxed shell — confined to: ' + projectDir + '"',
+      'echo "Type sudo exit to leave."',
+      'echo ""',
+    ].join('\n')
+
+    try {
+      writeFileSync(profilePath, profileContent, 'utf-8')
+    } catch (e) {
+      console.error(`❌ Failed to create shell profile: ${e instanceof Error ? e.message : String(e)}`)
+      process.exit(1)
+    }
+  }
+
   // Apply sandbox
   let result
   try {
@@ -183,20 +231,40 @@ function cmdSecure(): void {
   console.log(`   Project: ${projectDir}`)
   console.log('')
 
-  // Get command after -- separator
-  const dashDashIdx = process.argv.indexOf('--')
-  const commandArgs = dashDashIdx !== -1 ? process.argv.slice(dashDashIdx + 1) : []
+  if (needsProfile) {
+    // Launch sandboxed shell with sudo exit
+    const shell = process.env.SHELL || '/bin/bash'
 
-  if (commandArgs.length === 0) {
-    // No command — print instructions
-    console.log('   This process is now confined to the project directory.')
-    console.log('   Any child processes will also be confined.')
-    console.log('')
-    console.log('   Usage:')
-    console.log('     vajra secure -- npm test')
-    console.log('     vajra secure -- node server.js')
-    console.log('     vajra secure -- cargo build')
-    process.exit(0)
+    try {
+      const child = spawnSync(shell, ['--rcfile', profilePath, '-i'], {
+        stdio: 'inherit',
+        cwd: projectDir,
+        env: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          TERM: process.env.TERM,
+          VAJRA_PROJECT_DIR: projectDir,
+          VAJRA_SANDBOX: '1',
+        },
+      })
+
+      // Clean up profile file
+      try {
+        unlinkSync(profilePath)
+      } catch {
+        // Ignore cleanup errors
+      }
+
+      process.exit(child.status ?? 0)
+    } catch (e) {
+      // Clean up profile file on error
+      try {
+        unlinkSync(profilePath)
+      } catch {
+        // Ignore cleanup errors
+      }
+      throw e
+    }
   }
 
   // Run the command inside the sandbox
@@ -237,7 +305,7 @@ Usage:
   vajra <command> [options]
 
 Commands:
-  secure   Apply sandbox and run a command inside it
+  secure   Apply sandbox and run a command (or shell) inside it
   status   Show sandbox capabilities (platform, mechanism, enforcement)
   config   Show or create .vajra-sandbox.json configuration
   test     Test if sandbox works on this platform
@@ -247,12 +315,13 @@ Options:
   -- <command>         Command to run inside the sandbox (secure only)
 
 Examples:
-  vajra secure -- npm test              # Run tests inside sandbox
-  vajra secure -- node server.js        # Run server inside sandbox
+  vajra secure                            # Sandboxed shell (sudo exit to leave)
+  vajra secure -- npm test                # Run tests inside sandbox
+  vajra secure -- node server.js          # Run server inside sandbox
   vajra secure --project-dir ./app -- cargo build
-  vajra status                          # Check what sandbox is available
-  vajra config                          # Create default config
-  vajra test                            # Test sandbox on current project
+  vajra status                            # Check what sandbox is available
+  vajra config                            # Create default config
+  vajra test                              # Test sandbox on current project
 
 How it works:
   Vajra uses kernel-level sandboxing (Landlock on Linux, Seatbelt on macOS)
