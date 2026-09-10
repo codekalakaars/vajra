@@ -79,6 +79,17 @@ function cmdConfig(): void {
       fileRules: [],
       allowedTools: null,
       allowUnenforced: false,
+      allowedCommands: [
+        'ls', 'cat', 'head', 'tail', 'wc', 'file', 'stat', 'find', 'tree',
+        'touch', 'mkdir', 'cp', 'mv', 'rm', 'chmod', 'ln',
+        'grep', 'sed', 'awk', 'sort', 'uniq', 'tr', 'cut', 'paste', 'xargs',
+        'echo', 'printf',
+        'uname', 'whoami', 'id', 'pwd', 'date', 'env', 'which', 'type',
+        'npm', 'pnpm', 'yarn', 'node', 'make', 'gcc',
+        'test', 'true', 'false', 'read', 'export', 'source', 'alias', 'unalias',
+        'less', 'more', 'diff', 'patch', 'tee',
+        'df', 'du', 'ps', 'free', 'uptime', 'hostname', 'arch',
+      ],
     }
 
     try {
@@ -173,6 +184,33 @@ function cmdSecure(): void {
   const dashDashIdx = process.argv.indexOf('--')
   const commandArgs = dashDashIdx !== -1 ? process.argv.slice(dashDashIdx + 1) : []
 
+  // Read allowlist from config
+  const configPath = join(projectDir, '.vajra-sandbox.json')
+  let allowedCommands = [
+    'ls', 'cat', 'head', 'tail', 'wc', 'file', 'stat', 'find', 'tree',
+    'touch', 'mkdir', 'cp', 'mv', 'rm', 'chmod', 'ln',
+    'grep', 'sed', 'awk', 'sort', 'uniq', 'tr', 'cut', 'paste', 'xargs',
+    'echo', 'printf',
+    'uname', 'whoami', 'id', 'pwd', 'date', 'env', 'which', 'type',
+    'npm', 'pnpm', 'yarn', 'node', 'make', 'gcc',
+    'test', 'true', 'false', 'read', 'export', 'source', 'alias', 'unalias',
+    'less', 'more', 'diff', 'patch', 'tee',
+    'df', 'du', 'ps', 'free', 'uptime', 'hostname', 'arch',
+    'trap', 'set', 'shopt', 'builtin', 'command',
+  ]
+
+  try {
+    if (existsSync(configPath)) {
+      const raw = readFileSync(configPath, 'utf-8')
+      const config = JSON.parse(raw)
+      if (config.allowedCommands && Array.isArray(config.allowedCommands)) {
+        allowedCommands = config.allowedCommands
+      }
+    }
+  } catch (e) {
+    // Use default allowlist
+  }
+
   // Write profile file BEFORE applying sandbox (sandbox blocks writes outside project)
   const profilePath = join(projectDir, `.vajra-profile-${process.pid}.sh`)
   let needsProfile = commandArgs.length === 0
@@ -248,11 +286,15 @@ function cmdSecure(): void {
       '# Master block list — checked by trap DEBUG before every command',
       '_vajra_blocklist="^(curl|wget|git|ssh|scp|rsync|nc|ncat|socat|nmap|telnet|ftp|sftp|python|python3|node|nodejs|ruby|perl|php|lua|docker|podman|lxc|qemu|rsh|rexec|gdb|strace|ltrace|lsof|netstat|ss|ip|iptables|nft|kill|pkill|killall|nohup)$"',
       '',
+      '# Allowlist — only these commands are permitted',
+      '_vajra_allowlist="^(' + allowedCommands.join('|') + ')$"',
+      '',
       '# trap DEBUG — intercepts every command before execution',
       'trap \'',
       '  _vajra_line="$BASH_COMMAND"',
       '  _vajra_first_word="${_vajra_line%% *}"',
       '  _vajra_cmd="$(_vajra_base_cmd "$_vajra_first_word")"',
+      '  # Check blocklist first (highest priority)',
       '  if echo "$_vajra_cmd" | grep -qE "$_vajra_blocklist"; then',
       '    case "$_vajra_cmd" in',
       '      curl|wget) _vajra_log "$_vajra_cmd" "Use read_file or list_files tools instead" ;;',
@@ -264,7 +306,12 @@ function cmdSecure(): void {
       '      kill|pkill|killall|nohup) _vajra_log "$_vajra_cmd" "Process management is restricted" ;;',
       '      *) _vajra_log "$_vajra_cmd" "This command is not available in the sandbox" ;;',
       '    esac',
-      '    # Prevent execution by redefining the command as a no-op for this line',
+      '    BASH_COMMAND="true"',
+      '    return 0 2>/dev/null || true',
+      '  fi',
+      '  # Check allowlist (deny anything not in list)',
+      '  if ! echo "$_vajra_cmd" | grep -qE "$_vajra_allowlist"; then',
+      '    _vajra_log "$_vajra_cmd" "Command not in allowed list — check .vajra-sandbox.json to add it"',
       '    BASH_COMMAND="true"',
       '    return 0 2>/dev/null || true',
       '  fi',
