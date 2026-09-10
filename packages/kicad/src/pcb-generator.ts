@@ -25,6 +25,11 @@ export function generatePcbContent(
   constraints: BoardConstraints,
   designRules: DesignRules,
 ): string {
+  // Validate board constraints
+  if (constraints.width <= 0) throw new Error(`Board width must be > 0, got ${constraints.width}`)
+  if (constraints.height <= 0) throw new Error(`Board height must be > 0, got ${constraints.height}`)
+  if (![1, 2, 4].includes(constraints.layers)) throw new Error(`layers must be 1, 2, or 4, got ${constraints.layers}`)
+
   const lines: string[] = []
 
   // Header
@@ -125,10 +130,20 @@ export function generatePcbContent(
   lines.push('')
 
   // Board outline (Edge.Cuts)
-  lines.push('  (gr_line (start 0 0) (end ' + constraints.width + ' 0) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts"))')
-  lines.push('  (gr_line (start ' + constraints.width + ' 0) (end ' + constraints.width + ' ' + constraints.height + ') (stroke (width 0.05) (type solid)) (layer "Edge.Cuts"))')
-  lines.push('  (gr_line (start ' + constraints.width + ' ' + constraints.height + ') (end 0 ' + constraints.height + ') (stroke (width 0.05) (type solid)) (layer "Edge.Cuts"))')
-  lines.push('  (gr_line (start 0 ' + constraints.height + ') (end 0 0) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts"))')
+  if (constraints.outline && constraints.outline.length >= 3) {
+    // Custom polygon outline from constraints.outline
+    for (let i = 0; i < constraints.outline.length; i++) {
+      const p1 = constraints.outline[i]
+      const p2 = constraints.outline[(i + 1) % constraints.outline.length]
+      lines.push(`  (gr_line (start ${p1.x} ${p1.y}) (end ${p2.x} ${p2.y}) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts"))`)
+    }
+  } else {
+    // Default rectangular outline
+    lines.push('  (gr_line (start 0 0) (end ' + constraints.width + ' 0) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts"))')
+    lines.push('  (gr_line (start ' + constraints.width + ' 0) (end ' + constraints.width + ' ' + constraints.height + ') (stroke (width 0.05) (type solid)) (layer "Edge.Cuts"))')
+    lines.push('  (gr_line (start ' + constraints.width + ' ' + constraints.height + ') (end 0 ' + constraints.height + ') (stroke (width 0.05) (type solid)) (layer "Edge.Cuts"))')
+    lines.push('  (gr_line (start 0 ' + constraints.height + ') (end 0 0) (stroke (width 0.05) (type solid)) (layer "Edge.Cuts"))')
+  }
   lines.push('')
 
   // Mounting holes
@@ -187,11 +202,11 @@ export function generatePcbContent(
         const net = compNets[i]
         const pinNum = String(i + 1)
         const offsetX = isSmdFootprint ? i * 2.54 : (i - (compNets.length - 1) / 2) * 2.54
-        lines.push(`    (pad "${pinNum}" ${padType} ${padShape} (at ${offsetX} 0) (size ${padSize}) (layers ${padLayers}) (net ${net.code} "${net.name}") (uuid "${generateUuid()}"))`)
+        lines.push(`    (pad "${pinNum}" ${padType} ${padShape} (at ${offsetX} 0) (size ${padSize})${drillClause} (layers ${padLayers}) (net ${net.code} "${net.name}") (uuid "${generateUuid()}"))`)
       }
     } else {
       // No nets — single placeholder pad
-      lines.push(`    (pad "1" ${padType} ${padShape} (at 0 0) (size ${padSize}) (layers ${padLayers}) (net 0 "") (uuid "${generateUuid()}"))`)
+      lines.push(`    (pad "1" ${padType} ${padShape} (at 0 0) (size ${padSize})${drillClause} (layers ${padLayers}) (net 0 "") (uuid "${generateUuid()}"))`)
     }
     lines.push(`  )`)
   }
@@ -211,6 +226,73 @@ export function generatePcbContent(
   lines.push('  )')
   lines.push('')
 
+  // Ground plane zones (copper fills on inner/bottom layers)
+  if (constraints.groundPlane !== false) {
+    // Find the GND net code, or use net 0 if no GND net exists
+    const gndNet = schematic.nets.find((n) => n.name === 'GND' || n.name === 'gnd')
+    const gndNetCode = gndNet ? gndNet.code : 0
+    const gndNetName = gndNet ? gndNet.name : ''
+
+    // Ground plane on B.Cu (bottom layer) for 2+ layer boards
+    if (constraints.layers >= 2) {
+      lines.push(`  (zone (net ${gndNetCode}) (net_name "${gndNetName}") (layer "B.Cu") (uuid "${generateUuid()}")`)
+      lines.push('    (hatch edge 0.5)')
+      lines.push('    (connect_pads (clearance 0.2))')
+      lines.push('    (min_thickness 0.2)')
+      lines.push(`    (filled_areas_thickness no)`)
+      lines.push(`    (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.25))`)
+      // Define zone outline matching board outline
+      if (constraints.outline && constraints.outline.length >= 3) {
+        lines.push('    (polygon')
+        lines.push('      (pts')
+        for (const pt of constraints.outline) {
+          lines.push(`        (xy ${pt.x} ${pt.y})`)
+        }
+        lines.push('      )')
+        lines.push('    )')
+      } else {
+        lines.push('    (polygon')
+        lines.push('      (pts')
+        lines.push(`        (xy 0 0)`)
+        lines.push(`        (xy ${constraints.width} 0)`)
+        lines.push(`        (xy ${constraints.width} ${constraints.height})`)
+        lines.push(`        (xy 0 ${constraints.height})`)
+        lines.push('      )')
+        lines.push('    )')
+      }
+      lines.push('  )')
+      lines.push('')
+    }
+
+    // Ground plane on inner layers for 4+ layer boards
+    if (constraints.layers >= 4) {
+      for (const layerName of ['In1.Cu', 'In2.Cu']) {
+        lines.push(`  (zone (net ${gndNetCode}) (net_name "${gndNetName}") (layer "${layerName}") (uuid "${generateUuid()}")`)
+        lines.push('    (hatch edge 0.5)')
+        lines.push('    (connect_pads (clearance 0.2))')
+        lines.push('    (min_thickness 0.2)')
+        lines.push(`    (filled_areas_thickness no)`)
+        lines.push(`    (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.25))`)
+        lines.push('    (polygon')
+        lines.push('      (pts')
+        if (constraints.outline && constraints.outline.length >= 3) {
+          for (const pt of constraints.outline) {
+            lines.push(`        (xy ${pt.x} ${pt.y})`)
+          }
+        } else {
+          lines.push(`        (xy 0 0)`)
+          lines.push(`        (xy ${constraints.width} 0)`)
+          lines.push(`        (xy ${constraints.width} ${constraints.height})`)
+          lines.push(`        (xy 0 ${constraints.height})`)
+        }
+        lines.push('      )')
+        lines.push('    )')
+        lines.push('  )')
+        lines.push('')
+      }
+    }
+  }
+
   lines.push(')')
   return lines.join('\n')
 }
@@ -223,7 +305,7 @@ function generateUuid(): string {
 }
 
 /** Determine if a footprint is surface-mount based on its name */
-function isSmd(footprint: string): boolean {
+export function isSmd(footprint: string): boolean {
   const fp = footprint.toLowerCase()
   // Common SMD patterns
   if (fp.includes('_0402_') || fp.includes('_0603_') || fp.includes('_0805_') ||

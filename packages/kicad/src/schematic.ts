@@ -82,7 +82,18 @@ export async function parseSchematic(schPath: string): Promise<ParsedSchematic> 
  *   )
  * )
  */
-function parseNetlist(content: string): ParsedSchematic {
+export function parseNetlist(content: string): ParsedSchematic {
+  if (!content || typeof content !== 'string') {
+    throw new Error('parseNetlist: content must be a non-empty string')
+  }
+  const trimmed = content.trim()
+  if (trimmed.length === 0) {
+    throw new Error('parseNetlist: content is empty')
+  }
+  if (!trimmed.startsWith('(export')) {
+    throw new Error('parseNetlist: content does not look like a KiCad netlist (expected "(export ...")')
+  }
+
   const components: SchematicComponent[] = []
   const nets: SchematicNet[] = []
 
@@ -123,19 +134,20 @@ function parseNetlist(content: string): ParsedSchematic {
       }
     }
 
-    // Extract individual net blocks
-    const netBlockRegex = /\(net \(code (\d+)\) \(name "([^"]*)"\)\s*([\s\S]*?)\)\s*(?=\(net |\))/g
-    let netMatch
-    while ((netMatch = netBlockRegex.exec(netsBody)) !== null) {
-      const netName = netMatch[2]
-      const netCode = parseInt(netMatch[1], 10)
-      const body = netMatch[3]
+    // Extract individual net blocks using balanced-paren extraction
+    const netSections = extractSections(netsBody, 'net')
+    for (const section of netSections) {
+      const codeMatch = section.match(/\(code (\d+)\)/)
+      const nameMatch = section.match(/\(name "([^"]*)"\)/)
+      if (!codeMatch || !nameMatch) continue
+      const netCode = parseInt(codeMatch[1], 10)
+      const netName = nameMatch[1]
 
-      // Parse ALL nodes from the body
-      const nodeRegex = /\(node \(ref (\w+)\)(?:\(pin ([^)]*)\))?\)/g
+      // Parse ALL nodes from the section
+      const nodeRegex = /\(node \(ref "?(\w+)"?\)\s*(?:\(pin "?([^)"]*)?"?\))?\)/g
       const componentRefs: string[] = []
-      let nodeMatch
-      while ((nodeMatch = nodeRegex.exec(body)) !== null) {
+      let nodeMatch: RegExpExecArray | null
+      while ((nodeMatch = nodeRegex.exec(section)) !== null) {
         componentRefs.push(nodeMatch[1])
         // Record connection on the component
         const comp = components.find((c) => c.reference === nodeMatch![1])
@@ -166,7 +178,7 @@ function parseNetlistFallback(content: string): ParsedSchematic {
   // Extract component blocks using balanced parens
   const compSections = extractSections(content, 'comp')
   for (const section of compSections) {
-    const refMatch = section.match(/\(ref (\w+)\)/)
+    const refMatch = section.match(/\(ref "?(\w+)"?\)/)
     const valMatch = section.match(/\(value "([^"]*)"\)/)
     const fpMatch = section.match(/\(footprint "([^"]*)"\)/)
     const symMatch = section.match(/\(libsymbol ([^)]*)\)/)
@@ -193,7 +205,7 @@ function parseNetlistFallback(content: string): ParsedSchematic {
     const componentRefs: string[] = []
 
     // Parse nodes
-    const nodeRegex = /\(node \(ref (\w+)\)(?:\(pin ([^)]*)\))?\)/g
+    const nodeRegex = /\(node \(ref "?(\w+)"?\)\s*(?:\(pin "?([^)"]*)?"?\))?\)/g
     let nodeMatch
     while ((nodeMatch = nodeRegex.exec(section)) !== null) {
       componentRefs.push(nodeMatch[1])
