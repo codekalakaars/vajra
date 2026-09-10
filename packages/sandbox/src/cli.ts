@@ -17,7 +17,6 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
-import { randomBytes } from 'node:crypto'
 
 const require = createRequire(import.meta.url)
 const native = require('vajra-native')
@@ -181,9 +180,6 @@ function cmdSecure(): void {
   if (needsProfile) {
     const shell = process.env.SHELL || '/bin/bash'
 
-    // Generate random exit token — agent can't guess this
-    const exitToken = randomBytes(16).toString('hex')
-
     // Strip network tools AND interpreters from PATH
     // Interpreters (python, node, ruby, perl, etc.) can bypass shell aliases
     // by using their own socket/HTTP libraries
@@ -265,18 +261,11 @@ function cmdSecure(): void {
       '  fi',
       '\' DEBUG',
       '',
-      '# Block exit — require token',
-      '_vajra_original_exit() { builtin exit "$@"; }',
-      'exit() { _vajra_log "exit" "Type _vajra_exit_' + exitToken + ' to leave the sandbox"; }',
-      '',
       '# Force all bash sub-invocations through this profile',
       'export BASH_ENV="$VAJRA_PROFILE"',
       '',
       '# Override bash to always use this profile',
       'bash() { builtin bash --rcfile "$VAJRA_PROFILE" --norc=ignore "$@"; }',
-      '',
-      '# The only way out — requires random token',
-      '_vajra_exit_' + exitToken + '() { _vajra_original_exit; }',
       '',
       '# Custom prompt',
       'export PS1="\\[\\033[32m\\]🔒 \\[\\033[0m\\]$ "',
@@ -284,7 +273,7 @@ function cmdSecure(): void {
       '# Welcome message',
       'echo ""',
       'echo "Sandboxed shell — confined to: ' + projectDir + '"',
-      'echo "Type _vajra_exit_' + exitToken + ' to leave."',
+      'echo "Close terminal or run: kill $$"',
       'echo ""',
     ].join('\n')
 
@@ -295,9 +284,6 @@ function cmdSecure(): void {
       process.exit(1)
     }
 
-    // Print the exit token so the user knows how to leave
-    console.log(`   Exit token: _vajra_exit_${exitToken}`)
-    console.log('')
   }
 
   // Apply sandbox
