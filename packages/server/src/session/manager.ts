@@ -121,14 +121,30 @@ export class SessionManager {
 
     subscribe(sessionId)
 
-    // Load permissions from the project's .vajra-perms.json (or use read-only
-    // defaults). The client may send an empty {} which, if passed directly to
-    // the sandbox worker, would lock down every file including reads.
+    // Load permissions: prefer .vajra-sandbox.json (glob-based rules with
+    // tool restrictions), fall back to .vajra-perms.json (exact-path rules),
+    // then to read-only defaults.
     const { loadPermissions } = await import('../native.js')
-    const permissions = loadPermissions(input.projectDir) ?? {
-      version: 1,
-      default: { read: true, write: false, edit: false, delete: false },
-      files: {},
+    const { loadSandboxConfig, buildLaunchJob } = await import('@vajra/sandbox')
+
+    let permissions: PermissionsConfig
+    let allowedTools: string[] | undefined
+    let fileRules: FileRule[] = []
+
+    const sandboxConfig = loadSandboxConfig(input.projectDir)
+    if (sandboxConfig) {
+      // .vajra-sandbox.json found — use its richer config
+      const job = buildLaunchJob(sandboxConfig, sessionId)
+      permissions = job.permissions
+      allowedTools = job.allowedTools
+      fileRules = sandboxConfig.fileRules as FileRule[]
+    } else {
+      // Fall back to .vajra-perms.json or defaults
+      permissions = loadPermissions(input.projectDir) ?? {
+        version: 1,
+        default: { read: true, write: false, edit: false, delete: false },
+        files: {},
+      }
     }
 
     try {
@@ -138,6 +154,8 @@ export class SessionManager {
           projectDir: input.projectDir,
           permissions,
           allowUnenforced: input.allowUnenforced ?? false,
+          allowedTools,
+          fileRules,
         },
         (report) => this.recordSandboxReport(sessionId, report),
       )
