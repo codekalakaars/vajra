@@ -17,6 +17,7 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
+import { randomBytes } from 'node:crypto'
 
 const require = createRequire(import.meta.url)
 const native = require('vajra-native')
@@ -169,14 +170,27 @@ function cmdSecure(): void {
 
   if (needsProfile) {
     const shell = process.env.SHELL || '/bin/bash'
+
+    // Generate random exit token — agent can't guess this
+    const exitToken = randomBytes(16).toString('hex')
+
+    // Strip network tools from PATH
+    const safePath = (process.env.PATH || '/usr/local/bin:/usr/bin:/bin')
+      .split(':')
+      .filter(p => !p.includes('/sbin') && !p.includes('/usr/sbin'))
+      .join(':')
+
     const profileContent = [
       '# Vajra sandbox — generated profile',
       'set -o ignoreeof',
       '',
-      '# Block exit — require _vajra_exit',
+      '# Strip network tools from PATH',
+      'export PATH="' + safePath + '"',
+      '',
+      '# Block exit — require token',
       '_vajra_original_exit() { command exit "$@"; }',
       'exit() {',
-      '  echo "Type _vajra_exit to leave the sandbox"',
+      '  echo "Type _vajra_exit_' + exitToken + ' to leave the sandbox"',
       '}',
       '',
       '# Block sudo entirely',
@@ -189,6 +203,19 @@ function cmdSecure(): void {
       'su() { echo "su is blocked in the sandbox"; }',
       'alias su=su',
       '',
+      '# Block network tools',
+      'curl() { echo "curl is blocked in the sandbox"; }',
+      'wget() { echo "wget is blocked in the sandbox"; }',
+      'nc() { echo "nc is blocked in the sandbox"; }',
+      'ncat() { echo "ncat is blocked in the sandbox"; }',
+      'socat() { echo "socat is blocked in the sandbox"; }',
+      'ssh() { echo "ssh is blocked in the sandbox"; }',
+      'scp() { echo "scp is blocked in the sandbox"; }',
+      'rsync() { echo "rsync is blocked in the sandbox"; }',
+      'git() { echo "git is blocked in the sandbox"; }',
+      'alias curl=curl wget=wget nc=nc ncat=ncat socat=socat',
+      'alias ssh=ssh scp=scp rsync=rsync git=git',
+      '',
       '# Force all bash sub-invocations through this profile',
       'export BASH_ENV="$VAJRA_PROFILE"',
       '',
@@ -197,8 +224,8 @@ function cmdSecure(): void {
       '  command bash --rcfile "$VAJRA_PROFILE" --norc=ignore "$@"',
       '}',
       '',
-      '# The only way out',
-      '_vajra_exit() { _vajra_original_exit; }',
+      '# The only way out — requires random token',
+      '_vajra_exit_' + exitToken + '() { _vajra_original_exit; }',
       '',
       '# Custom prompt',
       'export PS1="\\[\\033[32m\\]🔒 \\[\\033[0m\\]$ "',
@@ -206,7 +233,7 @@ function cmdSecure(): void {
       '# Welcome message',
       'echo ""',
       'echo "Sandboxed shell — confined to: ' + projectDir + '"',
-      'echo "Type _vajra_exit to leave."',
+      'echo "Type _vajra_exit_' + exitToken + ' to leave."',
       'echo ""',
     ].join('\n')
 
@@ -216,6 +243,10 @@ function cmdSecure(): void {
       console.error(`❌ Failed to create shell profile: ${e instanceof Error ? e.message : String(e)}`)
       process.exit(1)
     }
+
+    // Print the exit token so the user knows how to leave
+    console.log(`   Exit token: _vajra_exit_${exitToken}`)
+    console.log('')
   }
 
   // Apply sandbox
