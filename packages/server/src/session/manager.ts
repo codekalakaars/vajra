@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
 import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage } from '@vajra/protocol'
 import type { FileRule } from '@codekalakaars/vajra-sandbox'
+import { loadSandboxConfig } from '@codekalakaars/vajra-sandbox'
 import { agentLoop, type AgentLoopResult } from '../agent/loop.js'
 
 export interface LaunchJob {
@@ -95,6 +96,10 @@ export class SessionManager {
 
     subscribe(sessionId)
 
+    // Load sandbox config if present — the worker needs fileRules and
+    // defaultFilePermissions to evaluate per-tool-call file permissions.
+    const sandboxConfig = loadSandboxConfig(input.projectDir)
+
     try {
       const handle = await this.launcher(
         {
@@ -102,6 +107,10 @@ export class SessionManager {
           projectDir: input.projectDir,
           permissions: input.permissions,
           allowUnenforced: input.allowUnenforced ?? false,
+          ...(sandboxConfig ? {
+            fileRules: sandboxConfig.fileRules,
+            defaultFilePermissions: sandboxConfig.defaultPermissions,
+          } : {}),
         },
         (report) => this.recordSandboxReport(sessionId, report),
       )

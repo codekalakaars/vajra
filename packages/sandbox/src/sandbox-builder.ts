@@ -19,9 +19,9 @@ export interface LaunchJob {
     files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }>
   }
   /** Glob-based file rules evaluated per tool call by the worker. */
-  fileRules: readonly FileRule[]
+  fileRules?: readonly FileRule[]
   /** Default permissions for files with no matching rule. */
-  defaultFilePermissions: FilePermissions
+  defaultFilePermissions?: FilePermissions
   allowUnenforced: boolean
   allowedTools?: string[]
 }
