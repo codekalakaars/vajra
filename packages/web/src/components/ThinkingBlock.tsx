@@ -1,7 +1,7 @@
 import { useState } from 'react'
 
-export function ThinkingBlock({ text }: { text: string }) {
-  const [open, setOpen] = useState(true)
+export function ThinkingBlock({ text, defaultOpen = false }: { text: string; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen)
 
   if (!text) return null
 

@@ -5,7 +5,7 @@ export type EventMap = {
   'session.thinkingDelta': { sessionId: string; text: string }
   'session.sandboxStatus': { sessionId: string; enforced: boolean; warnings: string[] }
   'session.completed': { sessionId: string }
-  'session.failed': { sessionId: string; error: string }
+  'session.failed': { sessionId: string; message: string }
   'session.deleted': { sessionId: string }
 }
 

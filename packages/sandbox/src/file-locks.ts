@@ -1,75 +1,227 @@
-// File lock manager — read-shared/write-exclusive locking.
-// Multiple agents can read concurrently; only one can write at a time.
+// Read-shared/write-exclusive file locking for parallel task execution.
+//
+// Multiple tasks can read the same file concurrently, but writes are
+// exclusive — no other readers or writers while a write lock is held.
+// Locks are per-task, released when a task completes or fails.
 
-export type LockMode = 'shared' | 'exclusive'
+export type LockMode = 'read' | 'write'
 
-export interface FileLock {
-  file: string
-  mode: LockMode
+export interface Lock {
   owner: string
+  mode: LockMode
   acquiredAt: number
 }
 
-export interface LockResult {
-  ok: boolean
-  error?: string
-  lock?: FileLock
-}
+type Waiter = () => void
 
 /**
- * Manages file locks for a project.
- * In-memory only — stale locks from crashed agents don't block the project.
+ * Manages file-level locks for parallel task execution.
+ *
+ * Uses a reverse index (owner → files) for O(k) release where k is the
+ * number of files the owner holds, and per-file wait queues to avoid
+ * thundering-herd wake-ups.
+ *
+ * Usage:
+ *   const locks = new FileLockManager()
+ *   if (locks.canAcquire(files, 'write')) {
+ *     locks.tryAcquire(files, taskId, 'write')
+ *     // ... do work ...
+ *     locks.release(taskId)
+ *   }
  */
 export class FileLockManager {
-  private locks = new Map<string, FileLock[]>()
+  /** file path → array of active locks */
+  private locks = new Map<string, Lock[]>()
+
+  /** owner → set of files they hold locks on (reverse index) */
+  private ownerFiles = new Map<string, Set<string>>()
+
+  /** file path → queue of pending acquire requests */
+  private waiters = new Map<string, Waiter[]>()
 
   /**
-   * Acquire a lock on a file.
-   * - Shared locks: multiple owners can hold them simultaneously.
-   * - Exclusive locks: only one owner at a time.
+   * Check if acquiring locks on files would succeed without blocking.
+   *
+   * For 'read': returns false only if a 'write' lock exists on any file.
+   * For 'write': returns false if ANY lock (read or write) exists on any file.
    */
-  acquire(file: string, owner: string, mode: LockMode): LockResult {
-    const existing = this.locks.get(file)
+  canAcquire(files: string[], mode: LockMode): boolean {
+    for (const file of files) {
+      const fileLocks = this.locks.get(file)
+      if (!fileLocks || fileLocks.length === 0) continue
 
-    if (!existing || existing.length === 0) {
-      const lock: FileLock = { file, mode, owner, acquiredAt: Date.now() }
-      this.locks.set(file, [lock])
-      return { ok: true, lock }
-    }
-
-    const held = existing.find((l) => l.owner === owner)
-    if (held) {
-      if (held.mode === mode) return { ok: true, lock: held }
-      return {
-        ok: false,
-        error: `Already hold a ${held.mode} lock on '${file}'. Release it first.`,
+      if (mode === 'write') {
+        // Write requires no existing locks (read or write)
+        return false
       }
-    }
 
-    if (existing.every((l) => l.mode === 'shared') && mode === 'shared') {
-      const lock: FileLock = { file, mode, owner, acquiredAt: Date.now() }
-      existing.push(lock)
-      return { ok: true, lock }
+      // Read blocks only if a write lock exists
+      const hasWrite = fileLocks.some((l) => l.mode === 'write')
+      if (hasWrite) return false
     }
+    return true
+  }
 
-    return {
-      ok: false,
-      error: `File '${file}' is locked by ${existing[0].owner} (${existing[0].mode})`,
+  /**
+   * Acquire locks on files. Returns true if acquired immediately,
+   * false if the caller should wait (use `waitForRelease` after calling).
+   *
+   * This is non-blocking — it attempts acquisition and returns the result.
+   * Use `acquireOrWait` for a blocking acquire.
+   */
+  tryAcquire(files: string[], owner: string, mode: LockMode): boolean {
+    if (!this.canAcquire(files, mode)) return false
+
+    const now = Date.now()
+    for (const file of files) {
+      const fileLocks = this.locks.get(file) ?? []
+      fileLocks.push({ owner, mode, acquiredAt: now })
+      this.locks.set(file, fileLocks)
+
+      // Update reverse index
+      let ownerSet = this.ownerFiles.get(owner)
+      if (!ownerSet) {
+        ownerSet = new Set()
+        this.ownerFiles.set(owner, ownerSet)
+      }
+      ownerSet.add(file)
+    }
+    return true
+  }
+
+  /**
+   * Wait for locks to become available, then acquire them.
+   * Returns when the locks are acquired.
+   */
+  async acquireOrWait(files: string[], owner: string, mode: LockMode): Promise<void> {
+    while (!this.tryAcquire(files, owner, mode)) {
+      await this.waitForRelease(files)
     }
   }
 
-  /** Release a lock. Returns true if held and released. */
-  release(file: string, owner: string): boolean {
-    const existing = this.locks.get(file)
-    if (!existing || existing.length === 0) return false
+  /**
+   * Release all locks held by an owner. O(k) where k = files held by owner.
+   */
+  release(owner: string): void {
+    const files = this.ownerFiles.get(owner)
+    if (!files) return
 
-    const idx = existing.findIndex((l) => l.owner === owner)
-    if (idx === -1) return false
+    for (const file of files) {
+      const fileLocks = this.locks.get(file)
+      if (!fileLocks) continue
 
-    existing.splice(idx, 1)
-    if (existing.length === 0) this.locks.delete(file)
+      const remaining = fileLocks.filter((l) => l.owner !== owner)
+      if (remaining.length === 0) {
+        this.locks.delete(file)
+      } else {
+        this.locks.set(file, remaining)
+      }
+    }
 
-    return true
+    this.ownerFiles.delete(owner)
+
+    // Notify waiters for each released file
+    this.notifyWaitersForFiles(files)
+  }
+
+  /**
+   * Release specific files held by an owner.
+   */
+  releaseFiles(files: string[], owner: string): void {
+    const ownerSet = this.ownerFiles.get(owner)
+
+    for (const file of files) {
+      const fileLocks = this.locks.get(file)
+      if (!fileLocks) continue
+
+      const remaining = fileLocks.filter((l) => l.owner !== owner)
+      if (remaining.length === 0) {
+        this.locks.delete(file)
+      } else {
+        this.locks.set(file, remaining)
+      }
+
+      // Update reverse index
+      ownerSet?.delete(file)
+    }
+
+    if (ownerSet && ownerSet.size === 0) {
+      this.ownerFiles.delete(owner)
+    }
+
+    // Notify waiters for each released file
+    this.notifyWaitersForFiles(files)
+  }
+
+  /**
+   * Get all locks currently held. Useful for debugging.
+   */
+  getLocks(): Map<string, Lock[]> {
+    return new Map(this.locks)
+  }
+
+  /**
+   * Get all owners holding locks on a file.
+   */
+  getOwners(file: string): string[] {
+    const fileLocks = this.locks.get(file)
+    if (!fileLocks) return []
+    return [...new Set(fileLocks.map((l) => l.owner))]
+  }
+
+  /**
+   * Check if an owner holds any locks. O(1) via reverse index.
+   */
+  hasLocks(owner: string): boolean {
+    const files = this.ownerFiles.get(owner)
+    return files !== undefined && files.size > 0
+  }
+
+  /**
+   * Wait for locks on specific files to be released.
+   */
+  waitForRelease(files: string[]): Promise<void> {
+    return new Promise((resolve) => {
+      for (const file of files) {
+        let queue = this.waiters.get(file)
+        if (!queue) {
+          queue = []
+          this.waiters.set(file, queue)
+        }
+        queue.push(resolve)
+      }
+    })
+  }
+
+  /**
+   * Drain all locks and reject pending waiters.
+   * Called when a session is stopped.
+   */
+  drain(): void {
+    this.locks.clear()
+    this.ownerFiles.clear()
+
+    // Reject all waiters by resolving them (they'll fail on next tryAcquire)
+    for (const queue of this.waiters.values()) {
+      for (const w of queue) w()
+    }
+    this.waiters.clear()
+  }
+
+  private notifyWaitersForFiles(files: Set<string> | string[]): void {
+    const notified = new Set<Waiter>()
+    for (const file of files) {
+      const queue = this.waiters.get(file)
+      if (!queue) continue
+
+      for (const w of queue) {
+        if (!notified.has(w)) {
+          notified.add(w)
+          w()
+        }
+      }
+      this.waiters.delete(file)
+    }
   }
 
   /** Release all locks held by an owner. Called on agent disconnect. */
@@ -86,30 +238,36 @@ export class FileLockManager {
     return released
   }
 
-  /** Check if a file is locked by someone other than the given owner. */
-  isLocked(file: string, owner?: string): boolean {
+  /** Clear all locks. */
+  clear(): void {
+    this.drain()
+  }
+
+  /** Acquire a single-file lock. Returns {ok, lock?, error?}. */
+  acquire(file: string, owner: string, mode: LockMode): { ok: boolean; lock?: Lock; error?: string } {
+    if (this.tryAcquire([file], owner, mode)) {
+      const lock: Lock = { mode, owner, acquiredAt: Date.now() }
+      return { ok: true, lock }
+    }
+    return { ok: false, error: `File '${file}' is locked` }
+  }
+
+  /** Release a single-file lock. */
+  releaseFile(file: string, owner: string): boolean {
     const locks = this.locks.get(file)
-    if (!locks || locks.length === 0) return false
-    if (owner) return locks.some((l) => l.owner !== owner)
+    if (!locks) return false
+    const idx = locks.findIndex((l) => l.owner === owner)
+    if (idx === -1) return false
+    locks.splice(idx, 1)
+    if (locks.length === 0) this.locks.delete(file)
+    this.ownerFiles.get(owner)?.delete(file)
     return true
   }
 
-  /** Get all active locks. */
-  list(): FileLock[] {
-    const result: FileLock[] = []
+  /** List all active locks. */
+  list(): Lock[] {
+    const result: Lock[] = []
     for (const locks of this.locks.values()) result.push(...locks)
     return result
-  }
-
-  /** Get all locks held by a specific owner. */
-  listByOwner(owner: string): FileLock[] {
-    const result: FileLock[] = []
-    for (const locks of this.locks.values()) result.push(...locks.filter((l) => l.owner === owner))
-    return result
-  }
-
-  /** Clear all locks. */
-  clear(): void {
-    this.locks.clear()
   }
 }

@@ -34,15 +34,25 @@ let projectDir = ''
 
 const dispatchTable = {
   read_file: (args) => native.readFile(args.path),
+  list_files: (args) => native.listFiles(args.path, args.recursive),
+  search_files: (args) => native.searchSummary(args.query),
   write_file: (args) => native.writeFile(args.path, args.content),
   edit_file: (args) => native.editFile(args.path, args.oldString, args.newString, args.replaceAll),
-  delete_file: (args) => native.deleteFile(args.path),
-  delete_dir: (args) => native.deleteDir(args.path, args.recursive),
-  create_dir: (args) => native.createDir(args.path),
-  list_files: (args) => native.listFiles(args.path, args.recursive),
-  copy_file: (args) => native.copyFile(args.source, args.destination, args.overwrite),
-  rename_file: (args) => native.renameFile(args.source, args.destination, args.overwrite),
-  run_command: (args) => native.runCommand(args.command, args.args, args.cwd),
+  run_command: (args) => {
+    const { execSync } = require('child_process')
+    const cmd = args.command
+    const cwd = args.cwd || process.env.VAJRA_PROJECT_DIR || process.cwd()
+    const timeout = args.timeout || 30000
+    try {
+      const stdout = execSync(cmd, { cwd, timeout, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] })
+      return stdout || '(command completed successfully)'
+    } catch (e) {
+      // execSync throws on non-zero exit — include stdout/stderr
+      const stdout = e.stdout ? `\nstdout:\n${e.stdout}` : ''
+      const stderr = e.stderr ? `\nstderr:\n${e.stderr}` : ''
+      throw new Error(`Command failed (exit ${e.status}): ${e.message}${stdout}${stderr}`)
+    }
+  },
 }
 
 // Set of tools this worker is allowed to call. Populated from the job.
@@ -51,12 +61,27 @@ let allowedTools = null
 let fileRules = []
 let defaultFilePermissions = { read: true, write: false, edit: false, delete: false }
 
+// Resource limits for this worker
+let resourceLimits = null
+let toolCallCount = 0
+let cpuTimeTimer = null
+
 function send(message) {
   if (process.send) process.send(message)
 }
 
 function handleToolCall(message) {
   const { callId, tool, args } = message
+
+  // Check tool call limit
+  if (resourceLimits && resourceLimits.maxToolCalls !== undefined && resourceLimits.maxToolCalls !== null) {
+    toolCallCount++
+    if (toolCallCount > resourceLimits.maxToolCalls) {
+      send({ type: 'result', callId, ok: false, error: `Tool call limit exceeded (${resourceLimits.maxToolCalls})` })
+      return
+    }
+  }
+
   const def = toolDefinitions[tool]
 
   if (!def) {
@@ -97,7 +122,12 @@ function handleToolCall(message) {
     // Forwarded verbatim: this is the same message vajra-core itself
     // produced (editFile's ambiguous-match refusal, deleteFile's directory
     // guard, etc.) — no rewording layer that could soften or hide a refusal.
-    send({ type: 'result', callId, ok: false, error: e instanceof Error ? e.message : String(e) })
+    const msg = e instanceof Error ? e.message : String(e)
+    // Enhance EACCES errors with a clearer message about permissions
+    const enhanced = msg.includes('EACCES') || msg.includes('Permission denied')
+      ? `${msg} — this file is not readable in the current permission configuration. Use search_files to find other files, or adjust permissions before starting a new session.`
+      : msg
+    send({ type: 'result', callId, ok: false, error: enhanced })
   }
 }
 
@@ -117,6 +147,24 @@ function main(job) {
   }
   if (job.defaultFilePermissions) {
     defaultFilePermissions = job.defaultFilePermissions
+  }
+
+  // Set up resource limits if provided
+  if (job.resourceLimits) {
+    resourceLimits = {
+      maxMemoryMB: job.resourceLimits.maxMemoryMB ?? 512,
+      maxCpuTimeMs: job.resourceLimits.maxCpuTimeMs ?? 300000,
+      maxToolCalls: job.resourceLimits.maxToolCalls ?? 100,
+      maxSpawnRetries: job.resourceLimits.maxSpawnRetries ?? 2,
+    }
+
+    // Start CPU time watchdog
+    if (resourceLimits.maxCpuTimeMs > 0) {
+      cpuTimeTimer = setTimeout(() => {
+        send({ type: 'result', callId: 'cpu-timeout', ok: false, error: `CPU time limit exceeded (${resourceLimits.maxCpuTimeMs}ms)` })
+        process.exit(1)
+      }, resourceLimits.maxCpuTimeMs)
+    }
   }
 
   const capabilities = native.sandboxCapabilities()

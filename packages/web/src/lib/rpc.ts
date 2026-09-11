@@ -101,7 +101,11 @@ export class RpcClient {
     if (msg.ok) {
       pending.resolve(msg.result)
     } else {
-      pending.reject(new Error(String(msg.error ?? 'RPC call failed')))
+      const errObj = msg.error as Record<string, unknown> | undefined
+      const errMsg = errObj && typeof errObj === 'object' && typeof errObj.message === 'string'
+        ? errObj.message
+        : String(msg.error ?? 'RPC call failed')
+      pending.reject(new Error(errMsg))
     }
   }
 }

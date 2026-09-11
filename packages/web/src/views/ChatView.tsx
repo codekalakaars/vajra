@@ -1,10 +1,11 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useSession } from '../hooks/useSession'
 import { StatusBadge } from '../components/StatusBadge'
 import { ThinkingBlock } from '../components/ThinkingBlock'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
-
-const SUMMARIZE_TASK = 'Analyze this project thoroughly. Read all source files, configuration files, and documentation. Provide a comprehensive summary covering: 1) What the project does, 2) Tech stack and dependencies, 3) Directory structure and file purposes, 4) Key architecture and patterns, 5) Entry points and main flows.'
+import { PlanView } from '../components/PlanView'
+import { WorkerStatus } from '../components/WorkerStatus'
+import { ConflictAlert } from '../components/ConflictAlert'
 
 const MODELS = [
   { group: 'Auto (Recommended)', options: [{ value: 'openrouter/free', label: 'Auto-route free models' }] },
@@ -32,11 +33,111 @@ const MODELS = [
   ]},
 ]
 
-interface FilePerm {
-  read: boolean
-  write: boolean
-  edit: boolean
-  delete: boolean
+interface FileEntry {
+  name: string
+  path: string
+  isDir: boolean
+  isMasked: boolean
+}
+
+interface TreeNode {
+  entry: FileEntry
+  children: TreeNode[]
+  depth: number
+}
+
+function buildTree(files: FileEntry[]): TreeNode[] {
+  const root: TreeNode[] = []
+  const map = new Map<string, TreeNode>()
+
+  // Sort: dirs first, then by path
+  const sorted = [...files].sort((a, b) => {
+    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
+    return a.path.localeCompare(b.path)
+  })
+
+  for (const entry of sorted) {
+    const parts = entry.path.split('/')
+    const depth = parts.length - 1
+    const node: TreeNode = { entry, children: [], depth }
+    map.set(entry.path, node)
+
+    if (depth === 0) {
+      root.push(node)
+    } else {
+      const parentPath = parts.slice(0, -1).join('/')
+      const parent = map.get(parentPath)
+      if (parent) {
+        parent.children.push(node)
+      } else {
+        root.push(node)
+      }
+    }
+  }
+
+  return root
+}
+
+function filterTree(nodes: TreeNode[], filter: string): TreeNode[] {
+  if (!filter) return nodes
+  const lower = filter.toLowerCase()
+  return nodes
+    .map((node) => {
+      if (node.entry.name.toLowerCase().includes(lower)) return node
+      if (node.entry.isDir) {
+        const filteredChildren = filterTree(node.children, filter)
+        if (filteredChildren.length > 0) return { ...node, children: filteredChildren }
+      }
+      return null
+    })
+    .filter((n): n is TreeNode => n !== null)
+}
+
+function countFiles(nodes: TreeNode[]): number {
+  let count = 0
+  for (const node of nodes) {
+    if (!node.entry.isDir && !node.entry.isMasked) count++
+    count += countFiles(node.children)
+  }
+  return count
+}
+
+function countChecked(nodes: TreeNode[], perms: Record<string, boolean>): number {
+  let count = 0
+  for (const node of nodes) {
+    if (!node.entry.isDir && !node.entry.isMasked) {
+      if (perms[node.entry.path] !== false) count++
+    }
+    count += countChecked(node.children, perms)
+  }
+  return count
+}
+
+function toggleAll(nodes: TreeNode[], value: boolean, perms: Record<string, boolean>): Record<string, boolean> {
+  const next = { ...perms }
+  for (const node of nodes) {
+    if (!node.entry.isDir && !node.entry.isMasked) {
+      next[node.entry.path] = value
+    }
+    Object.assign(next, toggleAll(node.children, value, perms))
+  }
+  return next
+}
+
+import type { ReactNode } from 'react'
+
+function getIcon(entry: FileEntry): string {
+  if (entry.isDir) return '📁'
+  if (entry.isMasked) return '🔒'
+  if (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx')) return '📄'
+  if (entry.name.endsWith('.js') || entry.name.endsWith('.mjs')) return '📜'
+  if (entry.name.endsWith('.json')) return '📋'
+  if (entry.name.endsWith('.md')) return '📝'
+  if (entry.name.endsWith('.yaml') || entry.name.endsWith('.yml')) return '⚙️'
+  if (entry.name.endsWith('.toml')) return '⚙️'
+  if (entry.name.endsWith('.css')) return '🎨'
+  if (entry.name.endsWith('.html')) return '🌐'
+  return '📄'
 }
 
 export function ChatView({ connected }: { connected: boolean }) {
@@ -44,86 +145,115 @@ export function ChatView({ connected }: { connected: boolean }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
-  // Setup state
   const [projectDir, setProjectDir] = useState('')
   const [model, setModel] = useState('openrouter/free')
-  const [permissions, setPermissions] = useState<Record<string, FilePerm>>({})
-  const [files, setFiles] = useState<Array<{ name: string; path: string; isDir: boolean; isMasked: boolean }>>([])
-  const [setupMsg, setSetupMsg] = useState('')
-  const [setupMsgColor, setSetupMsgColor] = useState('')
-  const [listing, setListing] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [permissionsSaved, setPermissionsSaved] = useState(false)
-  const [showChat, setShowChat] = useState(false)
   const [inputValue, setInputValue] = useState('')
+  const lastKeyRef = useRef<{ key: string; time: number }>({ key: '', time: 0 })
 
-  // Auto-scroll during streaming
+  // Permissions state
+  const [permFilter, setPermFilter] = useState('')
+  const [permFiles, setPermFiles] = useState<FileEntry[]>([])
+  const [permMap, setPermMap] = useState<Record<string, boolean>>({})
+  const [permLoading, setPermLoading] = useState(false)
+  const [permError, setPermError] = useState<string | null>(null)
+  const [permLoaded, setPermLoaded] = useState(false)
+  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
+
+  const hasSession = session.sessionId !== null
+  const isStreaming = session.status === 'streaming' || session.status === 'creating' || session.status === 'planning' || session.status === 'executing'
+  const showPermissions = !hasSession && permLoaded
+
+  const permTree = useMemo(() => {
+    const tree = buildTree(permFiles)
+    return filterTree(tree, permFilter)
+  }, [permFiles, permFilter])
+
+  const totalFiles = useMemo(() => countFiles(permTree), [permTree])
+  const checkedFiles = useMemo(() => countChecked(permTree, permMap), [permTree, permMap])
+  const allChecked = totalFiles > 0 && checkedFiles === totalFiles
+  const noneChecked = checkedFiles === 0
+
+  // Load permissions when project path is provided
+  const loadPermissionsForProject = useCallback(async (dir: string) => {
+    if (!dir.trim()) {
+      setPermLoaded(false)
+      setPermFiles([])
+      setPermMap({})
+      return
+    }
+    setPermLoading(true)
+    setPermError(null)
+    try {
+      const { permissions, files } = await session.loadPermissions(dir.trim())
+      // Default: .env files unchecked (masked), everything else checked
+      const map: Record<string, boolean> = {}
+      for (const f of files) {
+        if (!f.isDir) {
+          map[f.path] = f.isMasked ? false : (permissions[f.path]?.read ?? true)
+        }
+      }
+      setPermFiles(files)
+      setPermMap(map)
+      setPermLoaded(true)
+      // Expand top-level dirs by default
+      const topDirs = new Set(files.filter(f => f.isDir && !f.path.includes('/')).map(f => f.path))
+      setExpandedDirs(topDirs)
+    } catch (e) {
+      setPermError(String(e))
+      setPermLoaded(false)
+    } finally {
+      setPermLoading(false)
+    }
+  }, [session])
+
+  // Double-press Esc or Ctrl+C to stop streaming
+  const handleGlobalKeyDown = useCallback((e: KeyboardEvent) => {
+    if (!isStreaming) return
+    if (e.key === 'Escape' || (e.key === 'c' && e.ctrlKey)) {
+      const now = Date.now()
+      const prev = lastKeyRef.current
+      if (prev.key === e.key && now - prev.time < 500) {
+        session.stopSession()
+        lastKeyRef.current = { key: '', time: 0 }
+      } else {
+        lastKeyRef.current = { key: e.key, time: now }
+      }
+    }
+  }, [isStreaming, session.stopSession])
+
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [handleGlobalKeyDown])
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100
+    if (nearBottom) {
+      el.scrollTop = el.scrollHeight
     }
   }, [session.messages, session._streamingText, session.thinkingText])
 
-  // Focus input when done
   useEffect(() => {
-    if (session.status === 'done' && inputRef.current) {
+    if (!isStreaming && inputRef.current) {
       inputRef.current.focus()
     }
   }, [session.status])
 
-  const handleList = async () => {
-    if (!projectDir.trim()) return
-    setListing(true)
-    setSetupMsg('')
-    try {
-      const result = await session.loadPermissions(projectDir.trim())
-      setPermissions(result.permissions)
-      setFiles(result.files.filter(f => !f.isDir && !f.isMasked))
-      setSetupMsg(`${result.files.filter(f => !f.isDir && !f.isMasked).length} file(s) found. Toggle permissions, then Save or Skip.`)
-      setSetupMsgColor('text-gray-400')
-    } catch (e) {
-      setSetupMsg(String(e))
-      setSetupMsgColor('text-red-400')
-    } finally {
-      setListing(false)
-    }
-  }
-
-  const handleSave = async () => {
-    if (!projectDir.trim()) {
-      setSetupMsg('Set a project path first.')
-      setSetupMsgColor('text-red-400')
-      return
-    }
-    setSaving(true)
-    try {
-      await session.savePermissions(projectDir.trim(), permissions)
-      setPermissionsSaved(true)
-      setSetupMsg('Permissions saved.')
-      setSetupMsgColor('text-green-400')
-      setShowChat(true)
-    } catch (e) {
-      setSetupMsg(String(e))
-      setSetupMsgColor('text-red-400')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleSkip = () => {
-    if (!projectDir.trim()) setProjectDir('/tmp')
-    setPermissions({})
-    setPermissionsSaved(true)
-    setSetupMsg('Skipped — using read-only defaults.')
-    setSetupMsgColor('text-gray-500')
-    setShowChat(true)
-  }
-
   const handleStart = async () => {
+    if (!projectDir.trim()) return
+
+    // Build permissions config from permMap
+    const files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> = {}
+    for (const [path, read] of Object.entries(permMap)) {
+      files[path] = { read, write: false, edit: false, delete: false }
+    }
+
     try {
       await session.createSession({
         projectDir: projectDir.trim(),
-        permissions,
+        permissions: files,
         model,
       })
     } catch {
@@ -145,48 +275,125 @@ export function ChatView({ connected }: { connected: boolean }) {
     }
   }
 
-  const togglePerm = (path: string, key: keyof FilePerm) => {
-    setPermissions((prev) => ({
-      ...prev,
-      [path]: { ...prev[path], [key]: !prev[path]?.[key] },
-    }))
+  const toggleDir = (path: string) => {
+    setExpandedDirs((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
   }
 
-  const hasSession = session.sessionId !== null
-  const isStreaming = session.status === 'streaming' || session.status === 'creating'
+  const togglePerm = (path: string) => {
+    setPermMap((prev) => ({ ...prev, [path]: !prev[path] }))
+  }
+
+  const toggleAllFiles = () => {
+    const newValue = !allChecked
+    setPermMap((prev) => toggleAll(permTree, newValue, prev))
+  }
+
+  const renderNode = (node: TreeNode): ReactNode => {
+    const { entry, children } = node
+    const isExpanded = expandedDirs.has(entry.path)
+
+    if (entry.isDir) {
+      return (
+        <div key={entry.path}>
+          <div
+            className="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-800 rounded cursor-pointer select-none"
+            style={{ paddingLeft: `${node.depth * 16 + 8}px` }}
+            onClick={() => toggleDir(entry.path)}
+          >
+            <span className="text-xs text-gray-500 w-3 text-center">{isExpanded ? '▾' : '▸'}</span>
+            <span className="text-sm">{getIcon(entry)}</span>
+            <span className="text-sm text-gray-300 truncate flex-1">{entry.name}</span>
+          </div>
+          {isExpanded && (
+            <div>
+              {children.map((child) => renderNode(child))}
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    const allowed = permMap[entry.path] !== false
+
+    if (entry.isMasked) {
+      return (
+        <div
+          key={entry.path}
+          className="flex items-center gap-1.5 px-2 py-1 rounded"
+          style={{ paddingLeft: `${node.depth * 16 + 8 + 16}px` }}
+        >
+          <span className="text-sm">{getIcon(entry)}</span>
+          <span className="text-sm text-gray-400 truncate flex-1">{entry.name}</span>
+          <span className="text-xs text-yellow-500 italic">masked</span>
+        </div>
+      )
+    }
+
+    return (
+      <div
+        key={entry.path}
+        className="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-800 rounded"
+        style={{ paddingLeft: `${node.depth * 16 + 8 + 16}px` }}
+      >
+        <span className="text-sm">{getIcon(entry)}</span>
+        <span className="text-sm text-gray-300 truncate flex-1">{entry.name}</span>
+        <label className="flex items-center gap-1 cursor-pointer select-none" onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={allowed}
+            onChange={() => togglePerm(entry.path)}
+            className="w-3.5 h-3.5 accent-blue-500 cursor-pointer"
+          />
+          <span className={`text-xs ${allowed ? 'text-gray-400' : 'text-red-400'}`}>
+            {allowed ? 'read' : 'denied'}
+          </span>
+        </label>
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col h-full">
-      {/* Setup panel — shown before session starts */}
-      {!showChat && !hasSession && (
-        <div className="p-6 max-w-2xl mx-auto w-full">
+      {/* Setup — shown before session starts */}
+      {!hasSession && (
+        <div className="p-6 max-w-3xl mx-auto w-full overflow-y-auto flex-1">
           <h2 className="text-xl font-bold text-white mb-6">New Session</h2>
 
-          {/* Project path */}
-          <label className="block text-sm font-medium text-gray-300 mb-1">1. Project path</label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Project path</label>
           <div className="flex gap-2 mb-4">
             <input
               type="text"
               value={projectDir}
               onChange={(e) => setProjectDir(e.target.value)}
+              onBlur={() => loadPermissionsForProject(projectDir)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  loadPermissionsForProject(projectDir)
+                }
+              }}
               placeholder="/path/to/project"
               className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
             />
             <button
-              onClick={handleList}
-              disabled={listing}
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-white transition-colors disabled:opacity-50"
+              onClick={() => loadPermissionsForProject(projectDir)}
+              disabled={!projectDir.trim() || permLoading}
+              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-gray-300 transition-colors disabled:opacity-50"
             >
-              {listing ? 'Listing...' : 'List'}
+              {permLoading ? '...' : 'Load'}
             </button>
           </div>
 
-          {/* Model */}
-          <label className="block text-sm font-medium text-gray-300 mb-1">2. Model</label>
+          <label className="block text-sm font-medium text-gray-300 mb-1">Model</label>
           <select
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm mb-4 focus:outline-none focus:border-blue-500"
+            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm mb-6 focus:outline-none focus:border-blue-500"
           >
             {MODELS.map((group) => (
               <optgroup key={group.group} label={group.group}>
@@ -197,86 +404,112 @@ export function ChatView({ connected }: { connected: boolean }) {
             ))}
           </select>
 
-          {/* Permissions */}
-          <label className="block text-sm font-medium text-gray-300 mb-1">3. Permissions</label>
-          <div className="border border-gray-700 rounded bg-gray-800/50 max-h-64 overflow-y-auto mb-4">
-            {files.length === 0 ? (
-              <div className="p-3 text-sm text-gray-500">Click "List" to scan files</div>
-            ) : (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-700 text-gray-400">
-                    <th className="px-3 py-2 text-left">File</th>
-                    <th className="px-3 py-2 text-center w-12">R</th>
-                    <th className="px-3 py-2 text-center w-12">W</th>
-                    <th className="px-3 py-2 text-center w-12">E</th>
-                    <th className="px-3 py-2 text-center w-12">D</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {files.map((f) => (
-                    <tr key={f.path} className="border-b border-gray-700/50">
-                      <td className="px-3 py-1.5 text-gray-300 truncate max-w-[200px]">{f.name}</td>
-                      {(['read', 'write', 'edit', 'delete'] as const).map((key) => (
-                        <td key={key} className="text-center">
-                          <input
-                            type="checkbox"
-                            checked={permissions[f.path]?.[key] ?? (key === 'read')}
-                            onChange={() => togglePerm(f.path, key)}
-                            className="rounded border-gray-600 bg-gray-700 text-blue-500 focus:ring-blue-500"
-                          />
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+          {/* Permissions section */}
+          {permError && (
+            <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded text-red-300 text-sm">
+              {permError}
+            </div>
+          )}
 
-          {/* Actions */}
-          <div className="flex gap-2 mb-2">
-            <button
-              onClick={handleSave}
-              disabled={!files.length || saving}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm text-white transition-colors disabled:opacity-50"
-            >
-              {saving ? 'Saving...' : 'Save Permissions'}
-            </button>
-            <button
-              onClick={handleSkip}
-              disabled={!files.length}
-              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-white transition-colors disabled:opacity-50"
-            >
-              Skip (read-only)
-            </button>
-          </div>
-          {setupMsg && <p className={`text-xs ${setupMsgColor}`}>{setupMsg}</p>}
+          {showPermissions && (
+            <div className="border border-gray-700 rounded-lg overflow-hidden mb-6">
+              <div className="bg-gray-800 px-4 py-3 border-b border-gray-700">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <h3 className="text-sm font-medium text-white">Permissions</h3>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {checkedFiles} of {totalFiles} files readable
+                      {noneChecked && <span className="text-red-400 ml-2">— agent cannot read any files</span>}
+                    </p>
+                  </div>
+                  <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={allChecked}
+                      onChange={toggleAllFiles}
+                      className="w-3.5 h-3.5 accent-blue-500 cursor-pointer"
+                    />
+                    <span className="text-xs text-gray-400">{allChecked ? 'All on' : 'Select all'}</span>
+                  </label>
+                </div>
+                <input
+                  type="text"
+                  value={permFilter}
+                  onChange={(e) => setPermFilter(e.target.value)}
+                  placeholder="Filter files..."
+                  className="w-full px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div className="max-h-80 overflow-y-auto p-2">
+                {permTree.length === 0 && (
+                  <div className="text-gray-500 text-sm text-center py-4">No files found</div>
+                )}
+                {permTree.map((node) => renderNode(node))}
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={handleStart}
+            disabled={!projectDir.trim() || isStreaming || (permLoaded && noneChecked)}
+            className="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-medium transition-colors disabled:opacity-50"
+          >
+            {session.status === 'creating' ? 'Starting...' : 'Start'}
+          </button>
         </div>
       )}
 
-      {/* Chat area — shown after setup or when viewing existing session */}
-      {(showChat || hasSession) && (
+      {/* Chat area — shown after session starts */}
+      {hasSession && (
         <>
           {/* Header */}
           <div className="px-6 py-3 border-b border-gray-800 flex items-center gap-3">
             <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
             <span className="text-xs text-gray-500">{connected ? 'Connected' : 'Disconnected'}</span>
-            {hasSession && (
-              <>
-                <span className="text-gray-700">·</span>
-                <h2 className="text-sm font-medium text-white">
-                  Session {session.sessionId!.slice(0, 8)}
-                </h2>
-                <StatusBadge status={session.status} />
-              </>
-            )}
+            <span className="text-gray-700">·</span>
+            <h2 className="text-sm font-medium text-white">
+              Session {session.sessionId!.slice(0, 8)}
+            </h2>
+            <StatusBadge status={session.status} />
           </div>
 
           {/* Messages */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-hidden p-6 space-y-4">
+            {/* Multi-agent status views */}
+            {(session.status === 'planning' || session.status === 'executing' || session.status === 'confirming') && (
+              <div className="space-y-3">
+                {session.planTasks.length > 0 && (
+                  <div>
+                    <PlanView tasks={session.planTasks} />
+                    {session.status === 'confirming' && (
+                      <div className="mt-4 flex gap-3">
+                        <button
+                          onClick={() => session.confirmPlan()}
+                          className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-medium transition-colors"
+                        >
+                          Confirm & Execute
+                        </button>
+                        <button
+                          onClick={() => session.rejectPlan()}
+                          className="px-4 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-gray-300 transition-colors"
+                        >
+                          Keep Talking
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {session.agents.length > 0 && (
+                  <WorkerStatus agents={session.agents} />
+                )}
+                {session.conflicts.length > 0 && (
+                  <ConflictAlert conflicts={session.conflicts} />
+                )}
+              </div>
+            )}
+
             {session.status === 'idle' && session.messages.length === 0 && (
-              <div className="text-gray-500 text-center mt-20">Waiting for response...</div>
+              <div className="text-gray-500 text-center mt-20">Start a conversation to plan your task...</div>
             )}
 
             {session.messages.map((msg, i) => (
@@ -298,6 +531,7 @@ export function ChatView({ connected }: { connected: boolean }) {
                       V
                     </div>
                     <div className="flex-1 min-w-0">
+                      {msg.thinking && <ThinkingBlock text={msg.thinking} />}
                       <MarkdownRenderer content={msg.content} />
                     </div>
                   </div>
@@ -306,6 +540,10 @@ export function ChatView({ connected }: { connected: boolean }) {
             ))}
 
             {/* Live streaming bubble */}
+            {session.thinkingText && (
+              <ThinkingBlock text={session.thinkingText} defaultOpen />
+            )}
+
             {session._streamingText && (
               <div>
                 <div className="flex items-start gap-3">
@@ -319,10 +557,6 @@ export function ChatView({ connected }: { connected: boolean }) {
               </div>
             )}
 
-            {session.thinkingText && (
-              <ThinkingBlock text={session.thinkingText} />
-            )}
-
             {session.error && (
               <div className="p-3 bg-red-900/30 border border-red-800 rounded text-red-300 text-sm">
                 {session.error}
@@ -330,21 +564,24 @@ export function ChatView({ connected }: { connected: boolean }) {
             )}
           </div>
 
-          {/* Start button — shown when setup is done but session hasn't started */}
-          {showChat && !hasSession && (
-            <div className="p-6 flex justify-center">
+          {/* Stop button — shown during streaming */}
+          {isStreaming && (
+            <div className="px-4 py-2 border-t border-gray-800 flex justify-center">
               <button
-                onClick={handleStart}
-                disabled={isStreaming}
-                className="px-8 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-lg text-white transition-colors disabled:opacity-50"
+                onClick={session.stopSession}
+                className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm text-gray-300 transition-colors flex items-center gap-2"
               >
-                {session.status === 'creating' ? 'Analyzing project...' : 'Start'}
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                  <rect x="6" y="6" width="12" height="12" rx="1" />
+                </svg>
+                Stop
+                <span className="text-xs text-gray-500 ml-1">Esc Esc / Ctrl+C Ctrl+C</span>
               </button>
             </div>
           )}
 
-          {/* Input — shown when session is done */}
-          {hasSession && session.status === 'done' && (
+          {/* Input */}
+          {!isStreaming && session.status !== 'confirming' && (
             <div className="p-4 border-t border-gray-800">
               <div className="max-w-3xl mx-auto flex gap-2">
                 <textarea

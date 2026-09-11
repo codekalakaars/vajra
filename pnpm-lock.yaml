@@ -85,7 +85,7 @@ importers:
       '@assistant-ui/react':
         specifier: ^0.15.17
         version: 0.15.17(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@vajra/protocol':
+      '@codekalakaars/protocol':
         specifier: workspace:*
         version: link:../protocol
       highlight.js:

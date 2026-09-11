@@ -1,9 +1,15 @@
-// Translates a SandboxConfig into the LaunchJob shape the worker expects.
+// Translates a SandboxConfig into the LaunchJob shape that the sandboxed
+// worker (sandboxed-worker.mjs) expects.
+//
+// This bridge exists so the server doesn't need to know how SandboxConfig
+// maps to worker parameters — the sandbox package owns that translation.
 
 import type { SandboxConfig, FileRule } from './config.js'
-import type { FilePermissions } from './types.js'
+import type { FilePermissions } from '@codekalakaars/protocol'
 import { resolveFilePermissions } from './file-rules.js'
 import { resolveAllowedTools } from './tool-rules.js'
+import type { ResourceLimits } from './resources.js'
+import { resolveResourceLimits } from './resources.js'
 
 /** The shape sandboxed-worker.mjs receives via IPC as its initial job. */
 export interface LaunchJob {
@@ -14,13 +20,24 @@ export interface LaunchJob {
     default: { read: boolean; write: boolean; edit: boolean; delete: boolean }
     files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }>
   }
-  fileRules?: readonly FileRule[]
-  defaultFilePermissions?: FilePermissions
+  /** Glob-based file rules evaluated per tool call by the worker. */
+  fileRules: readonly FileRule[]
+  /** Default permissions for files with no matching rule. */
+  defaultFilePermissions: FilePermissions
   allowUnenforced: boolean
   allowedTools?: string[]
+  /** Resource limits for this worker. */
+  resourceLimits: Required<ResourceLimits>
 }
 
-/** Build a LaunchJob from a SandboxConfig. */
+/**
+ * Build a LaunchJob from a SandboxConfig.
+ *
+ * The worker receives this object as its initial IPC message and uses it to:
+ *  1. Apply the native sandbox (via vajra-core's applySandbox)
+ *  2. Filter tool calls (via the allowedTools list)
+ *  3. Evaluate file rules per tool call (via fileRules + defaultFilePermissions)
+ */
 export function buildLaunchJob(
   config: SandboxConfig,
   sessionId: string,
@@ -38,5 +55,6 @@ export function buildLaunchJob(
     defaultFilePermissions: config.defaultPermissions,
     allowUnenforced: config.allowUnenforced,
     allowedTools,
+    resourceLimits: resolveResourceLimits(),
   }
 }

@@ -49,8 +49,8 @@ test('parseToolCall rejects arguments that fail the tool schema', () => {
   const result = parseToolCall({
     id: 'call_4',
     type: 'function',
-    // edit_file requires oldString/newString; missing here.
-    function: { name: 'edit_file', arguments: '{"path":"a.txt"}' },
+    // search_files requires query; missing here.
+    function: { name: 'search_files', arguments: '{}' },
   })
 
   assert.equal(result.ok, false)

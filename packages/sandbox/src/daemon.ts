@@ -197,7 +197,7 @@ export class SandboxDaemon {
       return
     }
 
-    const released = this.locks.release(file, agent.id)
+    const released = this.locks.releaseFile(file, agent.id)
     this.sendResponse(agent, { ok: released })
   }
 

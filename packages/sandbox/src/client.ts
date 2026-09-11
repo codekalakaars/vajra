@@ -92,7 +92,7 @@ export class SandboxClient {
     return this.send({ type: 'identify', name, pid }) as Promise<{ ok: boolean; error?: string }>
   }
 
-  async lock(file: string, mode: LockMode = 'shared'): Promise<{ ok: boolean; error?: string }> {
+  async lock(file: string, mode: LockMode = 'read'): Promise<{ ok: boolean; error?: string }> {
     return this.send({ type: 'lock', file, mode }) as Promise<{ ok: boolean; error?: string }>
   }
 
