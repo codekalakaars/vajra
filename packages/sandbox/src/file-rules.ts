@@ -7,7 +7,7 @@
 // Glob support is intentionally minimal: *, **, ?, and ! negation. No brace
 // expansion, no character classes — keep config files human-readable.
 
-import type { FilePermissions, PermissionsConfig, ProjectFileEntry } from '@codekalakaars/protocol'
+import type { FilePermissions, PermissionsConfig, ProjectFileEntry } from './types.js'
 import type { SandboxConfig, FileRule } from './config.js'
 
 // ---- Memoization cache for glob matching ----

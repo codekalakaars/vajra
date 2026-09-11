@@ -1,6 +1,6 @@
 //! Reading `.env` files and generating the sample that stands in for them.
 //!
-//! Ported from the legacy CLI (`legacy/src/envfile.rs`). The logic is pure text
+//!  The logic is pure text
 //! handling with no platform dependencies, so it carries over unchanged; only
 //! the napi bindings and path handling are new.
 

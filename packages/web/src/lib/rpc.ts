@@ -1,7 +1,7 @@
 // Typed RPC caller over VajraSocket.
 
 import type { VajraSocket } from './ws.js'
-import type { PermissionsConfig } from '@codekalakaars/protocol'
+import type { PermissionsConfig } from '@codekalakaars/vajra-protocol'
 
 let nextId = 0
 

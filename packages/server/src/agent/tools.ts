@@ -9,7 +9,7 @@
 // cheap tool-result error the model can see and react to, without spending
 // an IPC round trip to the worker on something already known to be invalid.
 
-import { toolDefinitions, toOpenAiToolSpecs, roleTools, type ToolName } from '@codekalakaars/protocol'
+import { toolDefinitions, toOpenAiToolSpecs, roleTools, type ToolName } from '@codekalakaars/vajra-protocol'
 import type { OpenRouterToolCall, OpenAiToolSpec } from './openrouter.js'
 
 export function getToolSpecs(): OpenAiToolSpec[] {

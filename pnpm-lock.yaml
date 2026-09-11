@@ -26,6 +26,10 @@ importers:
         version: 5.9.3
 
   packages/sandbox:
+    dependencies:
+      '@codekalakaars/vajra-protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
       '@codekalakaars/vajra-core':
         specifier: workspace:*
@@ -39,12 +43,12 @@ importers:
 
   packages/server:
     dependencies:
-      '@codekalakaars/protocol':
-        specifier: workspace:*
-        version: link:../protocol
       '@codekalakaars/vajra-core':
         specifier: workspace:*
         version: link:../..
+      '@codekalakaars/vajra-protocol':
+        specifier: workspace:*
+        version: link:../protocol
       '@codekalakaars/vajra-sandbox':
         specifier: workspace:*
         version: link:../sandbox
@@ -82,7 +86,7 @@ importers:
 
   packages/web:
     dependencies:
-      '@codekalakaars/protocol':
+      '@codekalakaars/vajra-protocol':
         specifier: workspace:*
         version: link:../protocol
       highlight.js:

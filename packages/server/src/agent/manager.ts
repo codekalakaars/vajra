@@ -11,7 +11,7 @@
 
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../session/manager.js'
-import type { ManagerPlan, PlannedTask, ToolName } from '@codekalakaars/protocol'
+import type { ManagerPlan, PlannedTask, ToolName } from '@codekalakaars/vajra-protocol'
 import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
 import { getManagerToolSpecs, parseToolCall } from './tools.js'
 import { scanProject } from '../native.js'

@@ -186,8 +186,8 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_legacy_on_disk_format() {
-        let dir = scratch("legacy-format");
+    fn reads_the_on_disk_format() {
+        let dir = scratch("on-disk-format");
         std::fs::write(
             dir.join(CONFIG_FILE),
             r#"{"version":1,"default":{"read":true,"write":false,"edit":false,"delete":false},"files":{}}"#,

@@ -1,11 +1,11 @@
-# @vajra/sandbox
+# @codekalakaars/vajra-sandbox
 
 Programmatically configurable sandbox policy for Vajra. Restricts what files a worker can access and what tools it can call.
 
 ## Install
 
 ```bash
-pnpm add @vajra/sandbox
+pnpm add @codekalakaars/vajra-sandbox
 ```
 
 ## Usage
@@ -13,7 +13,7 @@ pnpm add @vajra/sandbox
 ### Programmatic API
 
 ```typescript
-import { createSandboxConfig, resolveAllowedTools, buildLaunchJob } from '@vajra/sandbox'
+import { createSandboxConfig, resolveAllowedTools, buildLaunchJob } from '@codekalakaars/vajra-sandbox'
 
 const config = createSandboxConfig({
   projectDir: '/path/to/project',

@@ -1,5 +1,5 @@
 {
-  "name": "@codekalakaars/server",
+  "name": "@codekalakaars/vajra-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,7 +13,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@codekalakaars/protocol": "workspace:*",
+    "@codekalakaars/vajra-protocol": "workspace:*",
     "@codekalakaars/vajra-sandbox": "workspace:*",
     "better-sqlite3": "^11.3.0",
     "dotenv": "^16.6.1",
