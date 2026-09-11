@@ -30,6 +30,7 @@ export interface TaskState {
   validationPassed: boolean | null
   filePermissions: string | null
   toolPermissions: string | null
+  retries: number
   createdAt: number
   startedAt: number | null
   completedAt: number | null
@@ -99,6 +100,7 @@ export class TaskQueue {
       validationPassed: null,
       filePermissions: filePermissions ?? null,
       toolPermissions: toolPermissions ?? null,
+      retries: 0,
       createdAt: now,
       startedAt: null,
       completedAt: null,
@@ -201,6 +203,20 @@ export class TaskQueue {
         this.fileToTask.delete(file)
       }
     }
+  }
+
+  retryTask(taskId: string): void {
+    const task = this.tasks.get(taskId)
+    if (!task) return
+
+    task.retries++
+    task.status = 'pending'
+    task.assignedAgentId = null
+    task.startedAt = null
+
+    this.db
+      .prepare(`UPDATE tasks SET status = 'pending', assigned_agent_id = NULL, started_at = NULL WHERE id = ?`)
+      .run(taskId)
   }
 
   skipTask(taskId: string): void {
