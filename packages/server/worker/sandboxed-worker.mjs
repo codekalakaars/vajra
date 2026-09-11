@@ -80,10 +80,19 @@ function matchesPattern(filePath, pattern) {
 // File permission check
 // ---------------------------------------------------------------------------
 
+let projectDir = ''
+
 function resolveFilePermission(filePath, fileRules, defaultPermissions) {
+  // Convert absolute path to project-relative for pattern matching.
+  // If the file is outside the project, no rule matches — fall back to defaults.
+  let relPath = filePath
+  if (projectDir && filePath.startsWith(projectDir)) {
+    relPath = filePath.slice(projectDir.length + 1) // +1 for trailing /
+  }
+
   const result = { ...defaultPermissions }
   for (const rule of fileRules) {
-    if (matchesPattern(filePath, rule.pattern)) {
+    if (matchesPattern(relPath, rule.pattern)) {
       if (rule.read !== undefined) result.read = rule.read
       if (rule.write !== undefined) result.write = rule.write
       if (rule.edit !== undefined) result.edit = rule.edit
@@ -206,8 +215,9 @@ function handleToolCall(message) {
 }
 
 function main(job) {
-  // Store the project dir for run_command
+  // Store the project dir for run_command and file permission resolution
   process.env.VAJRA_PROJECT_DIR = job.projectDir
+  projectDir = job.projectDir
 
   // Set up tool permissions if provided
   if (job.allowedTools) {
