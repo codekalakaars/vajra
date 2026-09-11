@@ -27,7 +27,7 @@ importers:
 
   packages/sandbox:
     devDependencies:
-      '@codekalakaars/vajra-native':
+      '@codekalakaars/vajra-core':
         specifier: workspace:*
         version: link:../..
       '@types/node':
@@ -39,7 +39,7 @@ importers:
 
   packages/server:
     dependencies:
-      '@codekalakaars/vajra-native':
+      '@codekalakaars/vajra-core':
         specifier: workspace:*
         version: link:../..
       '@codekalakaars/vajra-sandbox':
