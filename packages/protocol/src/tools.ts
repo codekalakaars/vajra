@@ -202,6 +202,94 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
   },
 })
 
+export interface CircuitComponent {
+  reference: string
+  value: string
+  footprint: string
+  symbol: string
+}
+
+export interface CircuitNet {
+  name: string
+  connections: Array<{ reference: string; pin: string }>
+}
+
+export interface TextToSchematicArgs {
+  components: CircuitComponent[]
+  nets: CircuitNet[]
+}
+
+export const textToSchematicTool = defineTool<TextToSchematicArgs>({
+  name: 'text_to_schematic',
+  description:
+    'Convert a structured circuit description into a schematic representation. ' +
+    'Define components (reference, value, footprint, symbol) and nets (connections between component pins). ' +
+    'Returns a parsed schematic that can be used to generate PCB layouts.',
+  nativeFn: 'textToSchematic',
+  schema: z.object({
+    components: z.array(z.object({
+      reference: z.string().describe('Component reference designator (e.g., R1, C1, U1)'),
+      value: z.string().describe('Component value (e.g., 10k, 100nF, LM7805)'),
+      footprint: z.string().describe('KiCad footprint (e.g., Resistor_SMD:R_0402_1005Metric)'),
+      symbol: z.string().describe('KiCad symbol library ID (e.g., Device:R, Package_TO_SOT_SMD:SOT-223-3_TabPin2)'),
+    })),
+    nets: z.array(z.object({
+      name: z.string().describe('Net name (e.g., VCC, GND, SIG)'),
+      connections: z.array(z.object({
+        reference: z.string().describe('Component reference'),
+        pin: z.string().describe('Pin name or number'),
+      })),
+    })),
+  }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      components: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            reference: { type: 'string', description: 'Component reference designator (e.g., R1, C1, U1)' },
+            value: { type: 'string', description: 'Component value (e.g., 10k, 100nF, LM7805)' },
+            footprint: { type: 'string', description: 'KiCad footprint (e.g., Resistor_SMD:R_0402_1005Metric)' },
+            symbol: { type: 'string', description: 'KiCad symbol library ID (e.g., Device:R, Package_TO_SOT_SMD:SOT-223-3_Pin2)' },
+          },
+          required: ['reference', 'value', 'footprint', 'symbol'],
+          additionalProperties: false,
+        },
+        description: 'List of electronic components in the circuit.',
+      },
+      nets: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Net name (e.g., VCC, GND, SIG)' },
+            connections: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  reference: { type: 'string', description: 'Component reference designator' },
+                  pin: { type: 'string', description: 'Pin name or number' },
+                },
+                required: ['reference', 'pin'],
+                additionalProperties: false,
+              },
+              description: 'Component pins connected to this net.',
+            },
+          },
+          required: ['name', 'connections'],
+          additionalProperties: false,
+        },
+        description: 'List of electrical nets connecting component pins.',
+      },
+    },
+    required: ['components', 'nets'],
+    additionalProperties: false,
+  },
+})
+
 export const toolDefinitions = {
   read_file: readFileTool,
   list_files: listFilesTool,
@@ -210,13 +298,14 @@ export const toolDefinitions = {
   write_file: writeFileTool,
   edit_file: editFileTool,
   propose_plan: proposePlanTool,
+  text_to_schematic: textToSchematicTool,
 } as const satisfies Record<string, ToolDefinition>
 
 export type ToolName = keyof typeof toolDefinitions
 
 export const roleTools: Record<string, ToolName[]> = {
   manager: ['read_file', 'list_files', 'search_files', 'propose_plan'],
-  master: ['read_file', 'list_files', 'search_files', 'run_command'],
+  master: ['read_file', 'list_files', 'search_files', 'run_command', 'text_to_schematic'],
   worker: ['read_file', 'list_files', 'search_files', 'write_file', 'edit_file'],
 }
 
