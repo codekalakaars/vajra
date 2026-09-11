@@ -1,20 +1,38 @@
 {
-  "name": "@vajra/sandbox",
+  "name": "@codekalakaars/vajra-sandbox",
   "version": "0.1.0",
-  "private": true,
+  "description": "OS-level sandboxing and file-permission enforcement for Vajra AI agents",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codekalakaars/vajra.git"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "vajra": "dist/cli.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test \"test/*.test.mjs\"",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": {
-    "@vajra/protocol": "workspace:*"
+  "dependencies": {},
+  "peerDependencies": {
+    "@codekalakaars/vajra-core": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@codekalakaars/vajra-core": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^22.5.4",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "@codekalakaars/vajra-core": "workspace:*"
   }
 }

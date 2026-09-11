@@ -11,10 +11,6 @@ export function registerSessionHandlers(router: RpcRouter<ServerContext>): void 
     }
     const result = await ctx.sessions.create(withDefaultModel, (sessionId) => ctx.connection.subscribe(sessionId))
 
-    // Start the agent loop in the background — the handler returns immediately
-    // with the sessionId, and the loop runs concurrently, emitting push events
-    // as it progresses. Skip if task is empty (user will send via sendMessage)
-    // or if the launcher failed (status would be 'failed', no handle set).
     const status = ctx.sessions.getStatus(result.sessionId)
     if (ctx.apiKey && withDefaultModel.task && status === 'running') {
       ctx.sessions.startSession(result.sessionId, ctx.apiKey).catch((err) => {
@@ -28,8 +24,6 @@ export function registerSessionHandlers(router: RpcRouter<ServerContext>): void 
   router.register('session.list', (_params: unknown, ctx) => ctx.sessions.list())
 
   router.register('session.attach', (params: SessionAttachParams, ctx) => {
-    // Subscribing before reading current state means no push event fired
-    // between the read and the subscription can be missed.
     ctx.connection.subscribe(params.sessionId)
     return ctx.sessions.attach(params.sessionId)
   })

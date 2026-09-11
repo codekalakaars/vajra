@@ -1,9 +1,6 @@
-// Payload shapes for the concrete RPC methods and push events this app uses.
-//
-// Shapes that mirror vajra-native's own types (PermissionsConfig,
-// ProjectFileEntry, SandboxResult) are hand-duplicated rather than imported —
-// this package must stay loadable in a browser bundle, and vajra-native pulls
-// in a `.node` addon loader that can't run there.
+// Payload shapes for RPC methods and push events.
+// Shapes mirroring vajra-core types are hand-duplicated — this package
+// must stay loadable in a browser bundle.
 
 export interface FilePermissions {
   read: boolean
@@ -27,8 +24,6 @@ export interface ProjectFileEntry {
 
 export type SessionStatus = 'starting' | 'running' | 'done' | 'failed' | 'stopped'
 
-// ---- RPC method params/results ----
-
 export interface ProjectLoadPermissionsParams {
   projectDir: string
 }
@@ -50,10 +45,7 @@ export interface SessionCreateParams {
   permissions: PermissionsConfig
   task: string
   model: string
-  /**
-   * Must originate from an explicit user confirmation in the UI, never a
-   * default — see the security invariant checklist in the project plan.
-   */
+  /** Must originate from an explicit user confirmation in the UI. */
   allowUnenforced?: boolean
 }
 export interface SessionCreateResult {
@@ -106,8 +98,6 @@ export interface SessionSendMessageParams {
 }
 export type SessionSendMessageResult = { ok: true }
 
-// ---- Push event payloads ----
-
 export interface SandboxStatusPayload {
   enforced: boolean
   mechanism: string
@@ -126,7 +116,6 @@ export interface ThinkingDeltaPayload {
   text: string
 }
 
-/** Maps each push-event name to its payload type, for a typed subscriber. */
 export interface PushEventPayloads {
   'session.sandboxStatus': SandboxStatusPayload
   'session.assistantDelta': AssistantDeltaPayload

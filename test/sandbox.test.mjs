@@ -163,6 +163,46 @@ test('per-file permissions deny writes to a read-only file', (t) => {
   rmSync(project, { recursive: true, force: true })
 })
 
+test('a per-file rule can deny reads even when the project default allows them', (t) => {
+  if (!enforces) {
+    t.skip(`no enforcement on ${caps.platform}`)
+    return
+  }
+  if (caps.platform !== 'linux') {
+    // Landlock's rules are additive within one ruleset — a directory-level
+    // grant recursively covers everything beneath it, and no narrower rule
+    // on a descendant can revoke it. This regression is specific to that
+    // model; macOS's SBPL backend is last-match-wins and never had it.
+    t.skip('regression coverage for the Landlock-specific additive-rule bug')
+    return
+  }
+
+  const project = outsideAnyGrant('narrow-read')
+  writeFileSync(join(project, 'secret.txt'), 'hunter2')
+  writeFileSync(join(project, 'public.txt'), 'data')
+
+  // The default is readable — this is the case that used to leak: a
+  // directory-level rule built from `default.read` recursively exposed
+  // READ_FILE to every path beneath it, including one explicitly marked
+  // read: false.
+  const permissions = native.defaultPermissions()
+  permissions.files['secret.txt'] = { read: false, write: false, edit: false, delete: false }
+
+  const result = runChild({
+    config: { projectDir: project, permissions },
+    probes: {
+      secretRead: { kind: 'read', path: join(project, 'secret.txt') },
+      publicRead: { kind: 'read', path: join(project, 'public.txt') },
+    },
+  })
+
+  assert.equal(result.error, null, `applySandbox failed: ${result.error}`)
+  assert.equal(result.probes.secretRead.ok, false, 'an explicitly denied file must not be readable just because the project default is')
+  assert.ok(result.probes.publicRead.ok, 'a file with no override must still follow the readable default')
+
+  rmSync(project, { recursive: true, force: true })
+})
+
 test('a missing project directory is rejected', (t) => {
   if (!enforces) {
     t.skip(`no enforcement on ${caps.platform}`)

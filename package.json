@@ -1,5 +1,5 @@
 {
-  "name": "vajra-native",
+  "name": "@codekalakaars/vajra-core",
   "version": "0.1.0",
   "description": "Cross-platform native operations for Vajra",
   "main": "index.js",
@@ -13,7 +13,7 @@
     "url": "https://github.com/codekalakaars/vajra/issues"
   },
   "napi": {
-    "name": "vajra-native",
+    "name": "vajra-core",
     "triples": {
       "defaults": true,
       "additional": [
@@ -26,13 +26,13 @@
     }
   },
   "scripts": {
-    "build": "napi build --platform --release",
-    "build:debug": "napi build --platform",
+    "build": "napi build --platform --release --cargo-cwd packages/core",
+    "build:debug": "napi build --platform --cargo-cwd packages/core",
     "prepublishOnly": "napi prepublish -t npm",
     "universal": "napi universal",
     "test": "node --test \"test/*.test.mjs\"",
-    "test:rust": "cargo test",
-    "lint": "cargo clippy --all-targets -- -D warnings",
+    "test:rust": "cargo test --manifest-path packages/core/Cargo.toml",
+    "lint": "cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnings",
     "dev": "turbo run dev --filter=@vajra/server --filter=@vajra/web",
     "dev:all": "pnpm -r --parallel dev",
     "build:all": "turbo run build",

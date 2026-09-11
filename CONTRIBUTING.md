@@ -1,7 +1,7 @@
 # Contributing to Vajra
 
 Vajra is mid-rewrite: the project is moving from a standalone Linux-only Rust
-CLI to `vajra-native`, a napi-rs addon driven by a TypeScript harness. Read the
+CLI to `vajra-core`, a napi-rs addon driven by a TypeScript harness. Read the
 [README](README.md) first — in particular which layers exist today and which
 are still only in [`legacy/`](legacy/).
 
