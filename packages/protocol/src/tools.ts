@@ -147,10 +147,24 @@ export const editFileTool = defineTool({
 export interface PlannedTaskInput {
   title: string
   description: string
-  files: string[]
-  validation: string
+  /** Step-by-step instructions — exactly what the worker should do. */
+  instructions: string[]
+  /** Files to read (read-only access). */
+  readFile: string[]
+  /** Files to write/edit (read-write access). */
+  writeFile: string[]
+  /** Files to delete. */
+  deleteFile: string[]
+  /** Directories to create. */
+  createDir: string[]
+  /** Validation commands to run after completion. */
+  validation: string[]
+  /** Task IDs this depends on. */
   dependsOn: string[]
+  /** Task type. */
   type: 'create' | 'modify' | 'delete' | 'refactor'
+  /** Tools this worker can use. Omit for task-type defaults. */
+  allowedTools?: string[]
 }
 
 export interface ProposePlanArgs {
@@ -163,16 +177,22 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
   description:
     'Propose a structured plan for the user\'s task. Call this when you have ' +
     'gathered enough context through conversation. Do NOT call on the first message — ' +
-    'gather context first by asking clarifying questions and exploring the codebase.',
+    'gather context first by asking clarifying questions and exploring the codebase. ' +
+    'Each task must have EXACT instructions for the worker — no ambiguity.',
   nativeFn: '',
   schema: z.object({
     tasks: z.array(z.object({
       title: z.string(),
       description: z.string(),
-      files: z.array(z.string()),
-      validation: z.string(),
+      instructions: z.array(z.string()),
+      readFile: z.array(z.string()),
+      writeFile: z.array(z.string()),
+      deleteFile: z.array(z.string()),
+      createDir: z.array(z.string()),
+      validation: z.array(z.string()),
       dependsOn: z.array(z.string()),
       type: z.enum(['create', 'modify', 'delete', 'refactor']),
+      allowedTools: z.array(z.string()).optional(),
     })),
     summary: z.string(),
   }),
@@ -185,13 +205,50 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
           type: 'object',
           properties: {
             title: { type: 'string', description: 'Short title for the task.' },
-            description: { type: 'string', description: 'What needs to be done.' },
-            files: { type: 'array', items: { type: 'string' }, description: 'Project-relative file paths this task touches.' },
-            validation: { type: 'string', description: 'Command to verify task completion (e.g. "cargo test", "npm test").' },
-            dependsOn: { type: 'array', items: { type: 'string' }, description: 'Task indices this depends on (empty if independent).' },
+            description: { type: 'string', description: 'What needs to be done and why.' },
+            instructions: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Step-by-step instructions. Each step should be a single action. Example: ["In src/api.ts, add a try-catch around the db.query() call on line 42", "Return a 500 status with { error: e.message } in the catch block"]',
+            },
+            readFile: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Files the worker needs to read (read-only). Include files needed for context.',
+            },
+            writeFile: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Files the worker will create or modify (read-write).',
+            },
+            deleteFile: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Files to delete.',
+            },
+            createDir: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Directories to create.',
+            },
+            validation: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Commands to run after completion. Pass if ALL exit 0. Example: ["cargo test", "cargo clippy -- -D warnings"]',
+            },
+            dependsOn: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Task IDs this depends on (empty if independent).',
+            },
             type: { type: 'string', description: 'Task type: create, modify, delete, or refactor.' },
+            allowedTools: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tools this worker can use. Omit for defaults: create/modify get read+write+edit, delete gets read+delete.',
+            },
           },
-          required: ['title', 'description', 'files', 'validation', 'dependsOn', 'type'],
+          required: ['title', 'description', 'instructions', 'readFile', 'writeFile', 'deleteFile', 'createDir', 'validation', 'dependsOn', 'type'],
           additionalProperties: false,
         },
       },

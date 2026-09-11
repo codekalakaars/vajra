@@ -99,11 +99,12 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     for (const task of readyTasks) {
       // Try to acquire locks atomically - this prevents race conditions
       // where two tasks both pass the filter then both acquire locks
-      if (fileLocks.tryAcquire(task.files, task.id, 'write')) {
+      const allTaskFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
+      if (fileLocks.tryAcquire(allTaskFiles, task.id, 'write')) {
         assignable.push(task)
       } else {
         // Could not acquire locks - check which files are causing conflict
-        for (const file of task.files) {
+        for (const file of allTaskFiles) {
           const owners = fileLocks.getOwners(file)
           const otherOwner = owners.find((o) => o !== task.id)
           if (otherOwner) {
@@ -221,20 +222,38 @@ async function executeTask(
   let toolCallCount = 0
 
   try {
-    // Build a mini system prompt for the worker
+    // Build a prescriptive system prompt for the worker
+    const instructionLines = task.instructions.map((inst, i) => `${i + 1}. ${inst}`).join('\n')
+    const readFileList = task.readFile.length > 0 ? task.readFile.join(', ') : '(none)'
+    const writeFileList = task.writeFile.length > 0 ? task.writeFile.join(', ') : '(none)'
+    const deleteFileList = task.deleteFile.length > 0 ? task.deleteFile.join(', ') : '(none)'
+    const createDirList = task.createDir.length > 0 ? task.createDir.join(', ') : '(none)'
+
     const systemPrompt = [
-      `You are a worker agent executing a specific task.`,
+      'You are a worker agent. Follow the instructions EXACTLY. Do not deviate.',
       '',
-      `Task: ${task.title}`,
-      task.description ? `Description: ${task.description}` : '',
-      `Files: ${task.files.join(', ') || '(no specific files)'}`,
+      `TASK: ${task.title}`,
+      task.description ? `WHY: ${task.description}` : '',
       '',
-      'Execute the task using the available tools. When done, respond with a summary.',
+      'INSTRUCTIONS (follow in order):',
+      instructionLines,
+      '',
+      `FILES TO READ: ${readFileList}`,
+      `FILES TO WRITE: ${writeFileList}`,
+      `FILES TO DELETE: ${deleteFileList}`,
+      `DIRS TO CREATE: ${createDirList}`,
+      '',
+      'RULES:',
+      '- Execute each instruction step by step',
+      '- Read each readFile first to understand the current code',
+      '- Make precise edits using edit_file (not write_file for existing files)',
+      '- Use write_file only for new files',
+      '- After completing all instructions, respond with a brief summary of what was done',
     ].join('\n')
 
     const messages: OpenRouterMessage[] = [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: task.title },
+      { role: 'user', content: `Execute task: ${task.title}` },
     ]
 
     // Tool-use loop
@@ -274,26 +293,32 @@ async function executeTask(
 
     // Task completed — run validation if specified
     let validationPassed = true
-    if (task.validation) {
-      events.push('session.workerProgress', sessionId, {
-        sessionId,
-        agentId,
-        taskId: task.id,
-        detail: `Running validation: ${task.validation}`,
-      })
-
-      try {
-        // Validation is run through the handle (which has run_command)
-        const validationResult = await handle.callTool('run_command', {
-          command: task.validation,
-          timeout: VALIDATION_TIMEOUT,
+    if (task.validation.length > 0) {
+      for (const cmd of task.validation) {
+        events.push('session.workerProgress', sessionId, {
+          sessionId,
+          agentId,
+          taskId: task.id,
+          detail: `Running validation: ${cmd}`,
         })
-        const output = typeof validationResult === 'string' ? validationResult : JSON.stringify(validationResult)
-        validationPassed = !output.toLowerCase().includes('error') && !output.toLowerCase().includes('fail')
-        queue.recordValidation(task.id, output, validationPassed)
-      } catch (e) {
-        validationPassed = false
-        queue.recordValidation(task.id, `Validation failed: ${e instanceof Error ? e.message : String(e)}`, false)
+
+        try {
+          const validationResult = await handle.callTool('run_command', {
+            command: cmd,
+            timeout: VALIDATION_TIMEOUT,
+          })
+          const output = typeof validationResult === 'string' ? validationResult : JSON.stringify(validationResult)
+          if (output.toLowerCase().includes('error') || output.toLowerCase().includes('fail')) {
+            validationPassed = false
+            queue.recordValidation(task.id, `${cmd}\n${output}`, false)
+            break
+          }
+          queue.recordValidation(task.id, `${cmd}\n${output}`, true)
+        } catch (e) {
+          validationPassed = false
+          queue.recordValidation(task.id, `${cmd}\nError: ${e instanceof Error ? e.message : String(e)}`, false)
+          break
+        }
       }
     }
 
@@ -312,7 +337,7 @@ async function executeTask(
       const retries = task.retries ?? 0
 
       if (retries < MAX_RETRIES) {
-        queue.recordValidation(task.id, `${task.validationOutput ?? ''}\n[retry ${retries + 1}/${MAX_RETRIES}]`, false)
+        queue.recordValidation(task.id, `\n[retry ${retries + 1}/${MAX_RETRIES}]`, false)
         // Reset task to pending so it gets retried on the next loop iteration
         queue.retryTask(task.id)
       } else {
@@ -323,7 +348,7 @@ async function executeTask(
           sessionId,
           agentId,
           taskId: task.id,
-          error: `Validation failed after ${MAX_RETRIES} retries: ${task.validationOutput ?? 'unknown'}`,
+          error: `Validation failed after ${MAX_RETRIES} retries`,
         })
       }
     }
@@ -359,20 +384,33 @@ async function executeTask(
 function computeTaskPermissions(task: TaskState): PermissionsConfig {
   const files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> = {}
 
-  // Grant read+write to files this task touches
-  for (const filePath of task.files) {
-    files[filePath] = { read: true, write: true, edit: false, delete: false }
+  // Read-only files
+  for (const filePath of task.readFile) {
+    files[filePath] = { read: true, write: false, edit: false, delete: false }
   }
 
-  // Grant read-only to parent directories for traversal
-  const dirs = new Set(task.files.map((f) => {
+  // Read-write files
+  for (const filePath of task.writeFile) {
+    files[filePath] = { read: true, write: true, edit: true, delete: false }
+  }
+
+  // Delete files
+  for (const filePath of task.deleteFile) {
+    files[filePath] = { read: true, write: false, edit: false, delete: true }
+  }
+
+  // Grant read to parent directories for traversal
+  const allFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
+  const dirs = new Set(allFiles.map((f) => {
     const parts = f.split('/')
     parts.pop()
     return parts.join('/')
   }).filter(Boolean))
 
   for (const dir of dirs) {
-    files[dir] = { read: true, write: false, edit: false, delete: false }
+    if (!files[dir]) {
+      files[dir] = { read: true, write: false, edit: false, delete: false }
+    }
   }
 
   return {
@@ -383,13 +421,22 @@ function computeTaskPermissions(task: TaskState): PermissionsConfig {
 }
 
 function computeToolPermissions(task: TaskState): string[] {
+  // Use explicit allowedTools if provided
+  if (task.toolPermissions) {
+    return JSON.parse(task.toolPermissions)
+  }
+
+  // Default: read + write + edit for create/modify, read + delete for delete
   const tools = ['read_file', 'list_files', 'search_files']
 
-  if (task.type === 'create' || task.type === 'modify') {
+  if (task.type === 'create' || task.type === 'modify' || task.type === 'refactor') {
     tools.push('write_file', 'edit_file')
   }
   if (task.type === 'delete') {
     tools.push('delete_file')
+  }
+  if (task.createDir.length > 0) {
+    tools.push('create_dir')
   }
 
   return tools
