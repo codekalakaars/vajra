@@ -10,10 +10,6 @@ env:
 
 jobs:
   check:
-    # The whole point of the native core is that it works on all three
-    # platforms, and only a matrix can demonstrate that. Testing on Linux
-    # alone would leave the Windows PATHEXT lookup and the macOS build
-    # entirely unexercised.
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -27,9 +23,6 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install stable --profile minimal --component clippy
 
-      # v6 runs on node24; v4 targeted node20, which GitHub has deprecated and
-      # was force-running on node24 with a warning on every job.
-      # Version is auto-detected from package.json's "packageManager" field.
       - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v5
@@ -43,21 +36,18 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+            packages/core/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('packages/core/Cargo.lock') }}
 
       - name: Clippy (deny warnings)
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnings
 
       - name: Rust unit tests
-        run: cargo test
+        run: cargo test --manifest-path packages/core/Cargo.toml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Builds the addon and runs the Node smoke suite against it. This is what
-      # catches problems that only exist at the JS boundary: a struct exported
-      # as a class, or a loader that cannot find the platform binary.
       - name: Build native addon
         run: pnpm run build
 

@@ -223,4 +223,51 @@ export class FileLockManager {
       this.waiters.delete(file)
     }
   }
+
+  /** Release all locks held by an owner. Called on agent disconnect. */
+  releaseAll(owner: string): string[] {
+    const released: string[] = []
+    for (const [file, locks] of this.locks) {
+      const idx = locks.findIndex((l) => l.owner === owner)
+      if (idx !== -1) {
+        locks.splice(idx, 1)
+        released.push(file)
+        if (locks.length === 0) this.locks.delete(file)
+      }
+    }
+    return released
+  }
+
+  /** Clear all locks. */
+  clear(): void {
+    this.drain()
+  }
+
+  /** Acquire a single-file lock. Returns {ok, lock?, error?}. */
+  acquire(file: string, owner: string, mode: LockMode): { ok: boolean; lock?: Lock; error?: string } {
+    if (this.tryAcquire([file], owner, mode)) {
+      const lock: Lock = { mode, owner, acquiredAt: Date.now() }
+      return { ok: true, lock }
+    }
+    return { ok: false, error: `File '${file}' is locked` }
+  }
+
+  /** Release a single-file lock. */
+  releaseFile(file: string, owner: string): boolean {
+    const locks = this.locks.get(file)
+    if (!locks) return false
+    const idx = locks.findIndex((l) => l.owner === owner)
+    if (idx === -1) return false
+    locks.splice(idx, 1)
+    if (locks.length === 0) this.locks.delete(file)
+    this.ownerFiles.get(owner)?.delete(file)
+    return true
+  }
+
+  /** List all active locks. */
+  list(): Lock[] {
+    const result: Lock[] = []
+    for (const locks of this.locks.values()) result.push(...locks)
+    return result
+  }
 }

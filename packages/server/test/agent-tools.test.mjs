@@ -4,7 +4,7 @@ import { getToolSpecs, parseToolCall } from '../dist/agent/tools.js'
 
 test('getToolSpecs matches the protocol package tool count', () => {
   const specs = getToolSpecs()
-  assert.equal(specs.length, 7)
+  assert.equal(specs.length, 15)
   assert.ok(specs.every((s) => s.type === 'function'))
   assert.ok(!specs.some((s) => s.function.name === 'run_shell'))
 })
