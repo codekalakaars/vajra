@@ -5,7 +5,7 @@
 // is built by the parent process and passed to the worker — the worker never
 // modifies it.
 
-import type { FilePermissions } from '@vajra/protocol'
+import type { FilePermissions } from './types.js'
 
 /** A single file access rule, matched against project-relative paths. */
 export interface FileRule {

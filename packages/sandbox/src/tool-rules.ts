@@ -1,11 +1,37 @@
 // Tool access restriction.
 //
-// Filters the tool definitions from @vajra/protocol based on a SandboxConfig.
-// The sandbox config specifies which tool names are allowed; the worker enforces
-// this list at dispatch time.
+// Filters tool names based on a SandboxConfig. The sandbox config specifies
+// which tool names are allowed; the worker enforces this list at dispatch time.
+//
+// This module has zero dependency on @vajra/protocol — the known tool names
+// are defined here so the sandbox package stays standalone.
 
-import { toolDefinitions, type ToolName } from '@vajra/protocol'
 import type { SandboxConfig } from './config.js'
+
+/** All known tool names across the system. */
+export const KNOWN_TOOLS = [
+  // File operations
+  'read_file',
+  'write_file',
+  'edit_file',
+  'delete_file',
+  'copy_file',
+  'rename_file',
+  // Directory operations
+  'create_dir',
+  'delete_dir',
+  'list_files',
+  // Process execution
+  'run_command',
+  // KiCad tools
+  'parse_schematic',
+  'generate_pcb',
+  'run_drc',
+  'export_gerbers',
+  'export_bom',
+] as const
+
+export type ToolName = (typeof KNOWN_TOOLS)[number]
 
 /** Default tools per agent role. Used when no explicit allowedTools is set. */
 const ROLE_DEFAULTS: Record<string, ToolName[]> = {
@@ -22,14 +48,14 @@ const ROLE_DEFAULTS: Record<string, ToolName[]> = {
  *  2. If `role` is provided, use `ROLE_DEFAULTS[role]` as the base.
  *  3. If neither is set, all known tools are allowed.
  *
- * Every returned name is validated against `toolDefinitions` — unknown names
+ * Every returned name is validated against `KNOWN_TOOLS` — unknown names
  * are silently dropped rather than producing a tool the worker cannot dispatch.
  */
 export function resolveAllowedTools(
   config: SandboxConfig,
   role?: string,
 ): string[] {
-  const knownTools = new Set(Object.keys(toolDefinitions))
+  const knownSet = new Set<string>(KNOWN_TOOLS)
 
   let candidates: string[]
 
@@ -38,8 +64,8 @@ export function resolveAllowedTools(
   } else if (role && ROLE_DEFAULTS[role]) {
     candidates = [...ROLE_DEFAULTS[role]]
   } else {
-    candidates = Object.keys(toolDefinitions)
+    candidates = [...KNOWN_TOOLS]
   }
 
-  return candidates.filter((name) => knownTools.has(name))
+  return candidates.filter((name) => knownSet.has(name))
 }

@@ -5,7 +5,7 @@
 // maps to worker parameters — the sandbox package owns that translation.
 
 import type { SandboxConfig, FileRule } from './config.js'
-import type { FilePermissions } from '@vajra/protocol'
+import type { FilePermissions } from './types.js'
 import { resolveFilePermissions } from './file-rules.js'
 import { resolveAllowedTools } from './tool-rules.js'
 
