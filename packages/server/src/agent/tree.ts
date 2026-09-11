@@ -1,4 +1,4 @@
-import type { ProjectFileEntry } from '@vajra/protocol'
+import type { ProjectFileEntry } from '@codekalakaars/protocol'
 
 const MAX_DEPTH = 3
 

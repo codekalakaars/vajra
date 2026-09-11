@@ -5,7 +5,7 @@
 // maps to worker parameters — the sandbox package owns that translation.
 
 import type { SandboxConfig, FileRule } from './config.js'
-import type { FilePermissions } from '@vajra/protocol'
+import type { FilePermissions } from '@codekalakaars/protocol'
 import { resolveFilePermissions } from './file-rules.js'
 import { resolveAllowedTools } from './tool-rules.js'
 import type { ResourceLimits } from './resources.js'
@@ -34,7 +34,7 @@ export interface LaunchJob {
  * Build a LaunchJob from a SandboxConfig.
  *
  * The worker receives this object as its initial IPC message and uses it to:
- *  1. Apply the native sandbox (via vajra-native's applySandbox)
+ *  1. Apply the native sandbox (via vajra-core's applySandbox)
  *  2. Filter tool calls (via the allowedTools list)
  *  3. Evaluate file rules per tool call (via fileRules + defaultFilePermissions)
  */

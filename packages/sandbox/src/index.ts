@@ -1,4 +1,4 @@
-// @vajra/sandbox — programmatically configurable sandbox policy.
+// @codekalakaars/sandbox — programmatically configurable sandbox policy.
 //
 // Provides a TypeScript API for building sandbox configurations that restrict
 // what files a worker can access and what tools it can call. The config is

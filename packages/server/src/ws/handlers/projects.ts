@@ -1,6 +1,6 @@
 import type { RpcRouter } from '../rpc.js'
 import type { ServerContext } from '../server.js'
-import type { ProjectLoadPermissionsParams, ProjectSavePermissionsParams, ProjectScanParams } from '@vajra/protocol'
+import type { ProjectLoadPermissionsParams, ProjectSavePermissionsParams, ProjectScanParams } from '@codekalakaars/protocol'
 import { loadPermissions, defaultPermissions, savePermissions, scanProject } from '../../native.js'
 
 export function registerProjectHandlers(router: RpcRouter<ServerContext>): void {

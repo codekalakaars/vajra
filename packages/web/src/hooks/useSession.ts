@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { VajraClient } from '../client'
-import type { PlannedTask, AgentStatePayload, ConflictPayload, ManagerPlan } from '@vajra/protocol'
+import type { PlannedTask, AgentStatePayload, ConflictPayload, ManagerPlan } from '@codekalakaars/protocol'
 
 // Singleton client — persists across re-renders
 let clientSingleton: VajraClient | null = null

@@ -1,5 +1,5 @@
 {
-  "name": "vajra-native",
+  "name": "@codekalakaars/vajra-core",
   "version": "0.1.0",
   "description": "Cross-platform native operations for Vajra",
   "main": "index.js",
@@ -13,7 +13,7 @@
     "url": "https://github.com/codekalakaars/vajra/issues"
   },
   "napi": {
-    "name": "vajra-native",
+    "name": "vajra-core",
     "triples": {
       "defaults": true,
       "additional": [

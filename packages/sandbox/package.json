@@ -1,5 +1,5 @@
 {
-  "name": "@vajra/sandbox",
+  "name": "@codekalakaars/sandbox",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,8 +20,8 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@vajra/protocol": "workspace:*",
-    "vajra-native": "workspace:*"
+    "@codekalakaars/protocol": "workspace:*",
+    "@codekalakaars/vajra-core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.5.4",
