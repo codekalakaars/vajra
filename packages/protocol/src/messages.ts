@@ -1,9 +1,6 @@
-// Payload shapes for the concrete RPC methods and push events this app uses.
-//
-// Shapes that mirror vajra-native's own types (PermissionsConfig,
-// ProjectFileEntry, SandboxResult) are hand-duplicated rather than imported —
-// this package must stay loadable in a browser bundle, and vajra-native pulls
-// in a `.node` addon loader that can't run there.
+// Payload shapes for RPC methods and push events.
+// Shapes mirroring vajra-core types are hand-duplicated — this package
+// must stay loadable in a browser bundle.
 
 export interface FilePermissions {
   read: boolean
@@ -26,8 +23,6 @@ export interface ProjectFileEntry {
 }
 
 export type SessionStatus = 'starting' | 'talking' | 'confirming' | 'planning' | 'executing' | 'running' | 'done' | 'failed' | 'stopped'
-
-// ---- Multi-agent types ----
 
 export type AgentRole = 'manager' | 'master' | 'worker'
 export type AgentStatus = 'pending' | 'running' | 'done' | 'failed'
@@ -71,8 +66,6 @@ export interface ConflictPayload {
   files: string[]
 }
 
-// ---- RPC method params/results ----
-
 export interface ProjectLoadPermissionsParams {
   projectDir: string
 }
@@ -94,10 +87,7 @@ export interface SessionCreateParams {
   permissions: PermissionsConfig
   task: string
   model: string
-  /**
-   * Must originate from an explicit user confirmation in the UI, never a
-   * default — see the security invariant checklist in the project plan.
-   */
+  /** Must originate from an explicit user confirmation in the UI. */
   allowUnenforced?: boolean
 }
 export interface SessionCreateResult {
@@ -162,8 +152,6 @@ export interface SessionRejectPlanParams {
 }
 export type SessionRejectPlanResult = { ok: true }
 
-// ---- Push event payloads ----
-
 export interface SandboxStatusPayload {
   enforced: boolean
   mechanism: string
@@ -182,9 +170,7 @@ export interface ThinkingDeltaPayload {
   text: string
 }
 
-/** Maps each push-event name to its payload type, for a typed subscriber. */
 export interface PushEventPayloads {
-  // Session lifecycle
   'session.statusChanged': { status: SessionStatus }
   'session.sandboxStatus': SandboxStatusPayload
   'session.assistantDelta': AssistantDeltaPayload
@@ -192,21 +178,15 @@ export interface PushEventPayloads {
   'session.completed': Record<string, never>
   'session.failed': FailedPayload
   'session.deleted': { sessionId: string }
-
-  // Manager events
   'session.planStarted': { sessionId: string }
   'session.planTask': { sessionId: string; task: PlannedTask }
   'session.planComplete': { sessionId: string; plan: ManagerPlan }
   'session.planProposed': { sessionId: string; plan: ManagerPlan }
   'session.planConfirmed': Record<string, never>
-
-  // Worker events
   'session.workerStarted': { sessionId: string; agentId: string; taskId: string }
   'session.workerProgress': { sessionId: string; agentId: string; task: string; detail: string }
   'session.workerCompleted': { sessionId: string; agentId: string; taskId: string; validationPassed: boolean }
   'session.workerFailed': { sessionId: string; agentId: string; taskId: string; error: string }
-
-  // Conflict events
   'session.conflictDetected': { sessionId: string } & ConflictPayload
   'session.conflictResolved': { sessionId: string; task1: string; task2: string; resolution: string }
 }

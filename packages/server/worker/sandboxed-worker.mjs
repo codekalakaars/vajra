@@ -19,13 +19,13 @@
 // project plan.
 
 import { createRequire } from 'node:module'
-import { toolDefinitions } from '@vajra/protocol'
+import { toolDefinitions } from '@codekalakaars/protocol'
 
 const require = createRequire(import.meta.url)
-const native = require('vajra-native')
+const native = require('vajra-core')
 
 // ---------------------------------------------------------------------------
-// Glob matching (inline — worker cannot import @vajra/sandbox ESM cleanly)
+// Glob matching (inline — worker cannot import @codekalakaars/sandbox ESM cleanly)
 // ---------------------------------------------------------------------------
 
 function matchSimpleGlob(text, pat, ti, pi) {
@@ -223,7 +223,7 @@ function handleToolCall(message) {
     const result = dispatchTable[tool](parsedArgs)
     send({ type: 'result', callId, ok: true, result })
   } catch (e) {
-    // Forwarded verbatim: this is the same message vajra-native itself
+    // Forwarded verbatim: this is the same message vajra-core itself
     // produced (editFile's ambiguous-match refusal, deleteFile's directory
     // guard, etc.) — no rewording layer that could soften or hide a refusal.
     const msg = e instanceof Error ? e.message : String(e)

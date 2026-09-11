@@ -19,7 +19,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 
 const require = createRequire(import.meta.url)
-const native = require('vajra-native')
+const native = require('vajra-core')
 
 // ---- Helpers ----
 

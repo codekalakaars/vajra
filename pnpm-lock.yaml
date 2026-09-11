@@ -27,10 +27,10 @@ importers:
 
   packages/sandbox:
     dependencies:
-      '@vajra/protocol':
+      '@codekalakaars/protocol':
         specifier: workspace:*
         version: link:../protocol
-      vajra-native:
+      '@codekalakaars/vajra-core':
         specifier: workspace:*
         version: link:../..
     devDependencies:
@@ -43,12 +43,15 @@ importers:
 
   packages/server:
     dependencies:
-      '@vajra/protocol':
+      '@codekalakaars/protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@vajra/sandbox':
+      '@codekalakaars/sandbox':
         specifier: workspace:*
         version: link:../sandbox
+      '@codekalakaars/vajra-core':
+        specifier: workspace:*
+        version: link:../..
       better-sqlite3:
         specifier: ^11.3.0
         version: 11.10.0
@@ -58,9 +61,6 @@ importers:
       openai:
         specifier: ^7.8.0
         version: 7.8.0(ws@8.21.3)(zod@3.25.76)
-      vajra-native:
-        specifier: workspace:*
-        version: link:../..
       ws:
         specifier: ^8.18.0
         version: 8.21.3
@@ -89,7 +89,7 @@ importers:
       '@assistant-ui/react':
         specifier: ^0.15.17
         version: 0.15.17(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      '@vajra/protocol':
+      '@codekalakaars/protocol':
         specifier: workspace:*
         version: link:../protocol
       highlight.js:

@@ -13,12 +13,12 @@
 
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../session/manager.js'
-import type { ManagerPlan, PlannedTask, PermissionsConfig, ToolName } from '@vajra/protocol'
-import { FileLockManager, type ResourceLimits } from '@vajra/sandbox'
+import type { ManagerPlan, PlannedTask, PermissionsConfig, ToolName } from '@codekalakaars/protocol'
+import { FileLockManager, type ResourceLimits } from '@codekalakaars/sandbox'
 import { TaskQueue, type TaskState } from './taskqueue.js'
 import { AgentRegistry, type AgentState } from './registry.js'
 import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
-import { toOpenAiToolSpecs, roleTools } from '@vajra/protocol'
+import { toOpenAiToolSpecs, roleTools } from '@codekalakaars/protocol'
 import type { WorkerPool } from '../session/pool.js'
 
 export interface MasterInput {

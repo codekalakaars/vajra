@@ -5,7 +5,7 @@
 // is built by the parent process and passed to the worker — the worker never
 // modifies it.
 
-import type { FilePermissions } from '@vajra/protocol'
+import type { FilePermissions } from '@codekalakaars/protocol'
 import type { ConcurrencyConfig } from './resources.js'
 import { resolveConcurrencyConfig } from './resources.js'
 

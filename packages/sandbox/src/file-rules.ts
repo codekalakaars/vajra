@@ -1,13 +1,13 @@
 // Glob matching and file permission resolution.
 //
 // Converts an array of FileRule patterns into a concrete PermissionsConfig
-// that vajra-native understands. Also filters ProjectFileEntry lists to only
+// that vajra-core understands. Also filters ProjectFileEntry lists to only
 // show files the sandbox allows.
 //
 // Glob support is intentionally minimal: *, **, ?, and ! negation. No brace
 // expansion, no character classes — keep config files human-readable.
 
-import type { FilePermissions, PermissionsConfig, ProjectFileEntry } from '@vajra/protocol'
+import type { FilePermissions, PermissionsConfig, ProjectFileEntry } from '@codekalakaars/protocol'
 import type { SandboxConfig, FileRule } from './config.js'
 
 // ---- Memoization cache for glob matching ----
@@ -225,12 +225,12 @@ export function resolveFilePermission(
 }
 
 /**
- * Build a PermissionsConfig (the shape vajra-native expects) from a
+ * Build a PermissionsConfig (the shape vajra-core expects) from a
  * SandboxConfig. The result contains a `files` map with one entry per
  * unique path that has non-default permissions.
  */
 export function resolveFilePermissions(config: SandboxConfig): PermissionsConfig {
-  // We need to produce a PermissionsConfig. The challenge: vajra-native
+  // We need to produce a PermissionsConfig. The challenge: vajra-core
   // applies rules per-path, but our glob patterns can match many paths.
   // We resolve this by keeping the defaultPermissions as the base and
   // encoding the glob rules so the worker can evaluate them at call time.
