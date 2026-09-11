@@ -262,14 +262,16 @@ export async function managerConversationTurn(
 
         const plan = parseProposePlanArgs(parsed)
 
-        // Persist the plan as the final assistant message
-        const planSeq = nextSeq(db, sessionId)
-        appendMessage(db, sessionId, planSeq, 'assistant', JSON.stringify(plan))
-
         // Emit plan events
+        events.push('session.planStarted', sessionId, { sessionId })
         for (const t of plan.tasks) {
           events.push('session.planTask', sessionId, { sessionId, task: t })
         }
+        events.push('session.planComplete', sessionId, { sessionId, plan })
+
+        // Persist the plan as the final assistant message
+        const planSeq = nextSeq(db, sessionId)
+        appendMessage(db, sessionId, planSeq, 'assistant', JSON.stringify(plan))
 
         return { type: 'plan', plan }
       }

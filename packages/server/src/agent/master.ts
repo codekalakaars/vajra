@@ -240,7 +240,7 @@ async function executeTask(
     // Tool-use loop
     while (toolCallCount < MAX_WORKER_TOOL_CALLS) {
       const result = await streamChatCompletion(
-        { apiKey, model, messages, tools: [] }, // tools filtered at worker level
+        { apiKey, model, messages, tools: WORKER_TOOL_SPECS },
         (text) => events.push('session.assistantDelta', sessionId, { text }),
         (thinking) => events.push('session.thinkingDelta', sessionId, { text: thinking }),
       )
@@ -309,12 +309,12 @@ async function executeTask(
       })
     } else {
       // Validation failed — retry if possible
-      const taskState = queue.getTask(task.id)
-      const retries = taskState?.validationOutput?.includes('retry') ? 0 : MAX_RETRIES
+      const retries = task.retries ?? 0
 
-      if (retries > 0) {
-        queue.recordValidation(task.id, `${taskState?.validationOutput ?? ''}\n[retrying]`, false)
-        // The task will be retried on the next loop iteration
+      if (retries < MAX_RETRIES) {
+        queue.recordValidation(task.id, `${task.validationOutput ?? ''}\n[retry ${retries + 1}/${MAX_RETRIES}]`, false)
+        // Reset task to pending so it gets retried on the next loop iteration
+        queue.retryTask(task.id)
       } else {
         queue.failTask(task.id)
         failedTasks.push(task.id)
@@ -323,7 +323,7 @@ async function executeTask(
           sessionId,
           agentId,
           taskId: task.id,
-          error: `Validation failed: ${taskState?.validationOutput ?? 'unknown'}`,
+          error: `Validation failed after ${MAX_RETRIES} retries: ${task.validationOutput ?? 'unknown'}`,
         })
       }
     }
