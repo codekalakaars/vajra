@@ -17,6 +17,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { resolve, join } from 'node:path'
+import { matchesPattern } from './file-rules.js'
 
 type NativeModule = typeof import('@codekalakaars/vajra-native')
 
@@ -106,6 +107,68 @@ function loadSandboxConfig(projectDir: string, environment?: string): SandboxJso
   }
 }
 
+/** Simple directory walk to collect project-relative file paths. */
+function walkProject(projectDir: string, maxDepth = 8): string[] {
+  const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
+  const files: string[] = []
+  const skip = new Set(['.git', 'node_modules', 'target', '.next', 'dist'])
+
+  function walk(dir: string, depth: number) {
+    if (depth > maxDepth) return
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (skip.has(entry.name)) continue
+      if (entry.name.startsWith('.') && entry.name !== '.sample.env') continue
+      const full = join(dir, entry.name)
+      const rel = full.slice(projectDir.length + 1)
+      if (entry.isDirectory()) {
+        walk(full, depth + 1)
+      } else if (entry.isFile()) {
+        files.push(rel)
+      }
+    }
+  }
+
+  walk(projectDir, 0)
+  return files
+}
+
+/** Expand fileRules against actual project files to build a permissions map. */
+function expandFileRules(
+  projectDir: string,
+  fileRules: FileRule[],
+  defaultPermissions: { read: boolean; write: boolean; edit: boolean; delete: boolean },
+): Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> {
+  const files = walkProject(projectDir)
+  const result: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> = {}
+
+  for (const file of files) {
+    let perms = { ...defaultPermissions }
+    for (const rule of fileRules) {
+      if (matchesPattern(file, rule.pattern)) {
+        if (rule.read !== undefined) perms.read = rule.read
+        if (rule.write !== undefined) perms.write = rule.write
+        if (rule.edit !== undefined) perms.edit = rule.edit
+        if (rule.delete !== undefined) perms.delete = rule.delete
+      }
+    }
+    // Only add entries that differ from default
+    if (perms.read !== defaultPermissions.read ||
+        perms.write !== defaultPermissions.write ||
+        perms.edit !== defaultPermissions.edit ||
+        perms.delete !== defaultPermissions.delete) {
+      result[file] = perms
+    }
+  }
+
+  return result
+}
+
 function printCapabilities(native: NativeModule | null) {
   if (!native) {
     console.log('Platform: unknown')
@@ -186,6 +249,14 @@ export async function run(native: NativeModule | null) {
   }
 
   const sandboxConfig = loadSandboxConfig(config.projectDir, config.environment)
+  const defaultPerms = {
+    read: sandboxConfig.defaultPermissions?.read ?? true,
+    write: sandboxConfig.defaultPermissions?.write ?? false,
+    edit: sandboxConfig.defaultPermissions?.edit ?? false,
+    delete: sandboxConfig.defaultPermissions?.delete ?? false,
+  }
+
+  // Start with explicit per-path permissions
   const files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> = {}
   if (sandboxConfig.files) {
     for (const [path, perms] of Object.entries(sandboxConfig.files)) {
@@ -197,14 +268,18 @@ export async function run(native: NativeModule | null) {
       }
     }
   }
+
+  // Expand fileRules (glob patterns) against actual project files
+  if (sandboxConfig.fileRules && sandboxConfig.fileRules.length > 0) {
+    const expanded = expandFileRules(config.projectDir, sandboxConfig.fileRules, defaultPerms)
+    for (const [path, perms] of Object.entries(expanded)) {
+      files[path] = perms
+    }
+  }
+
   const permissions = {
     version: 1 as const,
-    default: {
-      read: sandboxConfig.defaultPermissions?.read ?? true,
-      write: sandboxConfig.defaultPermissions?.write ?? false,
-      edit: sandboxConfig.defaultPermissions?.edit ?? false,
-      delete: sandboxConfig.defaultPermissions?.delete ?? false,
-    },
+    default: defaultPerms,
     files,
   }
 
