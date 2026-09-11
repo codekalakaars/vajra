@@ -7,7 +7,7 @@
 
 export type { FilePermissions, PermissionsConfig, ProjectFileEntry } from './types.js'
 export { createSandboxConfig, type SandboxConfig, type SandboxEnvironments, type FileRule, type CreateSandboxInput } from './config.js'
-export { matchesPattern, resolveFilePermission, resolveFilePermissions, filterFileEntries } from './file-rules.js'
+export { matchesPattern, resolveFilePermission, resolveFilePermissions, expandFileRules, checkToolPermission, filterFileEntries } from './file-rules.js'
 export { resolveAllowedTools, KNOWN_TOOLS, type ToolName } from './tool-rules.js'
 export { buildLaunchJob, type LaunchJob } from './sandbox-builder.js'
 export { loadSandboxConfig, loadSandboxEnvironments, saveSandboxConfig, saveSandboxEnvironments, DEFAULT_CONFIG_FILE } from './file-config.js'
