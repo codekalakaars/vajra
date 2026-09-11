@@ -42,7 +42,6 @@ body:
       options:
         - Native core (file / process / env / path)
         - Build or packaging (napi, loader, typings)
-        - Legacy CLI (legacy/ — reference only, not maintained)
         - Not sure
     validations:
       required: true

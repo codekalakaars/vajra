@@ -1,6 +1,6 @@
 import type { RpcRouter } from '../rpc.js'
 import type { ServerContext } from '../server.js'
-import type { SessionCreateParams, SessionAttachParams, SessionStopParams, SessionDeleteParams, SessionSendMessageParams, SessionConfirmPlanParams, SessionRejectPlanParams } from '@codekalakaars/protocol'
+import type { SessionCreateParams, SessionAttachParams, SessionStopParams, SessionDeleteParams, SessionSendMessageParams, SessionConfirmPlanParams, SessionRejectPlanParams } from '@codekalakaars/vajra-protocol'
 
 export function registerSessionHandlers(router: RpcRouter<ServerContext>): void {
   router.register('session.create', async (params: SessionCreateParams, ctx) => {

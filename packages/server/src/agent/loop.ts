@@ -6,7 +6,7 @@
 
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../session/manager.js'
-import type { PermissionsConfig, ToolName } from '@codekalakaars/protocol'
+import type { PermissionsConfig, ToolName } from '@codekalakaars/vajra-protocol'
 import { getToolSpecs, parseToolCall } from './tools.js'
 import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
 import { scanProject } from '../native.js'

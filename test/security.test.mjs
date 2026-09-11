@@ -5,7 +5,7 @@
 // tested here is specifically the JS boundary — that a HashMap arrives as a
 // plain Record, that an optional config comes back as null rather than
 // undefined, and that the on-disk format written through the binding is the
-// same one the legacy CLI produced.
+// same one vajra produces.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -88,14 +88,14 @@ test('permissions default to read-only', () => {
   assert.equal(Object.getPrototypeOf(config.files), Object.prototype, 'HashMap should arrive as a plain Record')
 })
 
-test('permissions round-trip to disk in the legacy format', () => {
+test('permissions round-trip to disk in the current format', () => {
   const dir = scratch()
   const config = native.defaultPermissions()
   config.files['src/main.rs'] = { read: true, write: true, edit: true, delete: false }
 
   native.savePermissions(dir, config)
 
-  // The on-disk shape must stay loadable by the legacy CLI.
+  // The on-disk shape must stay loadable by the current CLI.
   const raw = JSON.parse(readFileSync(join(dir, '.vajra-perms.json'), 'utf8'))
   assert.equal(raw.version, 1)
   assert.deepEqual(raw.default, { read: true, write: false, edit: false, delete: false })

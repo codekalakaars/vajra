@@ -8,8 +8,8 @@
 // - Graceful shutdown
 
 import type { LaunchJob, LaunchHandle, SandboxReport, SessionLauncher } from './manager.js'
-import type { ConcurrencyConfig } from '@codekalakaars/sandbox'
-import { resolveConcurrencyConfig } from '@codekalakaars/sandbox'
+import type { ConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
+import { resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 
 interface PooledWorker {
   handle: LaunchHandle

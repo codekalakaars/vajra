@@ -4,7 +4,7 @@
 // The sandbox config specifies which tool names are allowed; the worker enforces
 // this list at dispatch time.
 
-import { toolDefinitions, type ToolName } from '@codekalakaars/protocol'
+import { toolDefinitions, type ToolName } from '@codekalakaars/vajra-protocol'
 import type { SandboxConfig } from './config.js'
 
 /** Default tools per agent role. Used when no explicit allowedTools is set. */

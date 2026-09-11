@@ -1,6 +1,6 @@
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { Server as HttpServer } from 'node:http'
-import type { ClientMessage, PushEvent } from '@codekalakaars/protocol'
+import type { ClientMessage, PushEvent } from '@codekalakaars/vajra-protocol'
 import type { SqliteDb } from '../db/client.js'
 import { SessionManager, notImplementedLauncher, type SessionLauncher } from '../session/manager.js'
 import { RpcRouter } from './rpc.js'

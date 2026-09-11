@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ProjectFileEntry } from '@codekalakaars/protocol'
+import type { ProjectFileEntry } from '@codekalakaars/vajra-protocol'
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'target', '.next', 'dist', 'build', '__pycache__'])
 const SKIP_EXTENSIONS = new Set([

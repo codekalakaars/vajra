@@ -1,6 +1,6 @@
 // Typed push event bus.
 
-import type { PushEventPayloads, PushEventName } from '@codekalakaars/protocol'
+import type { PushEventPayloads, PushEventName } from '@codekalakaars/vajra-protocol'
 
 export type EventMap = PushEventPayloads
 

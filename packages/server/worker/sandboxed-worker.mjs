@@ -19,7 +19,7 @@
 // project plan.
 
 import { createRequire } from 'node:module'
-import { toolDefinitions } from '@vajra/protocol'
+import { toolDefinitions } from '@codekalakaars/vajra-protocol'
 import { checkToolPermission } from '@codekalakaars/vajra-sandbox'
 
 const require = createRequire(import.meta.url)
