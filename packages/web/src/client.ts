@@ -1,7 +1,7 @@
 // High-level client combining socket, RPC, and event bus.
 
 import { VajraSocket, type ConnectionState } from './lib/ws.js'
-import { RpcClient, type MethodName } from './lib/rpc.js'
+import { RpcClient, type MethodName, type RpcMethodMap } from './lib/rpc.js'
 import { EventBus, type EventName } from './lib/events.js'
 
 export class VajraClient {
@@ -55,12 +55,13 @@ export class VajraClient {
 
   async call<M extends MethodName>(
     method: M,
-    params: Extract<{ [K in M]: unknown }, M> extends { params: infer P } ? P : never
-  ): Promise<unknown> {
-    return this.rpc.call(method, params as never)
+    params: RpcMethodMap[M]['params']
+  ): Promise<RpcMethodMap[M]['result']> {
+    return this.rpc.call(method, params)
   }
 
-  on<E extends EventName>(event: E, handler: (payload: unknown) => void): () => void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on<E extends EventName>(event: E, handler: (payload: any) => void): () => void {
     return this.events.on(event, handler)
   }
 }

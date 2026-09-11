@@ -1,4 +1,4 @@
-import { ConflictPayload } from '@vajra/protocol'
+import { ConflictPayload } from '@codekalakaars/protocol'
 
 interface ConflictAlertProps {
   conflicts: ConflictPayload[]

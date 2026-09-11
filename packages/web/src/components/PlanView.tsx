@@ -1,4 +1,4 @@
-import { PlannedTask, TaskStatus } from '@vajra/protocol'
+import { PlannedTask, TaskStatus } from '@codekalakaars/protocol'
 
 interface PlanViewProps {
   tasks: PlannedTask[]

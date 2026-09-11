@@ -45,3 +45,4 @@ legacy/examples/demo-app/.vajra-perms.json
 # Added by cargo
 
 /target
+.vajra-profile-*.sh
