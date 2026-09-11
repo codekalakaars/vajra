@@ -14,11 +14,11 @@
   },
   "dependencies": {
     "@vajra/protocol": "workspace:*",
-    "@vajra/sandbox": "workspace:*",
+    "@codekalakaars/vajra-sandbox": "workspace:*",
     "better-sqlite3": "^11.3.0",
     "dotenv": "^16.6.1",
     "openai": "^7.8.0",
-    "vajra-native": "workspace:*",
+    "@codekalakaars/vajra-native": "workspace:*",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
   },

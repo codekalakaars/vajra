@@ -22,7 +22,7 @@ import { createRequire } from 'node:module'
 import { toolDefinitions } from '@vajra/protocol'
 
 const require = createRequire(import.meta.url)
-const native = require('vajra-native')
+const native = require('@codekalakaars/vajra-native')
 
 // ---------------------------------------------------------------------------
 // Glob matching (inline — worker cannot import @vajra/sandbox ESM cleanly)

@@ -13,7 +13,7 @@ import { createRequire } from 'node:module'
 import { forkSessionLauncher } from '../dist/session/launcher.js'
 
 const require = createRequire(import.meta.url)
-const native = require('vajra-native')
+const native = require('@codekalakaars/vajra-native')
 
 const caps = native.sandboxCapabilities()
 const enforces = caps.filesystem !== 'unsupported'

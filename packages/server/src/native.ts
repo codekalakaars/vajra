@@ -19,7 +19,7 @@ import {
   loadPermissions as nativeLoadPermissions,
   savePermissions as nativeSavePermissions,
   sandboxCapabilities as nativeSandboxCapabilities,
-} from 'vajra-native'
+} from '@codekalakaars/vajra-native'
 import type { PermissionsConfig, ProjectFileEntry } from '@vajra/protocol'
 
 export function scanProject(projectDir: string): ProjectFileEntry[] {

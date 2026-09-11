@@ -1,5 +1,5 @@
 {
-  "name": "vajra-native",
+  "name": "@codekalakaars/vajra-native",
   "version": "0.1.0",
   "description": "Cross-platform native operations for Vajra",
   "main": "index.js",

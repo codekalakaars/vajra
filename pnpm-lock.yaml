@@ -27,24 +27,27 @@ importers:
 
   packages/sandbox:
     devDependencies:
+      '@codekalakaars/vajra-native':
+        specifier: workspace:*
+        version: link:../..
       '@types/node':
         specifier: ^22.5.4
         version: 22.20.1
       typescript:
         specifier: ^5.5.4
         version: 5.9.3
-      vajra-native:
-        specifier: workspace:*
-        version: link:../..
 
   packages/server:
     dependencies:
+      '@codekalakaars/vajra-native':
+        specifier: workspace:*
+        version: link:../..
+      '@codekalakaars/vajra-sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
       '@vajra/protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@vajra/sandbox':
-        specifier: workspace:*
-        version: link:../sandbox
       better-sqlite3:
         specifier: ^11.3.0
         version: 11.10.0
@@ -54,9 +57,6 @@ importers:
       openai:
         specifier: ^7.8.0
         version: 7.8.0(ws@8.21.3)(zod@3.25.76)
-      vajra-native:
-        specifier: workspace:*
-        version: link:../..
       ws:
         specifier: ^8.18.0
         version: 8.21.3
