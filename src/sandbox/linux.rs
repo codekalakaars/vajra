@@ -193,20 +193,74 @@ fn add_path_rule(ruleset_fd: i32, path: &str, allowed: u64) -> Result<(), String
     }
 }
 
+/// Which rights have at least one per-path override that is stricter than the
+/// project default.
+///
+/// Landlock rules are additive within a single ruleset: a grant on a
+/// directory applies recursively to everything beneath it, and no narrower
+/// rule on a descendant can revoke it. Two rights in this module are granted
+/// without regard to depth and so are exposed to that leak:
+///
+///  - `READ_FILE` is requested whenever `perm.read` is set, independent of
+///    `is_dir`. A directory-level grant (the project root, say) therefore
+///    recursively exposes file content everywhere beneath it, including a
+///    path whose own rule says `read: false`.
+///  - `REMOVE_FILE`/`REMOVE_DIR` only exist at directory granularity — the
+///    kernel rejects them on a file target (`DIR_ONLY_ACCESS`) — so the same
+///    problem shows up one level up: a subdirectory that must not be
+///    deletable cannot override an ancestor that grants delete.
+///
+/// When a right is narrowed like this, `perms_to_bits` withholds it from
+/// every directory-level rule and relies entirely on each path's own
+/// explicit rule, which `apply_per_file_rules` already adds for every file
+/// and directory discovered in the walk. Nothing that exists at sandbox-apply
+/// time loses access it should have. The trade-off: a path created *after*
+/// the sandbox is applied gets no rule at all for that right until the
+/// sandbox is reapplied, rather than silently inheriting the default. `apply`
+/// surfaces this in its returned notes.
+#[derive(Default)]
+pub struct Narrowed {
+    read: bool,
+    delete: bool,
+}
+
+impl Narrowed {
+    fn detect(perms: &PermissionsConfig) -> Self {
+        let mut n = Narrowed::default();
+        for file_perm in perms.files.values() {
+            n.read |= perms.default.read && !file_perm.read;
+            n.delete |= perms.default.delete && !file_perm.delete;
+        }
+        n
+    }
+
+    fn any(&self) -> bool {
+        self.read || self.delete
+    }
+}
+
 /// Translate one file's declared permissions into Landlock access bits.
-pub fn perms_to_bits(perm: &FilePermissions, is_dir: bool, supported: u64) -> u64 {
+pub fn perms_to_bits(perm: &FilePermissions, is_dir: bool, supported: u64, narrowed: &Narrowed) -> u64 {
     let mut bits = access::EXECUTE; // traversal
 
     if perm.read {
-        bits |= access::READ_FILE | access::READ_DIR;
+        // Listing is granted unconditionally: narrowing it only ever hides
+        // filenames (this codebase already has a separate mechanism,
+        // `is_masked`, for that), so it carries none of the recursive-leak
+        // risk that content access does. READ_FILE is withheld on a
+        // directory rule when some path in the tree needs `read: false` —
+        // see `Narrowed`.
+        bits |= access::READ_DIR;
+        if !(is_dir && narrowed.read) {
+            bits |= access::READ_FILE;
+        }
     }
 
     if is_dir {
-        bits |= access::READ_DIR;
         if perm.write {
             bits |= access::MAKE_DIR | access::MAKE_REG | access::MAKE_SYM;
         }
-        if perm.delete {
+        if perm.delete && !narrowed.delete {
             bits |= access::REMOVE_DIR | access::REMOVE_FILE;
         }
     } else {
@@ -234,9 +288,19 @@ fn apply_per_file_rules(
     project_dir: &Path,
     perms: &PermissionsConfig,
     supported: u64,
+    notes: &mut Vec<String>,
 ) -> Result<(), String> {
+    let narrowed = Narrowed::detect(perms);
+    if narrowed.any() {
+        notes.push(
+            "a per-file rule narrows read or delete below the project default; paths created \
+             after this sandbox is applied will not automatically inherit that right"
+                .into(),
+        );
+    }
+
     // The project root itself needs a rule, or nothing beneath it is reachable.
-    let root_bits = perms_to_bits(&perms.default, true, supported);
+    let root_bits = perms_to_bits(&perms.default, true, supported, &narrowed);
     add_path_rule(ruleset_fd, &project_dir.to_string_lossy(), root_bits)?;
 
     let mut stack: Vec<(std::path::PathBuf, u32)> = vec![(project_dir.to_path_buf(), 0)];
@@ -274,7 +338,7 @@ fn apply_per_file_rules(
             }
 
             let perm = effective(perms, &rel);
-            let bits = perms_to_bits(&perm, is_dir, supported);
+            let bits = perms_to_bits(&perm, is_dir, supported, &narrowed);
 
             // Best-effort: a file removed between the walk and the rule add
             // should not abort the whole sandbox.
@@ -346,7 +410,7 @@ pub fn apply(config: &SandboxConfig) -> Result<(Vec<String>, Option<String>), St
     let ruleset_fd = create_ruleset(rw_all)?;
 
     match &config.permissions {
-        Some(perms) => apply_per_file_rules(ruleset_fd, project_dir, perms, supported)?,
+        Some(perms) => apply_per_file_rules(ruleset_fd, project_dir, perms, supported, &mut notes)?,
         None => add_path_rule(ruleset_fd, &project_dir.to_string_lossy(), rw_all)?,
     }
 
@@ -436,9 +500,13 @@ mod tests {
         }
     }
 
+    fn unnarrowed() -> Narrowed {
+        Narrowed::default()
+    }
+
     #[test]
     fn read_only_file_gets_no_write_bits() {
-        let bits = perms_to_bits(&perms(true, false, false, false), false, u64::MAX);
+        let bits = perms_to_bits(&perms(true, false, false, false), false, u64::MAX, &unnarrowed());
         assert_ne!(bits & access::READ_FILE, 0);
         assert_eq!(bits & access::WRITE_FILE, 0);
         assert_eq!(bits & access::REMOVE_FILE, 0);
@@ -447,7 +515,7 @@ mod tests {
 
     #[test]
     fn writable_file_gets_write_and_edit_bits() {
-        let bits = perms_to_bits(&perms(true, true, true, false), false, u64::MAX);
+        let bits = perms_to_bits(&perms(true, true, true, false), false, u64::MAX, &unnarrowed());
         assert_ne!(bits & access::WRITE_FILE, 0);
         assert_ne!(bits & access::TRUNCATE, 0);
         assert_eq!(bits & access::REMOVE_FILE, 0);
@@ -455,7 +523,7 @@ mod tests {
 
     #[test]
     fn directory_write_grants_creation_not_file_write() {
-        let bits = perms_to_bits(&perms(true, true, false, false), true, u64::MAX);
+        let bits = perms_to_bits(&perms(true, true, false, false), true, u64::MAX, &unnarrowed());
         assert_ne!(bits & access::MAKE_REG, 0);
         assert_ne!(bits & access::MAKE_DIR, 0);
         assert_eq!(bits & access::WRITE_FILE, 0);
@@ -464,7 +532,7 @@ mod tests {
     #[test]
     fn unsupported_bits_are_masked_out() {
         // On an ABI-1 kernel a truncate grant must not survive into the ruleset.
-        let bits = perms_to_bits(&perms(true, true, true, true), false, supported_bits(1));
+        let bits = perms_to_bits(&perms(true, true, true, true), false, supported_bits(1), &unnarrowed());
         assert_eq!(bits & access::TRUNCATE, 0);
     }
 
@@ -472,7 +540,93 @@ mod tests {
     fn traversal_is_always_granted() {
         // Without EXECUTE on a directory nothing beneath it is reachable, even
         // when every declared permission is false.
-        let bits = perms_to_bits(&perms(false, false, false, false), true, u64::MAX);
+        let bits = perms_to_bits(&perms(false, false, false, false), true, u64::MAX, &unnarrowed());
         assert_ne!(bits & access::EXECUTE, 0);
+    }
+
+    #[test]
+    fn unread_directory_grants_no_dir_or_file_read() {
+        // A directory with read: false must not expose listing or content,
+        // regression coverage for the bit that used to be granted
+        // unconditionally.
+        let bits = perms_to_bits(&perms(false, false, false, false), true, u64::MAX, &unnarrowed());
+        assert_eq!(bits & access::READ_DIR, 0);
+        assert_eq!(bits & access::READ_FILE, 0);
+    }
+
+    #[test]
+    fn narrowed_read_withholds_read_file_from_directories_but_not_listing() {
+        let narrowed = Narrowed {
+            read: true,
+            delete: false,
+        };
+        let dir_bits = perms_to_bits(&perms(true, false, false, false), true, u64::MAX, &narrowed);
+        assert_eq!(
+            dir_bits & access::READ_FILE,
+            0,
+            "a directory rule must not recursively expose file content when a nested path needs read: false"
+        );
+        assert_ne!(
+            dir_bits & access::READ_DIR,
+            0,
+            "listing is unaffected by the leak READ_FILE would cause"
+        );
+    }
+
+    #[test]
+    fn narrowed_read_does_not_affect_individual_files() {
+        // A file's own rule never recurses, so narrowing elsewhere in the
+        // tree must not touch what an individual file itself is granted.
+        let narrowed = Narrowed {
+            read: true,
+            delete: false,
+        };
+        let file_bits = perms_to_bits(&perms(true, false, false, false), false, u64::MAX, &narrowed);
+        assert_ne!(file_bits & access::READ_FILE, 0);
+    }
+
+    #[test]
+    fn narrowed_delete_withholds_remove_bits_from_directories() {
+        let narrowed = Narrowed {
+            read: false,
+            delete: true,
+        };
+        let dir_bits = perms_to_bits(&perms(true, false, false, true), true, u64::MAX, &narrowed);
+        assert_eq!(dir_bits & access::REMOVE_DIR, 0);
+        assert_eq!(dir_bits & access::REMOVE_FILE, 0);
+    }
+
+    #[test]
+    fn detect_finds_read_and_delete_narrowing_independently() {
+        let mut files = std::collections::HashMap::new();
+        files.insert("secret.txt".to_string(), perms(false, false, false, true));
+
+        let config = PermissionsConfig {
+            version: 1,
+            default: perms(true, false, false, true),
+            files,
+        };
+
+        let narrowed = Narrowed::detect(&config);
+        assert!(narrowed.read, "read: false below a read: true default must be detected");
+        assert!(!narrowed.delete, "delete matches the default here, so nothing is narrowed");
+        assert!(narrowed.any());
+    }
+
+    #[test]
+    fn detect_finds_nothing_when_overrides_only_grant_more() {
+        // The existing "per-file permissions deny writes to a read-only
+        // file" integration test relies on this direction working exactly as
+        // it did before: granting *more* than the default is not narrowing.
+        let mut files = std::collections::HashMap::new();
+        files.insert("writable.txt".to_string(), perms(true, true, true, false));
+
+        let config = PermissionsConfig {
+            version: 1,
+            default: perms(true, false, false, false),
+            files,
+        };
+
+        assert!(!Narrowed::detect(&config).any());
     }
 }

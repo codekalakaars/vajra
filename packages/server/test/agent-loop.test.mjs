@@ -11,7 +11,7 @@ import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const native = require('vajra-native')
+const native = require('@codekalakaars/vajra-native')
 
 // ---- Helpers ----
 

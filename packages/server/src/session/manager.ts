@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
 import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage } from '@vajra/protocol'
-import type { FileRule } from '@vajra/sandbox'
+import type { FileRule } from '@codekalakaars/vajra-sandbox'
 import { agentLoop, type AgentLoopResult } from '../agent/loop.js'
 
 export interface LaunchJob {

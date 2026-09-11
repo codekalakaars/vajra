@@ -18,7 +18,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { resolve, join } from 'node:path'
 
-type NativeModule = typeof import('vajra-native')
+type NativeModule = typeof import('@codekalakaars/vajra-native')
 
 interface SecureConfig {
   projectDir: string
@@ -112,7 +112,7 @@ function printCapabilities(native: NativeModule | null) {
     console.log('Sandboxing: vajra-native not installed')
     console.log('')
     console.log('Install vajra-native for OS-level sandboxing:')
-    console.log('  npm install vajra-native')
+    console.log('  npm install @codekalakaars/vajra-native')
     return
   }
 
@@ -166,7 +166,7 @@ export async function run(native: NativeModule | null) {
     console.error('Error: vajra-native is not installed.')
     console.error('')
     console.error('OS-level sandboxing requires vajra-native:')
-    console.error('  npm install vajra-native')
+    console.error('  npm install @codekalakaars/vajra-native')
     process.exit(1)
   }
 
