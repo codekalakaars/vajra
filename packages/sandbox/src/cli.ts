@@ -17,25 +17,25 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-// Resolve @codekalakaars/vajra-native from the package's own node_modules, not
+// Resolve @codekalakaars/vajra-core from the package's own node_modules, not
 // from the global install location. This matters when `vajra` is linked globally.
 function loadNative() {
   // Try local workspace first (development)
   try {
     const localRequire = createRequire(join(__dirname, '..', 'node_modules', 'placeholder'))
-    return localRequire('@codekalakaars/vajra-native')
+    return localRequire('@codekalakaars/vajra-core')
   } catch {}
 
   // Try from package root (npm install)
   try {
     const pkgRequire = createRequire(join(__dirname, '..', '..', 'node_modules', 'placeholder'))
-    return pkgRequire('@codekalakaars/vajra-native')
+    return pkgRequire('@codekalakaars/vajra-core')
   } catch {}
 
   // Try global require (fallback)
   try {
     const globalRequire = createRequire(import.meta.url)
-    return globalRequire('@codekalakaars/vajra-native')
+    return globalRequire('@codekalakaars/vajra-core')
   } catch {}
 
   return null

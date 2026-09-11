@@ -1,8 +1,8 @@
 // The tool schema the agent's model sees, and what each tool dispatches to.
 //
-// Thin, literal wrappers over vajra-native — no new capability beyond what it
+// Thin, literal wrappers over vajra-core — no new capability beyond what it
 // already exposes and has tested. Every tool error the model receives is
-// exactly the message vajra-native produced (editFile's ambiguous-match
+// exactly the message vajra-core produced (editFile's ambiguous-match
 // refusal, deleteFile/deleteDir's directory guards, copyFile/renameFile's
 // overwrite guard) — no re-wording layer here, so the tests that already
 // assert those messages in the root package stay the single source of truth.
@@ -14,7 +14,7 @@
 // tasks without that surface; add run_shell later only if a real task needs
 // pipes/globs the sandbox alone won't gate.
 //
-// This package does not import `vajra-native` itself — the browser can't
+// This package does not import `vajra-core` itself — the browser can't
 // load a `.node` addon, and importing the type here would pull the loader
 // into any bundle that includes this package. Shapes are mirrored by hand.
 
@@ -39,7 +39,7 @@ export interface JsonSchema {
 export interface ToolDefinition<Args = unknown> {
   name: string
   description: string
-  /** The vajra-native export this tool dispatches to. */
+  /** The vajra-core export this tool dispatches to. */
   nativeFn: string
   /** Runtime validation of the model's tool-call arguments before dispatch. */
   schema: z.ZodType<Args>

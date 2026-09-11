@@ -2,7 +2,7 @@
 
 ## Scope
 
-Vajra is mid-rewrite. The native core (`vajra-native`) now enforces filesystem
+Vajra is mid-rewrite. The native core (`vajra-core`) now enforces filesystem
 confinement on Linux (Landlock) and macOS (Seatbelt), and provides output
 redaction. **Windows has no confinement at all** — that is a known and
 documented limitation, not a vulnerability.

@@ -1,11 +1,3 @@
-//! Filesystem confinement, with one API across platforms and an honest report
-//! of what each can actually enforce.
-//!
-//! Enforcement differs by platform and there is no pretending otherwise:
-//! Landlock on Linux, Seatbelt on macOS, and nothing at all on Windows. The
-//! capability report exists so a caller can decide what to do about that
-//! *before* it starts an agent, rather than discovering it afterwards.
-
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -14,59 +6,33 @@ mod macos;
 
 use napi::Error;
 
-/// Walk depth for building rules. Matches `file::list_files` and
-/// `permissions::scan_project` so the config, the scan and the enforced rules
-/// all describe the same tree.
-///
-/// Only the platforms that build rules consume this; on Windows there is no
-/// backend to read it.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub const MAX_DEPTH: u32 = 8;
 
-/// How well this platform can confine the filesystem.
-///
-/// `enforced` — the kernel denies access outside the policy.
-/// `partial`  — enforced, but an older kernel cannot honour every restriction.
-/// `unsupported` — nothing is enforced. Not a degraded mode: no confinement.
 #[napi(object)]
 #[derive(Debug)]
 pub struct SandboxCapabilities {
     pub platform: String,
     pub filesystem: String,
-    /// `landlock`, `seatbelt`, or `none`.
     pub mechanism: String,
     pub details: String,
-    /// Landlock ABI version, when the mechanism is Landlock.
     pub abi: Option<u32>,
 }
 
 #[napi(object)]
 pub struct SandboxConfig {
     pub project_dir: String,
-    /// Extra paths granted read+execute — toolchains, interpreters.
     pub read_execute_paths: Option<Vec<String>>,
-    /// Extra paths granted read+write without execute — agent state, logs,
-    /// tokens. These hold data, not binaries.
     pub read_write_paths: Option<Vec<String>>,
-    /// Per-file permissions. When absent the whole project is read-write.
     pub permissions: Option<crate::permissions::PermissionsConfig>,
-    /// Proceed on a platform that cannot enforce anything.
-    ///
-    /// Without this, `applySandbox` fails on such a platform rather than
-    /// returning a success that implies confinement it did not apply.
     pub allow_unenforced: Option<bool>,
 }
 
 #[napi(object)]
 #[derive(Debug)]
 pub struct SandboxResult {
-    /// Whether the kernel is now actually enforcing a policy. False only when
-    /// the caller opted in via `allowUnenforced`.
     pub enforced: bool,
     pub mechanism: String,
-    /// Anything the caller should surface: an unenforceable restriction on an
-    /// old kernel, a system path that could not be added, or the fact that
-    /// nothing was enforced at all.
     pub warnings: Vec<String>,
 }
 
@@ -125,21 +91,11 @@ fn capabilities_impl() -> SandboxCapabilities {
     }
 }
 
-/// What this platform can enforce. Safe to call at any time; changes nothing.
 #[napi]
 pub fn sandbox_capabilities() -> SandboxCapabilities {
     capabilities_impl()
 }
 
-/// Confine the **current process** to the given policy.
-///
-/// This is irreversible and process-wide: it applies to this Node process and
-/// every child it spawns afterwards, and cannot be lifted. Call it immediately
-/// before handing control to the agent, never speculatively — once applied, the
-/// harness itself is subject to it too.
-///
-/// Fails on a platform with no enforcement unless `allowUnenforced` is set, so
-/// the unconfined case has to be chosen rather than stumbled into.
 #[napi]
 pub fn apply_sandbox(config: SandboxConfig) -> Result<SandboxResult, Error> {
     let capabilities = capabilities_impl();
@@ -191,7 +147,6 @@ fn apply_impl(config: &SandboxConfig) -> Result<SandboxResult, String> {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn apply_impl(_config: &SandboxConfig) -> Result<SandboxResult, String> {
-    // Unreachable: apply_sandbox returns before here when nothing is enforceable.
     Err("No sandbox mechanism on this platform".into())
 }
 
@@ -207,11 +162,8 @@ mod tests {
             caps.filesystem.as_str(),
             "enforced" | "partial" | "unsupported"
         ));
-        assert!(!caps.details.is_empty(), "a report must explain itself");
+        assert!(!caps.details.is_empty());
 
-        // "unsupported" and a named mechanism are contradictory, and so are
-        // "enforced" and no mechanism. Either would mislead a caller about
-        // whether confinement is real.
         if caps.filesystem == "unsupported" {
             assert_eq!(caps.mechanism, "none");
         } else {
