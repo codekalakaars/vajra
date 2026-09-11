@@ -20,126 +20,13 @@
 
 import { createRequire } from 'node:module'
 import { toolDefinitions } from '@vajra/protocol'
+import { checkToolPermission } from '@codekalakaars/vajra-sandbox'
 
 const require = createRequire(import.meta.url)
 const native = require('@codekalakaars/vajra-native')
 
-// ---------------------------------------------------------------------------
-// Glob matching (inline — worker cannot import @vajra/sandbox ESM cleanly)
-// ---------------------------------------------------------------------------
-
-function matchSimpleGlob(text, pat, ti, pi) {
-  if (ti >= text.length && pi >= pat.length) return true
-  if (pi >= pat.length) return false
-
-  const p = pat[pi]
-
-  if (p === '*') {
-    for (let skip = ti; skip <= text.length; skip++) {
-      if (text[skip] === '/') break
-      if (matchSimpleGlob(text, pat, skip, pi + 1)) return true
-    }
-    return false
-  }
-
-  if (p === '?') {
-    if (ti >= text.length || text[ti] === '/') return false
-    return matchSimpleGlob(text, pat, ti + 1, pi + 1)
-  }
-
-  if (ti >= text.length || text[ti] !== p) return false
-  return matchSimpleGlob(text, pat, ti + 1, pi + 1)
-}
-
-function matchSegments(path, pattern, pi, si) {
-  if (si >= pattern.length) return pi >= path.length
-  const seg = pattern[si]
-  if (seg === '**') {
-    for (let skip = pi; skip <= path.length; skip++) {
-      if (matchSegments(path, pattern, skip, si + 1)) return true
-    }
-    return false
-  }
-  if (pi >= path.length) return false
-  if (!matchSimpleGlob(path[pi], seg, 0, 0)) return false
-  return matchSegments(path, pattern, pi + 1, si + 1)
-}
-
-function matchesPattern(filePath, pattern) {
-  let pat = pattern
-  let negated = false
-  if (pat.startsWith('!')) {
-    negated = true
-    pat = pat.slice(1)
-  }
-  const result = matchSegments(filePath.split('/'), pat.split('/'), 0, 0)
-  return negated ? !result : result
-}
-
-// ---------------------------------------------------------------------------
-// File permission check
-// ---------------------------------------------------------------------------
-
+// Project dir for file permission resolution (set when job arrives)
 let projectDir = ''
-
-function resolveFilePermission(filePath, fileRules, defaultPermissions) {
-  // Convert absolute path to project-relative for pattern matching.
-  // If the file is outside the project, no rule matches — fall back to defaults.
-  let relPath = filePath
-  if (projectDir && filePath.startsWith(projectDir)) {
-    relPath = filePath.slice(projectDir.length + 1) // +1 for trailing /
-  }
-
-  const result = { ...defaultPermissions }
-  for (const rule of fileRules) {
-    if (matchesPattern(relPath, rule.pattern)) {
-      if (rule.read !== undefined) result.read = rule.read
-      if (rule.write !== undefined) result.write = rule.write
-      if (rule.edit !== undefined) result.edit = rule.edit
-      if (rule.delete !== undefined) result.delete = rule.delete
-    }
-  }
-  return result
-}
-
-// Extract the file path(s) a tool call targets
-function extractPaths(tool, args) {
-  switch (tool) {
-    case 'read_file':
-    case 'write_file':
-    case 'edit_file':
-    case 'delete_file':
-    case 'delete_dir':
-    case 'create_dir':
-    case 'list_files':
-      return [args.path]
-    case 'copy_file':
-    case 'rename_file':
-      return [args.source, args.destination]
-    default:
-      return [] // run_command has no file path
-  }
-}
-
-// Tools that modify state (write/edit/delete/create/copy/rename)
-const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'delete_dir', 'create_dir', 'copy_file', 'rename_file'])
-
-function checkFilePermission(tool, args, fileRules, defaultPermissions) {
-  const paths = extractPaths(tool, args)
-  for (const filePath of paths) {
-    const perm = resolveFilePermission(filePath, fileRules, defaultPermissions)
-    if (!perm.read) {
-      return `Access denied: '${filePath}' is not readable in the current sandbox configuration.`
-    }
-    if (WRITE_TOOLS.has(tool) && !perm.write) {
-      return `Access denied: '${filePath}' is not writable in the current sandbox configuration.`
-    }
-    if (tool === 'edit_file' && !perm.edit) {
-      return `Access denied: '${filePath}' is not editable in the current sandbox configuration.`
-    }
-  }
-  return null
-}
 
 // ---------------------------------------------------------------------------
 // Tool dispatch
@@ -194,9 +81,9 @@ function handleToolCall(message) {
     return
   }
 
-  // File permission check via sandbox rules
+  // File permission check via sandbox rules (shared with CLI via @codekalakaars/vajra-sandbox)
   if (fileRules.length > 0) {
-    const denied = checkFilePermission(tool, parsedArgs, fileRules, defaultFilePermissions)
+    const denied = checkToolPermission(tool, parsedArgs, fileRules, defaultFilePermissions, projectDir)
     if (denied) {
       send({ type: 'result', callId, ok: false, error: denied })
       return
