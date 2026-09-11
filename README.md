@@ -4,7 +4,7 @@ Vajra keeps AI CLI agents (opencode, claude, codex, …) confined to a project
 so they can work on your code without reading your secrets.
 
 **This branch is a rewrite in progress.** Vajra is moving from a standalone
-Linux-only Rust CLI to `vajra-native`, a napi-rs addon that a TypeScript
+Linux-only Rust CLI to `vajra-core`, a napi-rs addon that a TypeScript
 harness drives: Rust does the native work, TypeScript does the orchestration.
 The previous CLI is preserved under [`legacy/`](legacy/), which is still the
 only copy of the supervisor, the mount-namespace setup and the permissions GUI.
@@ -108,7 +108,7 @@ pnpm install
 pnpm build        # napi build --platform --release
 ```
 
-This produces a platform-suffixed addon (`vajra-native.<triple>.node`) plus the
+This produces a platform-suffixed addon (`vajra-core.<triple>.node`) plus the
 generated `index.js` loader and `index.d.ts`. Both generated files are
 committed; do not hand-edit them, as the next build overwrites them.
 

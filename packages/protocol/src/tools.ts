@@ -1,31 +1,13 @@
-// The tool schema the agent's model sees, and what each tool dispatches to.
-//
-// Thin, literal wrappers over vajra-native — no new capability beyond what it
-// already exposes and has tested. Every tool error the model receives is
-// exactly the message vajra-native produced (editFile's ambiguous-match
-// refusal, deleteFile/deleteDir's directory guards, copyFile/renameFile's
-// overwrite guard) — no re-wording layer here, so the tests that already
-// assert those messages in the root package stay the single source of truth.
-//
-// run_shell is deliberately not offered: its own doc comment in
-// src/process.rs warns that anything built from untrusted input is a risk,
-// and here the "untrusted input" is whatever the model puts in a command
-// string. run_command (argv-based, no shell parsing) covers file-editing
-// tasks without that surface; add run_shell later only if a real task needs
-// pipes/globs the sandbox alone won't gate.
-//
-// This package does not import `vajra-native` itself — the browser can't
-// load a `.node` addon, and importing the type here would pull the loader
-// into any bundle that includes this package. Shapes are mirrored by hand.
+// Tool schema the agent's model sees, and what each tool dispatches to.
+// run_shell is deliberately not offered — run_command (argv-based, no shell)
+// covers file-editing tasks without the shell-injection surface.
+// This package does not import vajra-core — browser bundles can't load .node.
 
 import { z } from 'zod'
 
-/** A JSON Schema object, loosely typed — only as much shape as building an
- * OpenAI-style tool `parameters` field requires. */
 interface JsonSchemaProperty {
   type: string
   description?: string
-  /** Present when `type` is `'array'`. */
   items?: { type: string }
 }
 
@@ -39,11 +21,8 @@ export interface JsonSchema {
 export interface ToolDefinition<Args = unknown> {
   name: string
   description: string
-  /** The vajra-native export this tool dispatches to. */
   nativeFn: string
-  /** Runtime validation of the model's tool-call arguments before dispatch. */
   schema: z.ZodType<Args>
-  /** What goes in the OpenAI-style `tools[].function.parameters` field. */
   jsonSchema: JsonSchema
 }
 
@@ -84,8 +63,7 @@ export const editFileTool = defineTool({
   name: 'edit_file',
   description:
     'Replace oldString with newString in a file. Fails if oldString is absent, ' +
-    'or occurs more than once unless replaceAll is set — an ambiguous match is ' +
-    'refused rather than guessed at.',
+    'or occurs more than once unless replaceAll is set.',
   nativeFn: 'editFile',
   schema: z.object({
     path: z.string(),
@@ -203,8 +181,7 @@ export const renameFileTool = defineTool({
 export const runCommandTool = defineTool({
   name: 'run_command',
   description:
-    'Run a program directly, without a shell. Pass arguments as an array, not ' +
-    'a single command string — there is no shell to parse pipes or globs.',
+    'Run a program directly, without a shell. Pass arguments as an array.',
   nativeFn: 'runCommand',
   schema: z.object({
     command: z.string(),
@@ -242,7 +219,6 @@ export const toolDefinitions = {
 
 export type ToolName = keyof typeof toolDefinitions
 
-/** The `tools` array shape OpenRouter's OpenAI-compatible API expects. */
 export function toOpenAiToolSpecs() {
   return Object.values(toolDefinitions).map((def) => ({
     type: 'function' as const,
