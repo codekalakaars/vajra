@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { createHash } from 'node:crypto'
 
 // ---- Helpers ----
 
@@ -28,14 +29,16 @@ function getEnvironment(): string | undefined {
   return undefined
 }
 
+function hashProjectDir(projectDir: string): string {
+  return createHash('sha256').update(projectDir).digest('hex').slice(0, 16)
+}
+
 function getSocketPath(projectDir: string): string {
-  const hash = Buffer.from(projectDir).toString('base64url').slice(0, 32)
-  return `/tmp/vajra-sandbox-${hash}.sock`
+  return `/tmp/vajra-sandbox-${hashProjectDir(projectDir)}.sock`
 }
 
 function getDaemonPidPath(projectDir: string): string {
-  const hash = Buffer.from(projectDir).toString('base64url').slice(0, 32)
-  return `/tmp/vajra-sandbox-${hash}.pid`
+  return `/tmp/vajra-sandbox-${hashProjectDir(projectDir)}.pid`
 }
 
 function saveDaemonPid(projectDir: string, pid: number): void {
