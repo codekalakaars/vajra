@@ -24,9 +24,9 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
     }
   }, [session.messages, session._streamingText, session.thinkingText])
 
-  // Focus input when done
+  // Focus input when not streaming
   useEffect(() => {
-    if (session.status === 'done' && inputRef.current) {
+    if (!isStreaming && inputRef.current) {
       inputRef.current.focus()
     }
   }, [session.status])
@@ -121,8 +121,8 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
         )}
       </div>
 
-      {/* Input — shown when session is done */}
-      {session.status === 'done' && (
+      {/* Input — shown when not actively streaming */}
+      {!isStreaming && (
         <div className="p-4 border-t border-gray-800">
           <div className="max-w-3xl mx-auto flex gap-2">
             <textarea

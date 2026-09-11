@@ -1,4 +1,4 @@
-import type { RpcRequest, RpcResponse } from '@vajra/protocol'
+import type { RpcRequest, RpcResponse } from '@codekalakaars/protocol'
 
 export type Handler<Ctx, P = unknown, R = unknown> = (params: P, ctx: Ctx) => Promise<R> | R
 

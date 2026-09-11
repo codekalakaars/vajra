@@ -1,5 +1,5 @@
 {
-  "name": "@vajra/web",
+  "name": "@codekalakaars/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.17",
-    "@vajra/protocol": "workspace:*",
+    "@codekalakaars/protocol": "workspace:*",
     "highlight.js": "^11.12.0",
     "marked": "^18.0.11",
     "marked-highlight": "^2.2.4",

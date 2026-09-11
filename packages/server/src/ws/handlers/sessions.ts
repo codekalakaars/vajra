@@ -1,6 +1,6 @@
 import type { RpcRouter } from '../rpc.js'
 import type { ServerContext } from '../server.js'
-import type { SessionCreateParams, SessionAttachParams, SessionStopParams, SessionDeleteParams, SessionSendMessageParams } from '@vajra/protocol'
+import type { SessionCreateParams, SessionAttachParams, SessionStopParams, SessionDeleteParams, SessionSendMessageParams, SessionConfirmPlanParams, SessionRejectPlanParams } from '@codekalakaars/protocol'
 
 export function registerSessionHandlers(router: RpcRouter<ServerContext>): void {
   router.register('session.create', async (params: SessionCreateParams, ctx) => {
@@ -11,19 +11,14 @@ export function registerSessionHandlers(router: RpcRouter<ServerContext>): void 
     }
     const result = await ctx.sessions.create(withDefaultModel, (sessionId) => ctx.connection.subscribe(sessionId))
 
-    const status = ctx.sessions.getStatus(result.sessionId)
-    if (ctx.apiKey && withDefaultModel.task && status === 'running') {
-      ctx.sessions.startSession(result.sessionId, ctx.apiKey).catch((err) => {
-        console.error(`Agent loop failed for session ${result.sessionId}:`, err)
-      })
-    }
-
     return result
   })
 
   router.register('session.list', (_params: unknown, ctx) => ctx.sessions.list())
 
   router.register('session.attach', (params: SessionAttachParams, ctx) => {
+    // Subscribing before reading current state means no push event fired
+    // between the read and the subscription can be missed.
     ctx.connection.subscribe(params.sessionId)
     return ctx.sessions.attach(params.sessionId)
   })
@@ -38,9 +33,25 @@ export function registerSessionHandlers(router: RpcRouter<ServerContext>): void 
     return { ok: true as const }
   })
 
-  router.register('session.sendMessage', async (params: SessionSendMessageParams, ctx) => {
+  router.register('session.sendMessage', (params: SessionSendMessageParams, ctx) => {
     if (!ctx.apiKey) throw new Error('Server not configured with API key')
-    await ctx.sessions.sendMessage(params.sessionId, params.content, ctx.apiKey)
+    // Fire-and-forget: the agent loop runs in the background, emitting push
+    // events as it progresses. The RPC returns immediately so the client
+    // doesn't time out while the LLM is working.
+    ctx.sessions.sendMessage(params.sessionId, params.content, ctx.apiKey).catch((err) => {
+      console.error(`Agent loop failed for session ${params.sessionId}:`, err)
+    })
+    return { ok: true as const }
+  })
+
+  router.register('session.confirmPlan', async (params: SessionConfirmPlanParams, ctx) => {
+    if (!ctx.apiKey) throw new Error('Server not configured with API key')
+    await ctx.sessions.confirmPlan(params.sessionId, params.tasks, ctx.apiKey)
+    return { ok: true as const }
+  })
+
+  router.register('session.rejectPlan', (params: SessionRejectPlanParams, ctx) => {
+    ctx.sessions.rejectPlan(params.sessionId)
     return { ok: true as const }
   })
 }

@@ -22,7 +22,49 @@ export interface ProjectFileEntry {
   isMasked: boolean
 }
 
-export type SessionStatus = 'starting' | 'running' | 'done' | 'failed' | 'stopped'
+export type SessionStatus = 'starting' | 'talking' | 'confirming' | 'planning' | 'executing' | 'running' | 'done' | 'failed' | 'stopped'
+
+export type AgentRole = 'manager' | 'master' | 'worker'
+export type AgentStatus = 'pending' | 'running' | 'done' | 'failed'
+export type TaskStatus = 'pending' | 'assigned' | 'running' | 'done' | 'failed' | 'skipped'
+export type TaskType = 'create' | 'modify' | 'delete' | 'refactor'
+
+export interface PlannedTask {
+  id: string
+  title: string
+  description: string
+  files: string[]
+  validation: string
+  dependsOn: string[]
+  type: TaskType
+}
+
+export interface ManagerPlan {
+  tasks: PlannedTask[]
+  independentGroups: string[][]
+  estimatedWorkers: number
+}
+
+export interface AgentStatePayload {
+  id: string
+  role: AgentRole
+  status: AgentStatus
+  taskSummary: string | null
+}
+
+export interface TaskStatePayload {
+  id: string
+  title: string
+  status: TaskStatus
+  assignedAgentId: string | null
+  validationPassed: boolean | null
+}
+
+export interface ConflictPayload {
+  task1: string
+  task2: string
+  files: string[]
+}
 
 export interface ProjectLoadPermissionsParams {
   projectDir: string
@@ -98,6 +140,18 @@ export interface SessionSendMessageParams {
 }
 export type SessionSendMessageResult = { ok: true }
 
+export interface SessionConfirmPlanParams {
+  sessionId: string
+  /** User-edited task list. When absent, the originally proposed plan is used. */
+  tasks?: PlannedTask[]
+}
+export type SessionConfirmPlanResult = { ok: true }
+
+export interface SessionRejectPlanParams {
+  sessionId: string
+}
+export type SessionRejectPlanResult = { ok: true }
+
 export interface SandboxStatusPayload {
   enforced: boolean
   mechanism: string
@@ -117,12 +171,24 @@ export interface ThinkingDeltaPayload {
 }
 
 export interface PushEventPayloads {
+  'session.statusChanged': { status: SessionStatus }
   'session.sandboxStatus': SandboxStatusPayload
   'session.assistantDelta': AssistantDeltaPayload
   'session.thinkingDelta': ThinkingDeltaPayload
   'session.completed': Record<string, never>
   'session.failed': FailedPayload
   'session.deleted': { sessionId: string }
+  'session.planStarted': { sessionId: string }
+  'session.planTask': { sessionId: string; task: PlannedTask }
+  'session.planComplete': { sessionId: string; plan: ManagerPlan }
+  'session.planProposed': { sessionId: string; plan: ManagerPlan }
+  'session.planConfirmed': Record<string, never>
+  'session.workerStarted': { sessionId: string; agentId: string; taskId: string }
+  'session.workerProgress': { sessionId: string; agentId: string; task: string; detail: string }
+  'session.workerCompleted': { sessionId: string; agentId: string; taskId: string; validationPassed: boolean }
+  'session.workerFailed': { sessionId: string; agentId: string; taskId: string; error: string }
+  'session.conflictDetected': { sessionId: string } & ConflictPayload
+  'session.conflictResolved': { sessionId: string; task1: string; task2: string; resolution: string }
 }
 
 export type PushEventName = keyof PushEventPayloads

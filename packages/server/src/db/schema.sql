@@ -39,3 +39,59 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+
+-- Agent registry: tracks manager, master, and worker agents within a session.
+CREATE TABLE IF NOT EXISTS agents (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id),
+  role TEXT NOT NULL,              -- 'manager' | 'master' | 'worker'
+  status TEXT NOT NULL,            -- 'pending' | 'running' | 'done' | 'failed'
+  task_summary TEXT,
+  parent_agent_id TEXT,
+  created_at INTEGER NOT NULL,
+  ended_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id);
+
+-- Task decomposition and tracking.
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id),
+  parent_task_id TEXT,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL,            -- 'pending' | 'assigned' | 'running' | 'done' | 'failed' | 'skipped'
+  assigned_agent_id TEXT REFERENCES agents(id),
+  validation_command TEXT,
+  validation_output TEXT,
+  validation_passed INTEGER,      -- NULL until validated, 0/1 after
+  file_permissions TEXT,           -- JSON: PermissionsConfig for this task
+  tool_permissions TEXT,           -- JSON: string[] of allowed tool names
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  completed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+
+-- Task dependency DAG.
+CREATE TABLE IF NOT EXISTS task_dependencies (
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  depends_on TEXT NOT NULL REFERENCES tasks(id),
+  PRIMARY KEY (task_id, depends_on)
+);
+
+-- Inter-agent message bus (coordination, conflict resolution, progress).
+CREATE TABLE IF NOT EXISTS agent_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL REFERENCES sessions(id),
+  from_agent_id TEXT NOT NULL REFERENCES agents(id),
+  to_agent_id TEXT REFERENCES agents(id),  -- NULL for broadcast
+  message_type TEXT NOT NULL,      -- 'task_assigned' | 'task_completed' | 'conflict_detected' | 'coordination'
+  payload TEXT NOT NULL,           -- JSON
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id);
