@@ -1,6 +1,3 @@
-// The WebSocket envelope. Every message either side sends fits one of these
-// three shapes — there is no bare/untyped message anywhere in the protocol.
-
 export interface RpcRequest<M extends string = string, P = unknown> {
   kind: 'rpc'
   id: string

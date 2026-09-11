@@ -1,9 +1,5 @@
 // @vajra/sandbox — programmatically configurable sandbox policy.
-//
-// Provides a TypeScript API for building sandbox configurations that restrict
-// what files a worker can access and what tools it can call. The config is
-// built by the parent process and passed to the sandboxed worker — the worker
-// never modifies it.
+// Provides a TypeScript API for building sandbox configurations.
 
 export type { FilePermissions, PermissionsConfig, ProjectFileEntry } from './types.js'
 export { createSandboxConfig, type SandboxConfig, type SandboxEnvironments, type FileRule, type CreateSandboxInput } from './config.js'

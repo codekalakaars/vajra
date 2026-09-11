@@ -1,12 +1,3 @@
-// OpenRouter chat-completions client backed by the OpenAI SDK.
-//
-// OpenRouter's API is OpenAI-compatible, so the official `openai` package works
-// out of the box — just point it at OpenRouter's base URL.  The SDK handles
-// SSE parsing, tool-call delta accumulation, retries, and streaming.
-//
-// `fetchImpl` is kept in the public interface so tests can stub it, but the
-// SDK ignores it when constructing its own internal client.
-
 import OpenAI from 'openai'
 import type {
   ChatCompletion,
@@ -139,10 +130,6 @@ function toResult(completion: ChatCompletion): ChatCompletionResult {
   return { message, finishReason: choice.finish_reason ?? null }
 }
 
-/**
- * Non-streaming chat completion.  Used during the plan phase where we need
- * the full response before proceeding.  Retries on 429 with backoff.
- */
 export async function chatCompletion(
   request: ChatCompletionRequest,
   _fetchImpl?: FetchLike,
@@ -170,11 +157,6 @@ export async function chatCompletion(
   }
 }
 
-/**
- * Streaming chat completion.  Calls `onTextDelta` for each text chunk and
- * `onThinkingDelta` for each reasoning/thinking token chunk.  Retries on
- * 429 before any tokens are emitted.
- */
 export async function streamChatCompletion(
   request: ChatCompletionRequest,
   onTextDelta: (text: string) => void,
@@ -215,15 +197,11 @@ export async function streamChatCompletion(
 
     const delta = choice.delta
 
-    // Text content
     if (delta?.content) {
       content += delta.content
       onTextDelta(delta.content)
     }
 
-    // Thinking / reasoning tokens — OpenRouter returns reasoning_details
-    // on the delta, but the SDK types don't include it yet.  Access via
-    // a type assertion.
     if (onThinkingDelta) {
       const d = delta as Record<string, unknown> | undefined
       const rd = d?.reasoning_details as Array<Record<string, unknown>> | undefined
@@ -236,7 +214,6 @@ export async function streamChatCompletion(
       }
     }
 
-    // Tool calls (SDK delivers fragments keyed by index)
     if (delta?.tool_calls) {
       for (const fragment of delta.tool_calls) {
         const idx = fragment.index

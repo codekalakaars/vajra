@@ -1,14 +1,9 @@
 // Tool access restriction.
-//
-// Filters tool names based on a SandboxConfig. The sandbox config specifies
-// which tool names are allowed; the worker enforces this list at dispatch time.
-//
-// This module has zero dependency on @vajra/protocol — the known tool names
-// are defined here so the sandbox package stays standalone.
+// Filters tool names based on SandboxConfig's allowedTools list.
+// Has zero dependency on @vajra/protocol — standalone.
 
 import type { SandboxConfig } from './config.js'
 
-/** All known tool names across the system. */
 export const KNOWN_TOOLS = [
   // File operations
   'read_file',
@@ -33,7 +28,6 @@ export const KNOWN_TOOLS = [
 
 export type ToolName = (typeof KNOWN_TOOLS)[number]
 
-/** Default tools per agent role. Used when no explicit allowedTools is set. */
 const ROLE_DEFAULTS: Record<string, ToolName[]> = {
   manager: ['read_file', 'list_files'],
   master: ['read_file', 'list_files', 'run_command'],
@@ -42,14 +36,8 @@ const ROLE_DEFAULTS: Record<string, ToolName[]> = {
 
 /**
  * Resolve the list of tool names a worker is allowed to call.
- *
- * Priority:
- *  1. If `config.allowedTools` is set, use it (explicit allowlist).
- *  2. If `role` is provided, use `ROLE_DEFAULTS[role]` as the base.
- *  3. If neither is set, all known tools are allowed.
- *
- * Every returned name is validated against `KNOWN_TOOLS` — unknown names
- * are silently dropped rather than producing a tool the worker cannot dispatch.
+ * Priority: config.allowedTools > role defaults > all known tools.
+ * Unknown names are silently dropped.
  */
 export function resolveAllowedTools(
   config: SandboxConfig,
@@ -58,7 +46,6 @@ export function resolveAllowedTools(
   const knownSet = new Set<string>(KNOWN_TOOLS)
 
   let candidates: string[]
-
   if (config.allowedTools !== null) {
     candidates = [...config.allowedTools]
   } else if (role && ROLE_DEFAULTS[role]) {

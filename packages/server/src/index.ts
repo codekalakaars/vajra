@@ -7,9 +7,6 @@ import { createAppServer } from './ws/server.js'
 import type { SessionLauncher } from './session/manager.js'
 import { forkSessionLauncher } from './session/launcher.js'
 
-// Load .env before reading process.env. Existing env vars win — dotenv never
-// overrides by default. Try CWD first, then repo root (so `pnpm --filter`
-// from packages/server still finds the root .env).
 dotenv.config()
 if (!process.env.OPENROUTER_API_KEY) {
   const repoRootEnv = resolve(dirname(fileURLToPath(import.meta.url)), '../../..', '.env')
@@ -28,11 +25,6 @@ export interface RunningServer {
   close(): Promise<void>
 }
 
-/**
- * Boots the HTTP+WebSocket server and opens the SQLite database. Returns a
- * handle rather than blocking, so tests can start a real server on an
- * ephemeral port and drive it with a real WS client.
- */
 export function startServer(options: StartOptions = {}): Promise<RunningServer> {
   const httpServer = createHttpServer()
   const db = openDb(options.dbPath ?? 'vajra.db')
@@ -47,11 +39,6 @@ export function startServer(options: StartOptions = {}): Promise<RunningServer> 
         port,
         close: () =>
           new Promise((res) => {
-            // http.Server#close's callback waits for every open connection to
-            // finish, including already-upgraded WebSocket sockets — a client
-            // that called ws.close() a moment ago may not have finished its
-            // TCP teardown yet, and this would hang waiting for it. Terminate
-            // any still-open clients first so close() always settles.
             for (const client of wss.clients) client.terminate()
 
             wss.close(() => {
