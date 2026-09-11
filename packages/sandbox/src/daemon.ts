@@ -1,8 +1,5 @@
 // Sandbox daemon — manages file locks, permissions, and agent connections.
-//
-// Runs as a background process, listening on a Unix socket. Agents connect
-// to request file locks and check permissions. The daemon enforces
-// read-shared/write-exclusive locking and per-file permission rules.
+// Listens on a Unix socket for agent connections.
 
 import { createServer, type Server, type Socket } from 'node:net'
 import { readFileSync, existsSync } from 'node:fs'
@@ -11,15 +8,11 @@ import { resolveFilePermission, matchesPattern } from './file-rules.js'
 import type { FileRule } from './config.js'
 import type { FilePermissions } from './types.js'
 
-// ---- Config ----
-
 export interface DaemonConfig {
   projectDir: string
   socketPath: string
   environment?: string
 }
-
-// ---- Agent tracking ----
 
 interface ConnectedAgent {
   id: string
@@ -28,8 +21,6 @@ interface ConnectedAgent {
   socket: Socket
   connectedAt: number
 }
-
-// ---- Request/Response shapes ----
 
 interface DaemonRequest {
   type: string
@@ -41,8 +32,6 @@ interface DaemonResponse {
   error?: string
   [key: string]: unknown
 }
-
-// ---- Daemon ----
 
 export class SandboxDaemon {
   private server: Server | null = null
@@ -61,10 +50,8 @@ export class SandboxDaemon {
   constructor(private config: DaemonConfig) {}
 
   async start(): Promise<void> {
-    // Load sandbox config if it exists
     this.loadConfig()
 
-    // Create Unix socket server
     this.server = createServer((socket) => this.handleConnection(socket))
 
     return new Promise((resolve, reject) => {
@@ -76,16 +63,13 @@ export class SandboxDaemon {
   }
 
   async stop(): Promise<void> {
-    // Release all locks
     this.locks.clear()
 
-    // Close all agent connections
     for (const agent of this.agents.values()) {
       agent.socket.destroy()
     }
     this.agents.clear()
 
-    // Close server
     return new Promise((resolve) => {
       if (this.server) {
         this.server.close(() => resolve())
@@ -103,15 +87,12 @@ export class SandboxDaemon {
       const raw = readFileSync(configPath, 'utf-8')
       const parsed = JSON.parse(raw)
 
-      // Handle environments
       const envConfig = this.config.environment
         ? parsed.environments?.[this.config.environment]
         : parsed
 
       if (envConfig) {
-        if (envConfig.fileRules) {
-          this.fileRules = envConfig.fileRules
-        }
+        if (envConfig.fileRules) this.fileRules = envConfig.fileRules
         if (envConfig.defaultPermissions) {
           this.defaultPermissions = {
             read: envConfig.defaultPermissions.read ?? true,
@@ -120,13 +101,9 @@ export class SandboxDaemon {
             delete: envConfig.defaultPermissions.delete ?? false,
           }
         }
-        if (envConfig.allowedTools) {
-          this.allowedTools = envConfig.allowedTools
-        }
+        if (envConfig.allowedTools) this.allowedTools = envConfig.allowedTools
       }
-    } catch {
-      // Ignore corrupt config
-    }
+    } catch {}
   }
 
   private handleConnection(socket: Socket): void {
@@ -154,7 +131,6 @@ export class SandboxDaemon {
     })
 
     socket.on('close', () => {
-      // Release all locks held by this agent
       this.locks.releaseAll(agentId)
       this.agents.delete(agentId)
     })
@@ -172,35 +148,27 @@ export class SandboxDaemon {
         agent.pid = Number(request.pid) || undefined
         this.sendResponse(agent, { ok: true })
         break
-
       case 'lock':
         this.handleLock(agent, request)
         break
-
       case 'unlock':
         this.handleUnlock(agent, request)
         break
-
       case 'check-permission':
         this.handleCheckPermission(agent, request)
         break
-
       case 'check-tool':
         this.handleCheckTool(agent, request)
         break
-
       case 'status':
         this.handleStatus(agent)
         break
-
       case 'list-locks':
         this.handleListLocks(agent)
         break
-
       case 'list-agents':
         this.handleListAgents(agent)
         break
-
       default:
         this.sendResponse(agent, {
           ok: false,
@@ -250,7 +218,6 @@ export class SandboxDaemon {
 
   private handleCheckTool(agent: ConnectedAgent, request: DaemonRequest): void {
     const tool = String(request.tool || '')
-
     if (this.allowedTools === null) {
       this.sendResponse(agent, { ok: true, allowed: true })
       return

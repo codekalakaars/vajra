@@ -1,12 +1,6 @@
 // File-based sandbox configuration persistence.
-//
-// Loads and saves `.vajra-sandbox.json` in a project directory. This file
-// lets users configure sandbox rules outside of code — the server reads it
-// when creating a session and passes the resulting SandboxConfig to the worker.
-//
-// Supports two formats:
-//  1. Flat — a single config at the top level (backward compatible)
-//  2. Environments — named configs under an "environments" key
+// Loads and saves `.vajra-sandbox.json` in a project directory.
+// Supports two formats: flat (single config) and environments (named configs).
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -15,7 +9,6 @@ import { createSandboxConfig } from './config.js'
 
 export const DEFAULT_CONFIG_FILE = '.vajra-sandbox.json'
 
-/** On-disk shape of .vajra-sandbox.json (looser than SandboxConfig). */
 interface PersistedConfig {
   version?: number
   defaultPermissions?: {
@@ -35,7 +28,6 @@ interface PersistedConfig {
   allowUnenforced?: boolean
   readExecutePaths?: string[]
   readWritePaths?: string[]
-  /** Named environments. Each value has the same shape as the flat config. */
   environments?: Record<string, Omit<PersistedConfig, 'environments'>>
 }
 
@@ -69,10 +61,7 @@ function parseConfig(
 
 /**
  * Load all named environments from `.vajra-sandbox.json`.
- *
- * If the file uses the flat format (no `environments` key), returns a single
- * environment named `"default"`. Returns an empty map when the file is absent
- * or unparseable.
+ * If flat format (no `environments` key), returns a single "default" environment.
  */
 export function loadSandboxEnvironments(projectDir: string): SandboxEnvironments {
   const path = join(projectDir, DEFAULT_CONFIG_FILE)
@@ -97,7 +86,6 @@ export function loadSandboxEnvironments(projectDir: string): SandboxEnvironments
       result[name] = createSandboxConfig(parseConfig(envRaw, projectDir))
     }
   } else {
-    // Flat format — wrap as a single "default" environment
     result['default'] = createSandboxConfig(parseConfig(parsed, projectDir))
   }
 
@@ -105,13 +93,9 @@ export function loadSandboxEnvironments(projectDir: string): SandboxEnvironments
 }
 
 /**
- * Load a SandboxConfig from `.vajra-sandbox.json` in the project directory.
- *
- *  - `loadSandboxConfig(projectDir)` — loads the flat config or the "default" environment
- *  - `loadSandboxConfig(projectDir, 'editor')` — loads the named environment
- *
- * Returns null when the file is absent, unparseable, or the named environment
- * doesn't exist.
+ * Load a SandboxConfig from `.vajra-sandbox.json`.
+ *  - `loadSandboxConfig(projectDir)` — loads flat or "default" environment
+ *  - `loadSandboxConfig(projectDir, 'editor')` — loads named environment
  */
 export function loadSandboxConfig(
   projectDir: string,
@@ -122,7 +106,6 @@ export function loadSandboxConfig(
   return envs[key] ?? null
 }
 
-/** On-disk serializable subset of SandboxConfig. */
 interface SerializedConfig {
   version: number
   defaultPermissions: { read: boolean; write: boolean; edit: boolean; delete: boolean }
@@ -151,20 +134,13 @@ function serializeConfig(config: SandboxConfig): SerializedConfig {
   }
 }
 
-/**
- * Save a SandboxConfig to `.vajra-sandbox.json` in the project directory.
- *
- * Writes the flat format (no `environments` key) — suitable when there's
- * only one config. For multiple environments, use `saveSandboxEnvironments`.
- */
+/** Save a SandboxConfig (flat format). */
 export function saveSandboxConfig(projectDir: string, config: SandboxConfig): void {
   const path = join(projectDir, DEFAULT_CONFIG_FILE)
   writeFileSync(path, JSON.stringify(serializeConfig(config), null, 2) + '\n', 'utf-8')
 }
 
-/**
- * Save multiple named environments to `.vajra-sandbox.json`.
- */
+/** Save multiple named environments. */
 export function saveSandboxEnvironments(
   projectDir: string,
   environments: SandboxEnvironments,

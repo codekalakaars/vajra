@@ -1,11 +1,5 @@
 // Glob matching and file permission resolution.
-//
-// Converts an array of FileRule patterns into a concrete PermissionsConfig
-// that vajra-core understands. Also filters ProjectFileEntry lists to only
-// show files the sandbox allows.
-//
-// Glob support is intentionally minimal: *, **, ?, and ! negation. No brace
-// expansion, no character classes — keep config files human-readable.
+// Glob support is intentionally minimal: *, **, ?, and ! negation.
 
 import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -20,9 +14,6 @@ import type { SandboxConfig, FileRule } from './config.js'
  *  - `**`  matches any characters including `/`
  *  - `?`   matches exactly one character except `/`
  *  - `!`   prefix negates the pattern
- *
- * Matching is against the full path (e.g. "src/index.ts"), not just the
- * filename. A pattern without `/` is matched against each path segment.
  */
 export function matchesPattern(filePath: string, pattern: string): boolean {
   let negated = false
@@ -38,10 +29,8 @@ export function matchesPattern(filePath: string, pattern: string): boolean {
 }
 
 function matchGlob(path: string, pattern: string): boolean {
-  // Split both into segments for comparison
   const pathSegments = path.split('/')
   const patternSegments = pattern.split('/')
-
   return matchSegments(pathSegments, patternSegments, 0, 0)
 }
 
@@ -51,33 +40,19 @@ function matchSegments(
   pi: number,
   si: number,
 ): boolean {
-  // Pattern exhausted — path must also be exhausted
-  if (si >= pattern.length) {
-    return pi >= path.length
-  }
+  if (si >= pattern.length) return pi >= path.length
 
   const seg = pattern[si]
 
-  // ** matches zero or more directories
   if (seg === '**') {
-    // Try matching ** against 0, 1, 2, ... path segments
     for (let skip = pi; skip <= path.length; skip++) {
-      if (matchSegments(path, pattern, skip, si + 1)) {
-        return true
-      }
+      if (matchSegments(path, pattern, skip, si + 1)) return true
     }
     return false
   }
 
-  // Path exhausted but pattern remains
-  if (pi >= path.length) {
-    return false
-  }
-
-  // Match single segment
-  if (!matchSegment(path[pi], seg)) {
-    return false
-  }
+  if (pi >= path.length) return false
+  if (!matchSegment(path[pi], seg)) return false
 
   return matchSegments(path, pattern, pi + 1, si + 1)
 }
@@ -92,40 +67,31 @@ function matchSimpleGlob(
   ti: number,
   pi: number,
 ): boolean {
-  // Both exhausted
   if (ti >= text.length && pi >= pat.length) return true
-
-  // Pattern exhausted but text remains
   if (pi >= pat.length) return false
 
   const p = pat[pi]
 
   if (p === '*') {
-    // * matches everything except /
-    // Try matching 0, 1, 2, ... characters
     for (let skip = ti; skip <= text.length; skip++) {
-      if (text[skip] === '/') break // * cannot cross /
+      if (text[skip] === '/') break
       if (matchSimpleGlob(text, pat, skip, pi + 1)) return true
     }
     return false
   }
 
   if (p === '?') {
-    // ? matches one character (not /)
     if (ti >= text.length || text[ti] === '/') return false
     return matchSimpleGlob(text, pat, ti + 1, pi + 1)
   }
 
-  // Literal character
   if (ti >= text.length || text[ti] !== p) return false
   return matchSimpleGlob(text, pat, ti + 1, pi + 1)
 }
 
 /**
  * Resolve the effective file permissions for a path by applying rules in order.
- *
  * Rules are evaluated in array order — later rules override earlier ones.
- * The default permissions serve as the base.
  */
 export function resolveFilePermission(
   config: SandboxConfig,
@@ -161,7 +127,7 @@ function walkProject(projectDir: string, maxDepth = 8): string[] {
     for (const entry of entries) {
       if (skip.has(entry.name)) continue
       if (entry.name.startsWith('.') && entry.name !== '.sample.env') continue
-      const full = join(dir, entry.name)
+      const full = join(dir, entry.path)
       const rel = full.slice(projectDir.length + 1)
       if (entry.isDirectory()) {
         walk(full, depth + 1)
@@ -176,12 +142,10 @@ function walkProject(projectDir: string, maxDepth = 8): string[] {
 }
 
 /**
- * Expand glob-based file rules against the actual files on disk, producing
+ * Expand glob-based file rules against actual files on disk, producing
  * a concrete per-path permissions map. This is what lets Landlock/Seatbelt
- * (OS-level, mechanism-agnostic to which tool a caller uses — including
- * `run_command`) enforce a rule like `{pattern: "secrets/**", read: false}`.
- * A per-tool-call JS check alone cannot: it only runs for tools whose args
- * name a path, and `run_command` doesn't.
+ * enforce a rule like `{pattern: "secrets/**", read: false}` — a per-tool-call
+ * JS check alone cannot, because `run_command` doesn't name a path.
  */
 export function expandFileRules(
   projectDir: string,
@@ -201,7 +165,6 @@ export function expandFileRules(
         if (rule.delete !== undefined) perms.delete = rule.delete
       }
     }
-    // Only add entries that differ from default
     if (
       perms.read !== defaultPermissions.read ||
       perms.write !== defaultPermissions.write ||
@@ -216,10 +179,7 @@ export function expandFileRules(
 }
 
 /**
- * Build a PermissionsConfig (the shape vajra-core expects) from a
- * SandboxConfig. The result's `files` map has one entry per project file
- * whose resolved permissions differ from the default — this is what gets
- * enforced at the OS level, not just re-checked per tool call.
+ * Build a PermissionsConfig (the shape vajra-core expects) from a SandboxConfig.
  */
 export function resolveFilePermissions(config: SandboxConfig): PermissionsConfig {
   return {
@@ -230,19 +190,14 @@ export function resolveFilePermissions(config: SandboxConfig): PermissionsConfig
 }
 
 /**
- * Filter a list of project file entries to only those the sandbox allows
- * (read permission = true after applying rules).
+ * Filter project file entries to only those the sandbox allows (read = true).
  */
 export function filterFileEntries(
   entries: ProjectFileEntry[],
   config: SandboxConfig,
 ): ProjectFileEntry[] {
   return entries.filter((entry) => {
-    if (entry.isDir) {
-      // Directories are always included — traversal is needed to reach files.
-      // Actual access is gated by the sandbox at the native level.
-      return true
-    }
+    if (entry.isDir) return true
     const perm = resolveFilePermission(config, entry.path)
     return perm.read
   })
@@ -252,13 +207,11 @@ export function filterFileEntries(
 // Per-tool-call permission checking (shared between CLI and worker)
 // ---------------------------------------------------------------------------
 
-/** Tools that modify state (write/edit/delete/create/copy/rename). */
 const WRITE_TOOLS = new Set([
   'write_file', 'edit_file', 'delete_file', 'delete_dir',
   'create_dir', 'copy_file', 'rename_file',
 ])
 
-/** Extract the file path(s) a tool call targets. */
 function extractPaths(tool: string, args: unknown): string[] {
   const a = args as Record<string, unknown>
   switch (tool) {
@@ -274,19 +227,13 @@ function extractPaths(tool: string, args: unknown): string[] {
     case 'rename_file':
       return [a.source, a.destination].filter((p): p is string => typeof p === 'string')
     default:
-      return [] // run_command has no file path
+      return []
   }
 }
 
 /**
  * Check whether a single tool call is allowed by the file rules.
- *
  * Returns null if permitted, or an error message string if denied.
- * Used by both the worker (per-tool-call) and can be used by CLI agents
- * to pre-validate before dispatching.
- *
- * `projectDir` is used to convert absolute paths to project-relative
- * before pattern matching — rules are always project-relative.
  */
 export function checkToolPermission(
   tool: string,
@@ -299,7 +246,6 @@ export function checkToolPermission(
 
   const paths = extractPaths(tool, args)
   for (const filePath of paths) {
-    // Convert to project-relative for pattern matching
     let relPath = filePath
     if (projectDir && filePath.startsWith(projectDir)) {
       relPath = filePath.slice(projectDir.length + 1)

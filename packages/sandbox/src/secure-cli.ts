@@ -1,23 +1,11 @@
 // vajra secure — sandbox the current terminal.
-//
-// Usage:
-//   vajra secure [options] [-- <command> [args...]]
-//
-// Options:
-//   --project-dir <dir>   Project directory (default: cwd)
-//   --env <name>          Sandbox environment name
-//   --check               Check capabilities without applying
-//
-// What it does:
-//   1. Reads .vajra-sandbox.json from the project directory
-//   2. Checks platform capabilities (Landlock/Seatbelt/none)
-//   3. Applies OS-level filesystem confinement to this process
-//   4. Spawns the requested command (or a shell) inside the sandbox
+// Reads .vajra-sandbox.json, applies OS-level confinement, spawns a command.
 
 import { existsSync, readFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { resolve, join } from 'node:path'
 import { expandFileRules } from './file-rules.js'
+import type { FileRule } from './config.js'
 
 type NativeModule = typeof import('@codekalakaars/vajra-core')
 
@@ -64,14 +52,6 @@ function parseArgs(): SecureConfig {
   }
 
   return config
-}
-
-interface FileRule {
-  pattern: string
-  read?: boolean
-  write?: boolean
-  edit?: boolean
-  delete?: boolean
 }
 
 interface SandboxJsonConfig {
@@ -145,12 +125,6 @@ Examples:
   vajra secure --project-dir ./app -- npm test
   vajra secure --check                      # Check capabilities only
 
-What it does:
-  1. Reads .vajra-sandbox.json from the project
-  2. Checks platform capabilities (Landlock/Seatbelt/none)
-  3. Applies OS-level filesystem confinement
-  4. Spawns your command inside the sandbox
-
 The confinement is irreversible — even the harness itself is confined.
 `)
 }
@@ -194,7 +168,6 @@ export async function run(native: NativeModule | null) {
     delete: sandboxConfig.defaultPermissions?.delete ?? false,
   }
 
-  // Start with explicit per-path permissions
   const files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> = {}
   if (sandboxConfig.files) {
     for (const [path, perms] of Object.entries(sandboxConfig.files)) {
@@ -207,7 +180,6 @@ export async function run(native: NativeModule | null) {
     }
   }
 
-  // Expand fileRules (glob patterns) against actual project files
   if (sandboxConfig.fileRules && sandboxConfig.fileRules.length > 0) {
     const expanded = expandFileRules(config.projectDir, sandboxConfig.fileRules, defaultPerms)
     for (const [path, perms] of Object.entries(expanded)) {

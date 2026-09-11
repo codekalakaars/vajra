@@ -9,15 +9,12 @@ export interface LaunchJob {
   sessionId: string
   projectDir: string
   permissions: PermissionsConfig
-  /** Glob-based file rules evaluated per tool call by the worker. */
   fileRules?: readonly FileRule[]
-  /** Default permissions for files with no matching rule. */
   defaultFilePermissions?: FilePermissions
   allowUnenforced: boolean
 }
 
 export interface LaunchHandle {
-  /** Send one tool call to the worker and await its result. */
   callTool(tool: string, args: unknown): Promise<unknown>
   stop(): void
 }
@@ -28,23 +25,11 @@ export interface SandboxReport {
   warnings: string[]
 }
 
-/**
- * Starts whatever actually confines and runs a session. Slice 2 supplies the
- * real implementation (fork the sandboxed worker, wait for its report).
- * Injected rather than imported directly so this file has zero dependency on
- * how — or whether — a worker process exists yet.
- */
 export type SessionLauncher = (
   job: LaunchJob,
   onSandboxReport: (report: SandboxReport) => void,
 ) => Promise<LaunchHandle>
 
-/**
- * The default launcher until slice 2 lands. Fails closed: a session that
- * cannot be launched is marked `failed`, never silently left running
- * unsandboxed. This is deliberate, not a placeholder to relax later — see
- * the security invariant checklist in the project plan.
- */
 export const notImplementedLauncher: SessionLauncher = async () => {
   throw new Error('Session launcher is not implemented yet')
 }
@@ -70,16 +55,6 @@ export class SessionManager {
     private events: PushEvents,
   ) {}
 
-  /**
-   * `subscribe` must be called before the launcher runs, not after `create`
-   * returns. The launcher can fail (or report sandbox status) synchronously
-   * within this call — with the old plan (subscribe only via a later
-   * `session.attach`), no connection exists in the subscriber set yet at
-   * that point, so an immediate failure event fires into an empty set and
-   * is silently dropped. The caller learns nothing and any listener waiting
-   * for that event hangs forever. Subscribing the creating connection here,
-   * before invoking the launcher, closes that window.
-   */
   async create(
     input: CreateSessionInput,
     subscribe: (sessionId: string) => void,
@@ -96,16 +71,8 @@ export class SessionManager {
 
     subscribe(sessionId)
 
-    // Load sandbox config if present — the worker needs fileRules and
-    // defaultFilePermissions to evaluate per-tool-call file permissions.
     const sandboxConfig = loadSandboxConfig(input.projectDir)
 
-    // Fold fileRules into the OS-level permissions map too, not just the
-    // worker's per-tool-call check below. The per-tool-call check only runs
-    // for tools whose args name a file path — run_command doesn't — so a
-    // rule like {pattern: "secrets/**", read: false} must also reach
-    // Landlock/Seatbelt directly or a sandboxed shell command can still
-    // read denied paths.
     const permissions = sandboxConfig?.fileRules.length
       ? {
           ...input.permissions,
@@ -177,9 +144,7 @@ export class SessionManager {
         }
       | undefined
 
-    if (!row) {
-      throw new Error(`No such session '${sessionId}'`)
-    }
+    if (!row) throw new Error(`No such session '${sessionId}'`)
 
     const messages = this.db
       .prepare(
@@ -251,31 +216,17 @@ export class SessionManager {
     this.events.push('session.deleted', sessionId, { sessionId })
   }
 
-  /**
-   * Start the agent loop for a session. Reads the session data from SQLite,
-   * runs the plan-then-execute loop, and updates the session status on
-   * completion or failure.
-   *
-   * Must be called after the creating connection is subscribed (see `create`).
-   * The API key is held in this process — the worker never sees it.
-   */
   async startSession(sessionId: string, apiKey: string): Promise<AgentLoopResult> {
     const row = this.db
       .prepare(`SELECT id, project_dir, task, model FROM sessions WHERE id = ?`)
       .get(sessionId) as { id: string; project_dir: string; task: string; model: string } | undefined
 
-    if (!row) {
-      throw new Error(`No such session '${sessionId}'`)
-    }
+    if (!row) throw new Error(`No such session '${sessionId}'`)
 
-    // Load permissions from the project
     const permRow = this.db
       .prepare(`SELECT project_dir FROM sessions WHERE id = ?`)
       .get(sessionId) as { project_dir: string }
 
-    // Use the default permissions — the caller should have set these via
-    // savePermissions before creating the session. We read them from the
-    // native layer which loads from .vajra-perms.json.
     const { loadPermissions } = await import('../native.js')
     const permissions = loadPermissions(permRow.project_dir) ?? {
       version: 1,
@@ -304,8 +255,6 @@ export class SessionManager {
       const message = e instanceof Error ? e.message : String(e)
       this.setStatus(sessionId, 'failed', Date.now())
       this.events.push('session.failed', sessionId, { message })
-      // Keep the handle alive — the worker process is still running.
-      // The user can retry by sending a new message.
       throw e
     }
   }

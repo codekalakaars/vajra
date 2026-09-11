@@ -1,14 +1,3 @@
-// Bridges OpenRouter's wire format for tool calls to the {tool, args} shape
-// the sandboxed worker's dispatch loop expects.
-//
-// This validation is deliberately separate from — and does not replace —
-// the worker's own re-validation in worker/sandboxed-worker.mjs. That
-// process is the actual security boundary and never trusts this layer's
-// output. This layer exists so a malformed model response (an unknown tool
-// name, non-JSON arguments, a schema mismatch) produces an immediate,
-// cheap tool-result error the model can see and react to, without spending
-// an IPC round trip to the worker on something already known to be invalid.
-
 import { toolDefinitions, toOpenAiToolSpecs, type ToolName } from '@vajra/protocol'
 import type { OpenRouterToolCall, OpenAiToolSpec } from './openrouter.js'
 

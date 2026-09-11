@@ -1,31 +1,19 @@
 // vajra sandbox — manage the sandbox daemon.
-//
-// Usage:
-//   vajra sandbox start [--project-dir <dir>] [--env <name>]
-//   vajra sandbox stop [--project-dir <dir>]
-//   vajra sandbox status [--project-dir <dir>]
-//   vajra sandbox locks [--project-dir <dir>]
-//   vajra sandbox agents [--project-dir <dir>]
+// Commands: start, stop, status, locks, agents
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 
-// ---- Helpers ----
-
 function getProjectDir(): string {
   const idx = process.argv.indexOf('--project-dir')
-  if (idx !== -1 && process.argv[idx + 1]) {
-    return resolve(process.argv[idx + 1])
-  }
+  if (idx !== -1 && process.argv[idx + 1]) return resolve(process.argv[idx + 1])
   return process.cwd()
 }
 
 function getEnvironment(): string | undefined {
   const idx = process.argv.indexOf('--env')
-  if (idx !== -1 && process.argv[idx + 1]) {
-    return process.argv[idx + 1]
-  }
+  if (idx !== -1 && process.argv[idx + 1]) return process.argv[idx + 1]
   return undefined
 }
 
@@ -56,21 +44,12 @@ function loadDaemonPid(projectDir: string): number | null {
 }
 
 function removeDaemonPid(projectDir: string): void {
-  try {
-    unlinkSync(getDaemonPidPath(projectDir))
-  } catch {}
+  try { unlinkSync(getDaemonPidPath(projectDir)) } catch {}
 }
 
 function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
+  try { process.kill(pid, 0); return true } catch { return false }
 }
-
-// ---- Commands ----
 
 async function cmdStart(): Promise<void> {
   const projectDir = getProjectDir()
@@ -91,7 +70,6 @@ async function cmdStart(): Promise<void> {
   if (environment) console.log(`Environment: ${environment}`)
   console.log(`Socket: ${socketPath}`)
 
-  // Import and create daemon dynamically
   const { SandboxDaemon } = await import('./daemon.js')
   const daemon = new SandboxDaemon({ projectDir, socketPath, environment })
 
@@ -135,10 +113,7 @@ async function cmdStop(): Promise<void> {
     process.kill(pid, 'SIGTERM')
     await new Promise<void>((resolve) => {
       const check = setInterval(() => {
-        if (!isProcessRunning(pid)) {
-          clearInterval(check)
-          resolve()
-        }
+        if (!isProcessRunning(pid)) { clearInterval(check); resolve() }
       }, 100)
       setTimeout(() => { clearInterval(check); resolve() }, 5000)
     })
@@ -198,10 +173,7 @@ async function cmdLocks(): Promise<void> {
     await client.connect()
     const response = await client.listLocks()
     await client.disconnect()
-    if (response.locks.length === 0) {
-      console.log('No active file locks')
-      return
-    }
+    if (response.locks.length === 0) { console.log('No active file locks'); return }
     console.log(`Active file locks (${response.locks.length}):`)
     for (const lock of response.locks) {
       console.log(`  ${lock.file}`)
@@ -221,10 +193,7 @@ async function cmdAgents(): Promise<void> {
     await client.connect()
     const response = await client.listAgents()
     await client.disconnect()
-    if (response.agents.length === 0) {
-      console.log('No connected agents')
-      return
-    }
+    if (response.agents.length === 0) { console.log('No connected agents'); return }
     console.log(`Connected agents (${response.agents.length}):`)
     for (const agent of response.agents) {
       const uptime = Math.round((Date.now() - (agent.connectedAt as number)) / 1000)

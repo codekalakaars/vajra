@@ -1,15 +1,6 @@
 #!/usr/bin/env node
 // vajra — main CLI entry point.
-//
-// Usage:
-//   vajra secure [options] [-- <command> [args...]]
-//   vajra sandbox start|stop|status|locks|agents [options]
-//   vajra help
-//
-// Subcommands:
-//   secure    Sandbox the current terminal (OS-level confinement)
-//   sandbox   Manage the sandbox daemon (file locks, permissions)
-//   help      Show help
+// Commands: secure, sandbox, help
 
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -17,22 +8,17 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-// Resolve @codekalakaars/vajra-core from the package's own node_modules, not
-// from the global install location. This matters when `vajra` is linked globally.
 function loadNative() {
-  // Try local workspace first (development)
   try {
     const localRequire = createRequire(join(__dirname, '..', 'node_modules', 'placeholder'))
     return localRequire('@codekalakaars/vajra-core')
   } catch {}
 
-  // Try from package root (npm install)
   try {
     const pkgRequire = createRequire(join(__dirname, '..', '..', 'node_modules', 'placeholder'))
     return pkgRequire('@codekalakaars/vajra-core')
   } catch {}
 
-  // Try global require (fallback)
   try {
     const globalRequire = createRequire(import.meta.url)
     return globalRequire('@codekalakaars/vajra-core')
@@ -40,8 +26,6 @@ function loadNative() {
 
   return null
 }
-
-// ---- Subcommand dispatcher ----
 
 const native = loadNative()
 
@@ -66,12 +50,6 @@ Commands:
   sandbox agents              List connected agents
   help                        Show this help
 
-Examples:
-  vajra secure                              # Sandboxed shell
-  vajra secure -- git status                # Sandboxed command
-  vajra sandbox start                       # Start daemon
-  vajra sandbox status                      # Check status
-
 Run 'vajra <command> --help' for more info on a command.
 `)
 }
@@ -92,9 +70,7 @@ async function main() {
     process.exit(1)
   }
 
-  // Pass remaining args (slice off the subcommand name)
   process.argv = [process.argv[0], process.argv[1], ...args.slice(1)]
-
   await handler()
 }
 

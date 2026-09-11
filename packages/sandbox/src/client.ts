@@ -1,7 +1,5 @@
 // Client SDK for connecting to the sandbox daemon.
-//
-// Sends JSON requests over Unix socket and parses newline-delimited JSON
-// responses. Designed for simple request/response patterns — no streaming.
+// Sends JSON requests over Unix socket, parses newline-delimited JSON responses.
 
 import { connect, type Socket } from 'node:net'
 import type { LockMode } from './file-locks.js'
@@ -37,7 +35,6 @@ export class SandboxClient {
 
       this.socket.on('data', (data) => {
         this.buffer += data.toString()
-        // Process complete lines
         while (true) {
           const nl = this.buffer.indexOf('\n')
           if (nl === -1) break
@@ -50,9 +47,7 @@ export class SandboxClient {
               this.pendingResolve = null
               resolve(response)
             }
-          } catch {
-            // Ignore malformed lines
-          }
+          } catch {}
         }
       })
     })
@@ -83,7 +78,6 @@ export class SandboxClient {
       }, this.timeoutMs)
 
       this.socket.write(JSON.stringify(request) + '\n', () => {
-        // Wait for response or timeout
         const check = setInterval(() => {
           if (!this.pendingResolve) {
             clearTimeout(timeout)
