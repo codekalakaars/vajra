@@ -1,29 +1,26 @@
 // Typed push event bus.
 
-export type EventMap = {
-  'session.assistantDelta': { sessionId: string; text: string }
-  'session.thinkingDelta': { sessionId: string; text: string }
-  'session.sandboxStatus': { sessionId: string; enforced: boolean; warnings: string[] }
-  'session.completed': { sessionId: string }
-  'session.failed': { sessionId: string; message: string }
-  'session.deleted': { sessionId: string }
-}
+import type { PushEventPayloads, PushEventName } from '@codekalakaars/protocol'
 
-export type EventName = keyof EventMap
+export type EventMap = PushEventPayloads
 
+export type EventName = PushEventName
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Handler<T> = (payload: T) => void
 
 export class EventBus {
-  private listeners = new Map<string, Set<Handler<unknown>>>()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private listeners = new Map<string, Set<Handler<any>>>()
 
-  on<E extends EventName>(event: E, handler: Handler<unknown>): () => void {
+  on<E extends EventName>(event: E, handler: Handler<EventMap[E]>): () => void {
     let set = this.listeners.get(event)
     if (!set) {
       set = new Set()
       this.listeners.set(event, set)
     }
-    set.add(handler as Handler<unknown>)
-    return () => set!.delete(handler as Handler<unknown>)
+    set.add(handler)
+    return () => set!.delete(handler)
   }
 
   emit(event: string, payload: unknown): void {

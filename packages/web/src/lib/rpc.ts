@@ -1,19 +1,22 @@
 // Typed RPC caller over VajraSocket.
 
 import type { VajraSocket } from './ws.js'
+import type { PermissionsConfig } from '@codekalakaars/protocol'
 
 let nextId = 0
 
-type RpcMethodMap = {
-  'project.loadPermissions': { params: { projectDir: string }; result: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> }
-  'project.savePermissions': { params: { projectDir: string; permissions: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> }; result: { ok: true } }
+export type RpcMethodMap = {
+  'project.loadPermissions': { params: { projectDir: string }; result: PermissionsConfig }
+  'project.savePermissions': { params: { projectDir: string; config: PermissionsConfig }; result: { ok: true } }
   'project.scan': { params: { projectDir: string }; result: Array<{ name: string; path: string; isDir: boolean; isMasked: boolean }> }
-  'session.list': { params: Record<string, never>; result: Array<{ sessionId: string; projectDir: string; task: string; status: string; createdAt: string }> }
-  'session.create': { params: { projectDir: string; task: string; model?: string; permissions: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }>; allowUnenforced?: boolean }; result: { sessionId: string } }
+  'session.list': { params: Record<string, never>; result: Array<{ id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }> }
+  'session.create': { params: { projectDir: string; task: string; model: string; permissions: PermissionsConfig; allowUnenforced?: boolean }; result: { sessionId: string } }
   'session.attach': { params: { sessionId: string }; result: { session: Record<string, unknown>; plan: Array<unknown>; messages: Array<unknown> } }
   'session.stop': { params: { sessionId: string }; result: { ok: true } }
   'session.delete': { params: { sessionId: string }; result: { ok: true } }
   'session.sendMessage': { params: { sessionId: string; content: string }; result: { ok: true } }
+  'session.confirmPlan': { params: { sessionId: string; tasks?: Array<Record<string, unknown>> }; result: { ok: true } }
+  'session.rejectPlan': { params: { sessionId: string }; result: { ok: true } }
 }
 
 export type MethodName = keyof RpcMethodMap

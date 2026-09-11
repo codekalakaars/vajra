@@ -1,4 +1,4 @@
-import { AgentStatePayload } from '@vajra/protocol'
+import { AgentStatePayload } from '@codekalakaars/protocol'
 
 interface WorkerStatusProps {
   agents: AgentStatePayload[]

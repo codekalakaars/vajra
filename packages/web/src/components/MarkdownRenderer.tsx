@@ -16,6 +16,22 @@ const markedInstance = new Marked(
 
 markedInstance.setOptions({ gfm: true })
 
+// Simple HTML sanitizer — removes dangerous tags and attributes
+function sanitize(html: string): string {
+  return html
+    // Remove script, iframe, object, embed, form tags
+    .replace(/<(script|iframe|object|embed|form|input|textarea|button|select)[^>]*>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<(script|iframe|object|embed|form|input|textarea|button|select)[^>]*\/?>/gi, '')
+    // Remove on* event handlers
+    .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '')
+    .replace(/\s+on\w+\s*=\s*\S+/gi, '')
+    // Remove javascript: URLs
+    .replace(/href\s*=\s*["']javascript:[^"']*["']/gi, 'href="#"')
+    .replace(/src\s*=\s*["']javascript:[^"']*["']/gi, 'src=""')
+    // Remove data: URLs except images
+    .replace(/src\s*=\s*["']data:(?!image\/)[^"']*["']/gi, 'src=""')
+}
+
 function isCodeLine(trimmed: string): boolean {
   if (!trimmed) return false
   if (trimmed.startsWith('/*') || trimmed.startsWith('//') || trimmed.startsWith('#!')) return true
@@ -46,7 +62,6 @@ function wrapRawCodeBlocks(text: string): string {
   for (const line of lines) {
     const trimmed = line.trim()
 
-    // Skip lines inside existing fenced code blocks
     if (trimmed.startsWith('```')) {
       flush()
       inFence = !inFence
@@ -73,7 +88,8 @@ function wrapRawCodeBlocks(text: string): string {
 export function MarkdownRenderer({ content }: { content: string }) {
   const html = useMemo(() => {
     const processed = wrapRawCodeBlocks(content)
-    return markedInstance.parse(processed) as string
+    const raw = markedInstance.parse(processed) as string
+    return sanitize(raw)
   }, [content])
 
   return (

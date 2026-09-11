@@ -1,12 +1,13 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { VajraClient } from '../client'
-import type { PlannedTask, AgentStatePayload, ConflictPayload, ManagerPlan } from '@codekalakaars/protocol'
+import type { PlannedTask, AgentStatePayload, ConflictPayload, PushEventPayloads, PermissionsConfig } from '@codekalakaars/protocol'
 
 // Singleton client — persists across re-renders
 let clientSingleton: VajraClient | null = null
 function getClient(): VajraClient {
   if (!clientSingleton) {
-    const WS_URL = `ws://${window.location.hostname}:4820`
+    const WS_PORT = 4820
+    const WS_URL = `ws://${window.location.hostname}:${WS_PORT}`
     clientSingleton = new VajraClient(WS_URL)
     clientSingleton.connect()
   }
@@ -29,11 +30,9 @@ export interface SessionState {
   messages: ChatMessage[]
   thinkingText: string
   error: string | null
-  // Multi-agent state
   planTasks: PlannedTask[]
   agents: AgentStatePayload[]
   conflicts: ConflictPayload[]
-  // Accumulator for the current streaming response
   _streamingText: string
 }
 
@@ -58,13 +57,11 @@ export function useSession() {
     const unsubs: Array<() => void> = []
 
     unsubs.push(
-      client.on('session.statusChanged', (payload) => {
-        const p = payload as { sessionId: string; status: string }
-        if (p.sessionId !== sessionId) return
+      client.on('session.statusChanged', (payload: PushEventPayloads['session.statusChanged']) => {
+        if (payload.status === undefined) return
         setState((s) => ({
           ...s,
-          status: p.status as SessionState['status'],
-          // Clear streaming state on status transitions
+          status: payload.status as SessionState['status'],
           _streamingText: '',
           thinkingText: '',
         }))
@@ -72,70 +69,54 @@ export function useSession() {
     )
 
     unsubs.push(
-      client.on('session.assistantDelta', (payload) => {
-        const p = payload as { sessionId: string; text: string }
-        if (p.sessionId !== sessionId) return
+      client.on('session.assistantDelta', (payload: PushEventPayloads['session.assistantDelta']) => {
         setState((s) => ({
           ...s,
-          _streamingText: s._streamingText + p.text,
+          _streamingText: s._streamingText + payload.text,
           status: s.status === 'talking' || s.status === 'confirming' ? 'streaming' : s.status,
         }))
       }),
     )
 
     unsubs.push(
-      client.on('session.thinkingDelta', (payload) => {
-        const p = payload as { sessionId: string; text: string }
-        if (p.sessionId !== sessionId) return
-        setState((s) => ({ ...s, thinkingText: s.thinkingText + p.text }))
+      client.on('session.thinkingDelta', (payload: PushEventPayloads['session.thinkingDelta']) => {
+        setState((s) => ({ ...s, thinkingText: s.thinkingText + payload.text }))
       }),
     )
 
     // Plan events
     unsubs.push(
-      client.on('session.planStarted', (payload) => {
-        const p = payload as { sessionId: string }
-        if (p.sessionId !== sessionId) return
+      client.on('session.planStarted', () => {
         setState((s) => ({ ...s, status: 'planning', planTasks: [] }))
       }),
     )
 
     unsubs.push(
-      client.on('session.planTask', (payload) => {
-        const p = payload as { sessionId: string; task: PlannedTask }
-        if (p.sessionId !== sessionId) return
-        setState((s) => ({ ...s, planTasks: [...s.planTasks, p.task] }))
+      client.on('session.planTask', (payload: PushEventPayloads['session.planTask']) => {
+        setState((s) => ({ ...s, planTasks: [...s.planTasks, payload.task] }))
       }),
     )
 
     unsubs.push(
-      client.on('session.planComplete', (payload) => {
-        const p = payload as { sessionId: string; plan: ManagerPlan }
-        if (p.sessionId !== sessionId) return
-        setState((s) => ({ ...s, status: 'executing', planTasks: p.plan.tasks }))
+      client.on('session.planComplete', (payload: PushEventPayloads['session.planComplete']) => {
+        setState((s) => ({ ...s, status: 'executing', planTasks: payload.plan.tasks }))
       }),
     )
 
-    // New: plan proposed (Manager called propose_plan)
     unsubs.push(
-      client.on('session.planProposed', (payload) => {
-        const p = payload as { sessionId: string; plan: ManagerPlan }
-        if (p.sessionId !== sessionId) return
+      client.on('session.planProposed', (payload: PushEventPayloads['session.planProposed']) => {
         setState((s) => ({
           ...s,
           status: 'confirming',
-          planTasks: p.plan.tasks,
+          planTasks: payload.plan.tasks,
           _streamingText: '',
           thinkingText: '',
         }))
       }),
     )
 
-    // New: plan confirmed by user
     unsubs.push(
-      client.on('session.planConfirmed', (payload) => {
-        const p = payload as { sessionId: string }
-        if (p.sessionId !== sessionId) return
+      client.on('session.planConfirmed', () => {
         setState((s) => ({
           ...s,
           status: 'executing',
@@ -147,37 +128,31 @@ export function useSession() {
 
     // Worker events
     unsubs.push(
-      client.on('session.workerStarted', (payload) => {
-        const p = payload as { sessionId: string; agentId: string; taskId: string }
-        if (p.sessionId !== sessionId) return
+      client.on('session.workerStarted', (payload: PushEventPayloads['session.workerStarted']) => {
         setState((s) => ({
           ...s,
-          agents: [...s.agents, { id: p.agentId, role: 'worker', status: 'running', taskSummary: p.taskId }],
+          agents: [...s.agents, { id: payload.agentId, role: 'worker', status: 'running', taskSummary: payload.taskId }],
         }))
       }),
     )
 
     unsubs.push(
-      client.on('session.workerCompleted', (payload) => {
-        const p = payload as { sessionId: string; agentId: string; taskId: string; validationPassed: boolean }
-        if (p.sessionId !== sessionId) return
+      client.on('session.workerCompleted', (payload: PushEventPayloads['session.workerCompleted']) => {
         setState((s) => ({
           ...s,
           agents: s.agents.map((a) =>
-            a.id === p.agentId ? { ...a, status: 'done' as const } : a
+            a.id === payload.agentId ? { ...a, status: 'done' as const } : a
           ),
         }))
       }),
     )
 
     unsubs.push(
-      client.on('session.workerFailed', (payload) => {
-        const p = payload as { sessionId: string; agentId: string; taskId: string; error: string }
-        if (p.sessionId !== sessionId) return
+      client.on('session.workerFailed', (payload: PushEventPayloads['session.workerFailed']) => {
         setState((s) => ({
           ...s,
           agents: s.agents.map((a) =>
-            a.id === p.agentId ? { ...a, status: 'failed' as const } : a
+            a.id === payload.agentId ? { ...a, status: 'failed' as const } : a
           ),
         }))
       }),
@@ -185,20 +160,16 @@ export function useSession() {
 
     // Conflict events
     unsubs.push(
-      client.on('session.conflictDetected', (payload) => {
-        const p = payload as { sessionId: string } & ConflictPayload
-        if (p.sessionId !== sessionId) return
+      client.on('session.conflictDetected', (payload: PushEventPayloads['session.conflictDetected']) => {
         setState((s) => ({
           ...s,
-          conflicts: [...s.conflicts, { task1: p.task1, task2: p.task2, files: p.files }],
+          conflicts: [...s.conflicts, { task1: payload.task1, task2: payload.task2, files: payload.files }],
         }))
       }),
     )
 
     unsubs.push(
-      client.on('session.completed', (payload) => {
-        const p = payload as { sessionId: string }
-        if (p.sessionId !== sessionId) return
+      client.on('session.completed', () => {
         setState((s) => {
           const newMessages = [...s.messages]
           if (s._streamingText || s.thinkingText) {
@@ -220,9 +191,7 @@ export function useSession() {
     )
 
     unsubs.push(
-      client.on('session.failed', (payload) => {
-        const p = payload as { sessionId: string; message: string }
-        if (p.sessionId !== sessionId) return
+      client.on('session.failed', (payload: PushEventPayloads['session.failed']) => {
         setState((s) => {
           const newMessages = [...s.messages]
           if (s._streamingText || s.thinkingText) {
@@ -236,7 +205,7 @@ export function useSession() {
             ...s,
             messages: newMessages,
             status: 'failed',
-            error: p.message,
+            error: payload.message,
             thinkingText: '',
             _streamingText: '',
           }
@@ -249,7 +218,7 @@ export function useSession() {
     }
   }, [client])
 
-  // Create a new session — enters conversation mode
+  // Create a new session
   const createSession = useCallback(async (params: {
     projectDir: string
     permissions: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }>
@@ -273,7 +242,7 @@ export function useSession() {
         task: '',
         model: params.model,
         permissions: { version: 1, default: { read: true, write: false, edit: false, delete: false }, files: params.permissions },
-      }) as { sessionId: string }
+      })
 
       setState((s) => ({
         ...s,
@@ -281,7 +250,6 @@ export function useSession() {
         status: 'talking',
       }))
 
-      // Subscribe to events
       subscribe(result.sessionId)
 
       return result.sessionId
@@ -291,7 +259,7 @@ export function useSession() {
     }
   }, [client, subscribe])
 
-  // Send a message to the Manager conversation
+  // Send a message
   const sendMessage = useCallback(async (content: string) => {
     const sid = stateRef.current.sessionId
     if (!sid) return
@@ -311,7 +279,7 @@ export function useSession() {
     }
   }, [client])
 
-  // Confirm the proposed plan (optionally with user edits)
+  // Confirm the proposed plan
   const confirmPlan = useCallback(async (editedTasks?: PlannedTask[]) => {
     const sid = stateRef.current.sessionId
     if (!sid) return
@@ -319,13 +287,13 @@ export function useSession() {
     setState((s) => ({ ...s, status: 'executing' }))
 
     try {
-      await client.call('session.confirmPlan', { sessionId: sid, tasks: editedTasks })
+      await client.call('session.confirmPlan', { sessionId: sid, tasks: editedTasks as Array<Record<string, unknown>> | undefined })
     } catch (e) {
       setState((s) => ({ ...s, status: 'failed', error: String(e) }))
     }
   }, [client])
 
-  // Reject the proposed plan and return to conversation
+  // Reject the proposed plan
   const rejectPlan = useCallback(async () => {
     const sid = stateRef.current.sessionId
     if (!sid) return
@@ -344,7 +312,7 @@ export function useSession() {
     }
   }, [client])
 
-  // Attach to existing session (for reconnect / direct navigation)
+  // Attach to existing session
   const attach = useCallback(async (sessionId: string) => {
     setState({
       sessionId,
@@ -359,21 +327,18 @@ export function useSession() {
     })
 
     try {
-      const result = await client.call('session.attach', { sessionId }) as {
-        session: { status: string; model: string }
-        messages: Array<{ role: string; content: string | null }>
-      }
+      const result = await client.call('session.attach', { sessionId })
 
-      // Rebuild messages from persisted DB records
-      const messages: ChatMessage[] = (result.messages || [])
+      const messages: ChatMessage[] = (result.messages as Array<Record<string, unknown>> || [])
         .filter((m) => m.content && (m.role === 'user' || m.role === 'assistant'))
-        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content! }))
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: String(m.content) }))
 
-      const status = result.session.status === 'done' ? 'done'
-        : result.session.status === 'failed' ? 'failed'
-        : result.session.status === 'talking' ? 'talking'
-        : result.session.status === 'confirming' ? 'confirming'
-        : result.session.status === 'executing' ? 'executing'
+      const session = result.session as { status: string }
+      const status = session.status === 'done' ? 'done'
+        : session.status === 'failed' ? 'failed'
+        : session.status === 'talking' ? 'talking'
+        : session.status === 'confirming' ? 'confirming'
+        : session.status === 'executing' ? 'executing'
         : 'idle'
 
       setState((s) => ({
@@ -382,7 +347,6 @@ export function useSession() {
         status,
       }))
 
-      // Subscribe to live events
       subscribe(sessionId)
     } catch (e) {
       setState((s) => ({ ...s, status: 'failed', error: String(e) }))
@@ -392,14 +356,15 @@ export function useSession() {
   // Load permissions + scan
   const loadPermissions = useCallback(async (projectDir: string) => {
     const [perms, files] = await Promise.all([
-      client.call('project.loadPermissions', { projectDir }) as Promise<{ version: number; default: Record<string, boolean>; files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> }>,
-      client.call('project.scan', { projectDir }) as Promise<Array<{ name: string; path: string; isDir: boolean; isMasked: boolean }>>,
+      client.call('project.loadPermissions', { projectDir }),
+      client.call('project.scan', { projectDir }),
     ])
-    return { permissions: perms.files || {}, files }
+    return { permissions: perms.files || {}, files: files as Array<{ name: string; path: string; isDir: boolean; isMasked: boolean }> }
   }, [client])
 
   const savePermissions = useCallback(async (projectDir: string, permissions: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }>) => {
-    await client.call('project.savePermissions', { projectDir, config: { version: 1, default: { read: true, write: false, edit: false, delete: false }, files: permissions } } as never)
+    const config: PermissionsConfig = { version: 1, default: { read: true, write: false, edit: false, delete: false }, files: permissions }
+    await client.call('project.savePermissions', { projectDir, config })
   }, [client])
 
   const stopSession = useCallback(async () => {
