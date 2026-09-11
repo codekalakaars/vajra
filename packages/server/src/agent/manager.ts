@@ -32,22 +32,39 @@ function buildManagerConversationPrompt(
     '1. Understand the user\'s task through conversation',
     '2. Ask clarifying questions about scope, constraints, and preferences',
     '3. Explore the codebase using your tools when needed',
-    '4. When you have enough context, produce a structured plan using propose_plan',
+    '4. When you have enough context, produce a DETAILED plan using propose_plan',
     '',
     'You have access to these tools:',
     '- search_files(query): search the summary index to find relevant files (FREE)',
     '- read_file(path): read a file to understand the codebase',
     '- list_files(path): list directory contents',
-    '- propose_plan(tasks, summary): propose a structured plan when ready',
+    '- propose_plan(tasks, summary): propose a detailed plan when ready',
     '',
     'IMPORTANT RULES:',
     '- Do NOT call propose_plan on the first message — gather context first',
     '- Ask 2-4 clarifying questions before planning',
     '- Only read files you need to understand the task',
-    '- When calling propose_plan, each task needs a title, description, files, validation command, dependencies, and type',
-    '- Tasks should be independent where possible; specify dependencies explicitly',
-    '- Each task needs a validation command that actually tests the change',
-    '- Aim for 2-8 tasks; keep related work together',
+    '- Tasks must be HIGHLY PRESCRIPTIVE — the worker should not need to think',
+    '',
+    'When calling propose_plan, each task MUST include:',
+    '- title: Short title',
+    '- description: What needs to be done and why',
+    '- instructions: EXACT step-by-step instructions (e.g. "Add try-catch around line 42 in src/api.ts")',
+    '- readFile: Files the worker needs to read for context',
+    '- writeFile: Files the worker will create or modify',
+    '- deleteFile: Files to delete',
+    '- createDir: Directories to create',
+    '- validation: Commands to run after completion (must exit 0 on success)',
+    '- dependsOn: Task IDs this depends on',
+    '- type: create, modify, delete, or refactor',
+    '- allowedTools: Tools this worker can use (optional, defaults to task-type defaults)',
+    '',
+    'CRITICAL: Instructions should be so specific that a worker with no context can execute them.',
+    'Bad: "Add error handling to the API"',
+    'Good: "In src/api/users.ts, wrap the db.query() call at line 42 in try-catch. In the catch block, return { status: 500, error: e.message }. Import HttpError from src/utils/errors.ts if not already imported."',
+    '',
+    'Tasks should be independent where possible; specify dependencies explicitly.',
+    'Aim for 2-8 tasks; keep related work together.',
     '',
     'Project directory: ' + projectDir,
     '',
@@ -87,10 +104,15 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
     tasks: Array<{
       title: string
       description: string
-      files: string[]
-      validation: string
+      instructions: string[]
+      readFile: string[]
+      writeFile: string[]
+      deleteFile: string[]
+      createDir: string[]
+      validation: string[]
       dependsOn: string[]
       type: string
+      allowedTools?: string[]
     }>
     summary: string
   }
@@ -99,10 +121,15 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
     id: `task-${i + 1}`,
     title: t.title,
     description: t.description,
-    files: t.files,
-    validation: t.validation,
-    dependsOn: t.dependsOn,
+    instructions: t.instructions ?? [],
+    readFile: t.readFile ?? [],
+    writeFile: t.writeFile ?? [],
+    deleteFile: t.deleteFile ?? [],
+    createDir: t.createDir ?? [],
+    validation: t.validation ?? [],
+    dependsOn: t.dependsOn ?? [],
     type: (['create', 'modify', 'delete', 'refactor'].includes(t.type) ? t.type : 'modify') as PlannedTask['type'],
+    allowedTools: t.allowedTools,
   }))
 
   // Validate dependency references exist

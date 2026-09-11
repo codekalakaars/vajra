@@ -7,10 +7,15 @@ export interface PlannedTask {
   id: string
   title: string
   description: string
-  files: string[]
-  validation: string
+  instructions: string[]
+  readFile: string[]
+  writeFile: string[]
+  deleteFile: string[]
+  createDir: string[]
+  validation: string[]
   dependsOn: string[]
   type: 'create' | 'modify' | 'delete' | 'refactor'
+  allowedTools?: string[]
 }
 
 export interface TaskState {
@@ -19,14 +24,16 @@ export interface TaskState {
   parentTaskId: string | null
   title: string
   description: string | null
-  files: string[]
-  validation: string
+  instructions: string[]
+  readFile: string[]
+  writeFile: string[]
+  deleteFile: string[]
+  createDir: string[]
+  validation: string[]
   dependsOn: string[]
   type: 'create' | 'modify' | 'delete' | 'refactor'
   status: TaskStatus
   assignedAgentId: string | null
-  validationCommand: string | null
-  validationOutput: string | null
   validationPassed: boolean | null
   filePermissions: string | null
   toolPermissions: string | null
@@ -62,15 +69,14 @@ export class TaskQueue {
 
     this.db
       .prepare(
-        `INSERT INTO tasks (id, session_id, title, description, status, validation_command, file_permissions, tool_permissions, created_at)
-         VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, session_id, title, description, status, file_permissions, tool_permissions, created_at)
+         VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
       )
       .run(
         task.id,
         this.sessionId,
         task.title,
         task.description,
-        task.validation || null,
         filePermissions ?? null,
         toolPermissions ?? null,
         now,
@@ -83,24 +89,29 @@ export class TaskQueue {
         .run(task.id, depId)
     }
 
+    // All files this task touches (for file ownership tracking)
+    const allFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
+
     const state: TaskState = {
       id: task.id,
       sessionId: this.sessionId,
       parentTaskId: null,
       title: task.title,
       description: task.description,
-      files: task.files,
+      instructions: task.instructions,
+      readFile: task.readFile,
+      writeFile: task.writeFile,
+      deleteFile: task.deleteFile,
+      createDir: task.createDir,
       validation: task.validation,
       dependsOn: task.dependsOn,
       type: task.type,
       status: 'pending',
       assignedAgentId: null,
-      validationCommand: task.validation || null,
-      validationOutput: null,
-      validationPassed: null,
       filePermissions: filePermissions ?? null,
       toolPermissions: toolPermissions ?? null,
       retries: 0,
+      validationPassed: null,
       createdAt: now,
       startedAt: null,
       completedAt: null,
@@ -110,7 +121,7 @@ export class TaskQueue {
     this.dependencies.set(task.id, new Set(task.dependsOn))
 
     // Register file ownership
-    for (const file of task.files) {
+    for (const file of allFiles) {
       this.fileToTask.set(file, task.id)
     }
 
@@ -296,7 +307,6 @@ export class TaskQueue {
   recordValidation(taskId: string, output: string, passed: boolean): void {
     const task = this.tasks.get(taskId)
     if (task) {
-      task.validationOutput = output
       task.validationPassed = passed
     }
 

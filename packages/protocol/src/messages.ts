@@ -33,10 +33,24 @@ export interface PlannedTask {
   id: string
   title: string
   description: string
-  files: string[]
-  validation: string
+  /** Step-by-step instructions for the worker — exactly what to do. */
+  instructions: string[]
+  /** Files this task reads (read-only access). */
+  readFile: string[]
+  /** Files this task writes/edits (read-write access). */
+  writeFile: string[]
+  /** Files this task deletes. */
+  deleteFile: string[]
+  /** Directories this task creates. */
+  createDir: string[]
+  /** Commands to run for validation (e.g. ["cargo test", "npm run lint"]). */
+  validation: string[]
+  /** Task IDs this depends on (must complete before this runs). */
   dependsOn: string[]
+  /** Task type: create, modify, delete, or refactor. */
   type: TaskType
+  /** Tools this worker can use. If omitted, defaults to task-type defaults. */
+  allowedTools?: string[]
 }
 
 export interface ManagerPlan {
