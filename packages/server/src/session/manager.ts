@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
 import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage } from '@vajra/protocol'
 import type { FileRule } from '@codekalakaars/vajra-sandbox'
-import { loadSandboxConfig } from '@codekalakaars/vajra-sandbox'
+import { loadSandboxConfig, expandFileRules } from '@codekalakaars/vajra-sandbox'
 import { agentLoop, type AgentLoopResult } from '../agent/loop.js'
 
 export interface LaunchJob {
@@ -100,12 +100,28 @@ export class SessionManager {
     // defaultFilePermissions to evaluate per-tool-call file permissions.
     const sandboxConfig = loadSandboxConfig(input.projectDir)
 
+    // Fold fileRules into the OS-level permissions map too, not just the
+    // worker's per-tool-call check below. The per-tool-call check only runs
+    // for tools whose args name a file path — run_command doesn't — so a
+    // rule like {pattern: "secrets/**", read: false} must also reach
+    // Landlock/Seatbelt directly or a sandboxed shell command can still
+    // read denied paths.
+    const permissions = sandboxConfig?.fileRules.length
+      ? {
+          ...input.permissions,
+          files: {
+            ...input.permissions.files,
+            ...expandFileRules(input.projectDir, sandboxConfig.fileRules, sandboxConfig.defaultPermissions),
+          },
+        }
+      : input.permissions
+
     try {
       const handle = await this.launcher(
         {
           sessionId,
           projectDir: input.projectDir,
-          permissions: input.permissions,
+          permissions,
           allowUnenforced: input.allowUnenforced ?? false,
           ...(sandboxConfig ? {
             fileRules: sandboxConfig.fileRules,
