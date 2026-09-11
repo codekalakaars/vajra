@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const native = require('vajra-core')
+const native = require('@codekalakaars/vajra-core')
 
 const here = dirname(fileURLToPath(import.meta.url))
 const WORKER = join(here, '..', 'worker', 'sandboxed-worker.mjs')
