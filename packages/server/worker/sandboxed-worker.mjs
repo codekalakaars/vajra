@@ -23,7 +23,7 @@ import { toolDefinitions } from '@vajra/protocol'
 import { checkToolPermission } from '@codekalakaars/vajra-sandbox'
 
 const require = createRequire(import.meta.url)
-const native = require('@codekalakaars/vajra-native')
+const native = require('@codekalakaars/vajra-core')
 
 // Project dir for file permission resolution (set when job arrives)
 let projectDir = ''
@@ -94,7 +94,7 @@ function handleToolCall(message) {
     const result = dispatchTable[tool](parsedArgs)
     send({ type: 'result', callId, ok: true, result })
   } catch (e) {
-    // Forwarded verbatim: this is the same message vajra-native itself
+    // Forwarded verbatim: this is the same message vajra-core itself
     // produced (editFile's ambiguous-match refusal, deleteFile's directory
     // guard, etc.) — no rewording layer that could soften or hide a refusal.
     send({ type: 'result', callId, ok: false, error: e instanceof Error ? e.message : String(e) })

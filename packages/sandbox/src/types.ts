@@ -1,8 +1,8 @@
 // Shared types for sandbox configuration.
 //
-// These mirror vajra-native's own types (FilePermissions, PermissionsConfig,
+// These mirror vajra-core's own types (FilePermissions, PermissionsConfig,
 // ProjectFileEntry) but are kept here so @vajra/sandbox has zero dependency
-// on @vajra/protocol or vajra-native. The shapes must stay in sync — a
+// on @vajra/protocol or vajra-core. The shapes must stay in sync — a
 // mismatch is a bug.
 
 /** Per-file access permissions. */

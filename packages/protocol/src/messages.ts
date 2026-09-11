@@ -1,8 +1,8 @@
 // Payload shapes for the concrete RPC methods and push events this app uses.
 //
-// Shapes that mirror vajra-native's own types (PermissionsConfig,
+// Shapes that mirror vajra-core's own types (PermissionsConfig,
 // ProjectFileEntry, SandboxResult) are hand-duplicated rather than imported —
-// this package must stay loadable in a browser bundle, and vajra-native pulls
+// this package must stay loadable in a browser bundle, and vajra-core pulls
 // in a `.node` addon loader that can't run there.
 
 export interface FilePermissions {

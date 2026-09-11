@@ -23,16 +23,16 @@
   },
   "dependencies": {},
   "peerDependencies": {
-    "@codekalakaars/vajra-native": "workspace:*"
+    "@codekalakaars/vajra-core": "workspace:*"
   },
   "peerDependenciesMeta": {
-    "@codekalakaars/vajra-native": {
+    "@codekalakaars/vajra-core": {
       "optional": true
     }
   },
   "devDependencies": {
     "@types/node": "^22.5.4",
     "typescript": "^5.5.4",
-    "@codekalakaars/vajra-native": "workspace:*"
+    "@codekalakaars/vajra-core": "workspace:*"
   }
 }

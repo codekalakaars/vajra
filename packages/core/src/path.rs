@@ -1,15 +1,8 @@
 use napi::Error;
 use std::path::{Component, Path, PathBuf};
 
-/// Resolve `.` and `..` textually, without touching the filesystem.
-///
-/// `Path::canonicalize` cannot be used for this: it requires the path to exist
-/// and resolves symlinks. Callers frequently need to normalize a path they are
-/// about to create, so normalization has to work on paths that are not there yet.
-///
-/// Because this is purely lexical it does not consult symlinks, so for an
-/// existing path `a/link/..` may differ from what the kernel would resolve. Use
-/// `realPath` when symlink-accurate resolution matters.
+/// Lexical `.`/`..` resolution. Does not touch the filesystem or resolve
+/// symlinks; use `realPath` for that.
 fn normalize_lexically(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
 

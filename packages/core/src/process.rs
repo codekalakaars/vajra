@@ -22,8 +22,7 @@ fn finish(command: &str, output: std::io::Result<std::process::Output>) -> Resul
     })
 }
 
-/// Run a program directly, without a shell. Arguments are passed through
-/// verbatim, so no quoting or escaping is applied to them.
+/// Run a program directly, without a shell.
 #[napi]
 pub fn run_command(
     command: String,
@@ -42,10 +41,8 @@ pub fn run_command(
     finish(&command, cmd.output())
 }
 
-/// Run a command through the platform shell.
-///
-/// The string is interpreted by the shell, so anything interpolated into it is
-/// executed as code. Prefer `runCommand` for anything built from untrusted input.
+/// Run a command through the platform shell. Prefer `runCommand` for
+/// untrusted input — shell interpolation executes as code.
 #[napi]
 pub fn run_shell(command: String, cwd: Option<String>) -> Result<CommandResult, Error> {
     let mut cmd = if cfg!(target_os = "windows") {
@@ -67,11 +64,7 @@ pub fn run_shell(command: String, cwd: Option<String>) -> Result<CommandResult, 
     finish(&command, cmd.output())
 }
 
-/// Async counterparts.
-///
-/// The sync versions above block the calling thread for as long as the child
-/// process runs, which in Node means blocking the event loop. Anything that
-/// waits on a subprocess should use these; they run on the libuv threadpool.
+/// Async counterparts that run on the libuv threadpool.
 pub struct RunTask {
     command: String,
     args: Option<Vec<String>>,
@@ -121,9 +114,6 @@ pub fn run_shell_async(command: String, cwd: Option<String>) -> AsyncTask<RunTas
 }
 
 /// Candidate filenames for `command` on this platform.
-///
-/// On Windows a bare name has to be tried against each PATHEXT suffix, since
-/// `foo` on disk is really `foo.exe` or `foo.cmd`.
 #[cfg(windows)]
 fn candidate_names(command: &str) -> Vec<String> {
     if Path::new(command).extension().is_some() {
@@ -161,10 +151,6 @@ fn is_executable(path: &Path) -> bool {
 }
 
 /// Locate an executable on PATH, returning its full path.
-///
-/// This searches PATH directly rather than shelling out to `which`/`where`:
-/// no subprocess, and it avoids the trap that `where` prints *every* match on
-/// separate lines, so treating its whole output as one path is wrong.
 #[napi]
 pub fn which(command: String) -> Option<String> {
     if command.is_empty() {

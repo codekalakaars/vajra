@@ -1,13 +1,5 @@
-//! Scrubbing secret values out of text before it is shown to an agent.
-//!
-//! Extracted from the legacy supervisor (`legacy/src/supervisor.rs`), which
-//! interleaved this with unix-socket plumbing. The scrubbing itself is pure
-//! string work and portable; the socket machinery stayed behind.
-//!
-//! This is a best-effort filter with the same limits as CI log masking: it
-//! catches a secret appearing verbatim in output, not one that has been
-//! encoded, split, or otherwise transformed first.
-
+/// Scrubbing secret values out of text before it is shown to an agent.
+/// Best-effort: catches verbatim matches, not encoded/transformed ones.
 use crate::env::EnvVar;
 
 /// Values shorter than this are not redacted. They are too common in ordinary
@@ -28,10 +20,6 @@ pub fn redact_str(text: &str, secrets: &[(String, String)]) -> String {
 }
 
 /// Replace every occurrence of each secret value with `[REDACTED:<KEY>]`.
-///
-/// When streaming process output, redact whole lines rather than raw read
-/// chunks: a secret split across two chunk boundaries would otherwise slip
-/// through unmatched.
 #[napi]
 pub fn redact(text: String, secrets: Vec<EnvVar>) -> String {
     let pairs: Vec<(String, String)> = secrets

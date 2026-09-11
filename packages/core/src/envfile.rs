@@ -8,13 +8,8 @@ use crate::env::EnvVar;
 use napi::Error;
 use std::path::Path;
 
-/// Parse `.env` content into key/value pairs.
-///
-/// Tolerates comments, blank lines, `export ` prefixes, and quoted values.
-/// Lines that are not `KEY=VALUE`, or whose key is not a plain identifier, are
-/// skipped rather than treated as an error — a `.env` in the wild routinely
-/// contains things this does not model, and refusing the whole file over one
-/// odd line would be worse than ignoring it.
+/// Parse `.env` content into key/value pairs. Tolerates comments, blank
+/// lines, `export ` prefixes, and quoted values.
 pub fn parse(content: &str) -> Vec<(String, String)> {
     let mut vars = Vec::new();
 
@@ -83,9 +78,6 @@ pub fn render_sample_env(content: String) -> String {
 }
 
 /// Write the sample file if it does not exist yet. Returns true if it created one.
-///
-/// Deliberately refuses to overwrite: the sample may have been edited by hand,
-/// and clobbering it on every run would discard that.
 #[napi]
 pub fn ensure_sample_env(original: String, sample: String) -> Result<bool, Error> {
     let original_path = Path::new(&original);

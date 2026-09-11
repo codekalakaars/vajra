@@ -1,5 +1,5 @@
 [package]
-name = "vajra-native"
+name = "vajra-core"
 version = "0.1.0"
 edition = "2021"
 description = "Cross-platform native operations for Vajra"
@@ -11,11 +11,8 @@ readme = "README.md"
 [lib]
 crate-type = ["cdylib"]
 
-# legacy/ is the previous CLI, kept for reference only. Excluding it keeps
-# cargo from trying to build it as part of this crate's directory tree.
 [workspace]
 members = []
-exclude = ["legacy"]
 
 [dependencies]
 napi = { version = "2", features = ["async"] }
@@ -23,8 +20,6 @@ napi-derive = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Landlock (Linux) and Seatbelt (macOS) are raw syscalls; no sandboxing
-# crate is pulled in on Windows, where neither exists.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
