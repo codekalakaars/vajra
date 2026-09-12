@@ -240,6 +240,11 @@ export const textToSchematicTool = defineTool<TextToSchematicArgs>({
         pin: z.string().describe('Pin name or number'),
       })),
     })),
+    boardConstraints: z.object({
+      width: z.number().optional().describe('Board width in mm'),
+      height: z.number().optional().describe('Board height in mm'),
+      layers: z.enum(['2', '4', '6', '8']).optional().describe('Number of copper layers'),
+    }).optional().describe('Optional board constraints for PCB generation'),
   }),
   jsonSchema: {
     type: 'object',
@@ -283,6 +288,16 @@ export const textToSchematicTool = defineTool<TextToSchematicArgs>({
           additionalProperties: false,
         },
         description: 'List of electrical nets connecting component pins.',
+      },
+      boardConstraints: {
+        type: 'object',
+        properties: {
+          width: { type: 'number', description: 'Board width in mm' },
+          height: { type: 'number', description: 'Board height in mm' },
+          layers: { type: 'string', enum: ['2', '4', '6', '8'], description: 'Number of copper layers' },
+        },
+        additionalProperties: false,
+        description: 'Optional board constraints for PCB generation.',
       },
     },
     required: ['components', 'nets'],

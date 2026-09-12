@@ -13,8 +13,9 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@vajra/protocol": "workspace:*",
+    "@codekalakaars/protocol": "workspace:*",
     "@codekalakaars/vajra-sandbox": "workspace:*",
+    "@codekalakaars/vajra-kicad": "workspace:*",
     "better-sqlite3": "^11.3.0",
     "dotenv": "^16.6.1",
     "openai": "^7.8.0",

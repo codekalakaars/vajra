@@ -19,8 +19,9 @@
 // project plan.
 
 import { createRequire } from 'node:module'
-import { toolDefinitions } from '@vajra/protocol'
+import { toolDefinitions } from '@codekalakaars/protocol'
 import { checkToolPermission } from '@codekalakaars/vajra-sandbox'
+import { runPipeline, validateCircuitDescription } from '@codekalakaars/vajra-kicad'
 
 const require = createRequire(import.meta.url)
 const native = require('@codekalakaars/vajra-core')
@@ -52,6 +53,14 @@ const dispatchTable = {
       const stderr = e.stderr ? `\nstderr:\n${e.stderr}` : ''
       throw new Error(`Command failed (exit ${e.status}): ${e.message}${stdout}${stderr}`)
     }
+  },
+  text_to_schematic: (args) => {
+    const errors = validateCircuitDescription(args)
+    if (errors.length > 0) {
+      throw new Error(`Invalid circuit: ${errors.join('; ')}`)
+    }
+    const projectDir = process.env.VAJRA_PROJECT_DIR || process.cwd()
+    return runPipeline(args, projectDir, args.boardConstraints)
   },
 }
 

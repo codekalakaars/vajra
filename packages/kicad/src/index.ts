@@ -21,3 +21,5 @@ export type { ResolvedPin, ResolvedSymbol, SymbolLibrary, SymbolLibTableEntry } 
 export { SymbolResolver, parseSymbolLibrary, parseSymLibTable, generateBoxSymbol } from './symbol-lib.js'
 export type { CircuitComponent, CircuitNet, CircuitDescription } from './circuit-builder.js'
 export { buildSchematicFromDescription, validateCircuitDescription } from './circuit-builder.js'
+export type { PipelineResult } from './pipeline.js'
+export { runPipeline } from './pipeline.js'

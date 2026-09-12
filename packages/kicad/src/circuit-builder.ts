@@ -81,24 +81,62 @@ export function buildSchematicFromDescription(description: CircuitDescription): 
  * Validate a circuit description.
  *
  * Checks for:
+ * - Empty component array
  * - Duplicate references
+ * - Empty reference or value
+ * - Invalid footprint/symbol format
  * - Nets with < 2 connections
  * - Components referenced in nets that don't exist
+ * - Duplicate net names
+ * - Empty net names
  */
 export function validateCircuitDescription(description: CircuitDescription): string[] {
   const errors: string[] = []
   const references = new Set<string>()
+  const netNames = new Set<string>()
 
-  // Check for duplicate references
+  // Check for empty component array
+  if (description.components.length === 0) {
+    errors.push('Circuit must have at least one component')
+  }
+
+  // Check for duplicate references and empty values
   for (const comp of description.components) {
+    if (!comp.reference || comp.reference.trim() === '') {
+      errors.push('Component reference cannot be empty')
+    }
+    if (!comp.value || comp.value.trim() === '') {
+      errors.push(`Component "${comp.reference}" has empty value`)
+    }
     if (references.has(comp.reference)) {
       errors.push(`Duplicate reference: ${comp.reference}`)
     }
     references.add(comp.reference)
+
+    // Check footprint format (should contain colon separator)
+    if (comp.footprint && !comp.footprint.includes(':')) {
+      errors.push(`Component "${comp.reference}" has invalid footprint format: "${comp.footprint}" (expected "Library:Footprint")`)
+    }
+
+    // Check symbol format (should contain colon separator)
+    if (comp.symbol && !comp.symbol.includes(':')) {
+      errors.push(`Component "${comp.reference}" has invalid symbol format: "${comp.symbol}" (expected "Library:Symbol")`)
+    }
   }
 
   // Check nets
   for (const net of description.nets) {
+    // Check for empty net names
+    if (!net.name || net.name.trim() === '') {
+      errors.push('Net name cannot be empty')
+    }
+
+    // Check for duplicate net names
+    if (netNames.has(net.name)) {
+      errors.push(`Duplicate net name: "${net.name}"`)
+    }
+    netNames.add(net.name)
+
     if (net.connections.length < 2) {
       errors.push(`Net "${net.name}" has fewer than 2 connections`)
     }
