@@ -39,6 +39,9 @@ plan.tasks.forEach((task, i) => {
   console.log(`      Type: ${task.type}`);
   console.log(`      Reads: ${task.readFile.join(', ')}`);
   console.log(`      Writes: ${task.writeFile.join(', ')}`);
+  console.log(`      Timeout: ${task.timeout}s | Retries: ${task.retries}`);
+  console.log(`      Rollback: ${task.rollback?.join(', ') || 'none'}`);
+  console.log(`      SkipIf: ${task.skipIf?.join(', ') || 'none'}`);
   console.log(`      Instructions: ${task.instructions.length} steps`);
 });
 console.log();

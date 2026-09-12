@@ -16,6 +16,10 @@ export interface PlannedTask {
   dependsOn: string[]
   type: 'create' | 'modify' | 'delete' | 'refactor'
   allowedTools?: string[]
+  timeout?: number
+  maxRetries?: number
+  rollback?: string[]
+  skipIf?: string[]
 }
 
 export interface TaskState {
@@ -38,6 +42,10 @@ export interface TaskState {
   filePermissions: string | null
   toolPermissions: string | null
   retries: number
+  maxRetries: number
+  timeout: number
+  rollback: string[]
+  skipIf: string[]
   createdAt: number
   startedAt: number | null
   completedAt: number | null
@@ -111,6 +119,10 @@ export class TaskQueue {
       filePermissions: filePermissions ?? null,
       toolPermissions: toolPermissions ?? null,
       retries: 0,
+      maxRetries: task.maxRetries ?? 2,
+      timeout: task.timeout ?? 120,
+      rollback: task.rollback ?? [],
+      skipIf: task.skipIf ?? [],
       validationPassed: null,
       createdAt: now,
       startedAt: null,
