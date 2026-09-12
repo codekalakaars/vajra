@@ -16,9 +16,9 @@ export function getToolSpecs(provider: 'openai' | 'anthropic' = 'openai'): ToolS
   const raw = provider === 'anthropic' ? toAnthropicToolSpecs() : toOpenAiToolSpecs()
   return raw.map((s) => {
     if ('function' in s) {
-      return { name: s.function.name, description: s.function.description, parameters: s.function.parameters }
+      return { name: s.function.name, description: s.function.description, parameters: s.function.parameters as unknown as Record<string, unknown> }
     }
-    return { name: s.name, description: s.description, parameters: s.input_schema }
+    return { name: s.name, description: s.description, parameters: s.input_schema as unknown as Record<string, unknown> }
   })
 }
 
@@ -27,9 +27,9 @@ export function getManagerToolSpecs(provider: 'openai' | 'anthropic' = 'openai')
   const raw = provider === 'anthropic' ? toAnthropicToolSpecs(roleTools.manager) : toOpenAiToolSpecs(roleTools.manager)
   return raw.map((s) => {
     if ('function' in s) {
-      return { name: s.function.name, description: s.function.description, parameters: s.function.parameters }
+      return { name: s.function.name, description: s.function.description, parameters: s.function.parameters as unknown as Record<string, unknown> }
     }
-    return { name: s.name, description: s.description, parameters: s.input_schema }
+    return { name: s.name, description: s.description, parameters: s.input_schema as unknown as Record<string, unknown> }
   })
 }
 
