@@ -7,8 +7,8 @@
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../session/manager.js'
 import type { PermissionsConfig, ToolName } from '@codekalakaars/vajra-protocol'
+import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { getToolSpecs, parseToolCall } from './tools.js'
-import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
 import { scanProject } from '../native.js'
 import { buildNestedTree } from './tree.js'
 import { buildSummaryIndex, formatSummaryIndex, type SummaryEntry } from './summary.js'
@@ -24,6 +24,7 @@ export interface AgentLoopInput {
     model: string
   }
   apiKey: string
+  provider: ChatProvider
   handle: LaunchHandle
   permissions: PermissionsConfig
   events: PushEvents
@@ -119,7 +120,7 @@ function nextSeq(db: SqliteDb, sessionId: string): number {
  * LLM tools to search and read files, and handles tool calls in a loop.
  */
 export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult> {
-  const { session, apiKey, handle, events, db } = input
+  const { session, apiKey, provider, handle, events, db } = input
 
   // Build project context
   let tree: string
@@ -136,7 +137,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
   const summaryText = formatSummaryIndex(summaryIndex)
   const systemPrompt = buildSystemPrompt(session.projectDir, session.task, tree, summaryText, MAX_TOOL_CALLS)
 
-  const messages: OpenRouterMessage[] = [
+  const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: session.task },
   ]
@@ -145,12 +146,13 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
   const userSeq = nextSeq(db, session.id)
   appendMessage(db, session.id, userSeq, 'user', session.task)
 
-  const toolSpecs = getToolSpecs()
+  const providerType = provider.name === 'anthropic' ? 'anthropic' : 'openai'
+  const toolSpecs = getToolSpecs(providerType)
   let toolCallCount = 0
 
   // Tool-use loop
   while (toolCallCount < MAX_TOOL_CALLS) {
-    const result = await streamChatCompletion(
+    const result = await provider.streamChat(
       {
         apiKey,
         model: session.model,
@@ -166,7 +168,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
     )
 
     // If no tool calls, we're done
-    if (!result.message.tool_calls || result.message.tool_calls.length === 0) {
+    if (!result.message.toolCalls || result.message.toolCalls.length === 0) {
       const content = result.message.content ?? ''
       const seq = nextSeq(db, session.id)
       appendMessage(db, session.id, seq, 'assistant', content)
@@ -178,8 +180,8 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
     messages.push(result.message)
 
     // Process each tool call
-    for (const toolCall of result.message.tool_calls) {
-      const isFree = FREE_TOOLS.has(toolCall.function.name)
+    for (const toolCall of result.message.toolCalls) {
+      const isFree = FREE_TOOLS.has(toolCall.name)
       if (!isFree) {
         toolCallCount++
         if (toolCallCount > MAX_TOOL_CALLS) break
@@ -188,7 +190,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
       const parsed = parseToolCall(toolCall)
       events.push('session.toolCall', session.id, {
         callId: toolCall.id,
-        tool: toolCall.function.name,
+        tool: toolCall.name,
         args: parsed.ok ? parsed.call.args : {},
       })
 
@@ -212,7 +214,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
 
       events.push('session.toolResult', session.id, {
         callId: toolCall.id,
-        tool: toolCall.function.name,
+        tool: toolCall.name,
         ok: !resultContent.startsWith('Error:'),
         result: resultContent,
       })
@@ -221,7 +223,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
       messages.push({
         role: 'tool',
         content: resultContent,
-        tool_call_id: toolCall.id,
+        toolCallId: toolCall.id,
       })
 
       // Persist tool result
@@ -234,7 +236,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
         resultContent,
         undefined,
         toolCall.id,
-        toolCall.function.name,
+        toolCall.name,
       )
     }
   }
