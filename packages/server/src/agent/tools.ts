@@ -1,4 +1,4 @@
-// Bridges OpenRouter's wire format for tool calls to the {tool, args} shape
+// Bridges the provider-agnostic tool call format to the {tool, args} shape
 // the sandboxed worker's dispatch loop expects.
 //
 // This validation is deliberately separate from — and does not replace —
@@ -9,16 +9,28 @@
 // cheap tool-result error the model can see and react to, without spending
 // an IPC round trip to the worker on something already known to be invalid.
 
-import { toolDefinitions, toOpenAiToolSpecs, roleTools, type ToolName } from '@codekalakaars/vajra-protocol'
-import type { OpenRouterToolCall, OpenAiToolSpec } from './openrouter.js'
+import { toolDefinitions, toOpenAiToolSpecs, toAnthropicToolSpecs, roleTools, type ToolName } from '@codekalakaars/vajra-protocol'
+import type { ToolCall, ToolSpec } from './providers/types.js'
 
-export function getToolSpecs(): OpenAiToolSpec[] {
-  return toOpenAiToolSpecs()
+export function getToolSpecs(provider: 'openai' | 'anthropic' = 'openai'): ToolSpec[] {
+  const raw = provider === 'anthropic' ? toAnthropicToolSpecs() : toOpenAiToolSpecs()
+  return raw.map((s) => {
+    if ('function' in s) {
+      return { name: s.function.name, description: s.function.description, parameters: s.function.parameters }
+    }
+    return { name: s.name, description: s.description, parameters: s.input_schema }
+  })
 }
 
 /** Tool specs for the Manager role (read-only + propose_plan). */
-export function getManagerToolSpecs(): OpenAiToolSpec[] {
-  return toOpenAiToolSpecs(roleTools.manager)
+export function getManagerToolSpecs(provider: 'openai' | 'anthropic' = 'openai'): ToolSpec[] {
+  const raw = provider === 'anthropic' ? toAnthropicToolSpecs(roleTools.manager) : toOpenAiToolSpecs(roleTools.manager)
+  return raw.map((s) => {
+    if ('function' in s) {
+      return { name: s.function.name, description: s.function.description, parameters: s.function.parameters }
+    }
+    return { name: s.name, description: s.description, parameters: s.input_schema }
+  })
 }
 
 export interface ParsedToolCall {
@@ -31,15 +43,15 @@ export type ParseToolCallResult =
   | { ok: true; call: ParsedToolCall }
   | { ok: false; callId: string; error: string }
 
-export function parseToolCall(raw: OpenRouterToolCall): ParseToolCallResult {
-  const def = toolDefinitions[raw.function.name as ToolName]
+export function parseToolCall(raw: ToolCall): ParseToolCallResult {
+  const def = toolDefinitions[raw.name as ToolName]
   if (!def) {
-    return { ok: false, callId: raw.id, error: `Unknown tool '${raw.function.name}'` }
+    return { ok: false, callId: raw.id, error: `Unknown tool '${raw.name}'` }
   }
 
   let rawArgs: unknown
   try {
-    rawArgs = JSON.parse(raw.function.arguments)
+    rawArgs = JSON.parse(raw.arguments)
   } catch (e) {
     return {
       ok: false,
@@ -53,9 +65,9 @@ export function parseToolCall(raw: OpenRouterToolCall): ParseToolCallResult {
     return {
       ok: false,
       callId: raw.id,
-      error: `Invalid arguments for '${raw.function.name}': ${parsed.error.message}`,
+      error: `Invalid arguments for '${raw.name}': ${parsed.error.message}`,
     }
   }
 
-  return { ok: true, call: { callId: raw.id, tool: raw.function.name as ToolName, args: parsed.data } }
+  return { ok: true, call: { callId: raw.id, tool: raw.name as ToolName, args: parsed.data } }
 }

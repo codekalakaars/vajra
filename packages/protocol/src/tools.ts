@@ -320,3 +320,19 @@ export function toOpenAiToolSpecs(tools?: ToolName[]) {
     },
   }))
 }
+
+export function toAnthropicToolSpecs(tools?: ToolName[]) {
+  const defs = tools
+    ? tools.map((name) => toolDefinitions[name]).filter(Boolean)
+    : Object.values(toolDefinitions)
+  return defs.map((def) => ({
+    name: def.name,
+    description: def.description,
+    input_schema: def.jsonSchema,
+  }))
+}
+
+/** Provider-agnostic tool spec conversion. */
+export function toToolSpecs(provider: 'openai' | 'anthropic', tools?: ToolName[]) {
+  return provider === 'anthropic' ? toAnthropicToolSpecs(tools) : toOpenAiToolSpecs(tools)
+}

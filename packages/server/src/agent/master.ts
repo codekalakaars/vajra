@@ -14,11 +14,12 @@
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../session/manager.js'
 import type { ManagerPlan, PlannedTask, PermissionsConfig, ToolName } from '@codekalakaars/vajra-protocol'
+import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { FileLockManager, ChangeHistory, type ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { TaskQueue, type TaskState } from './taskqueue.js'
 import { AgentRegistry, type AgentState } from './registry.js'
-import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
-import { toOpenAiToolSpecs, roleTools } from '@codekalakaars/vajra-protocol'
+import { getToolSpecs } from './tools.js'
+import { roleTools } from '@codekalakaars/vajra-protocol'
 import type { WorkerPool } from '../session/pool.js'
 import { access } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -29,6 +30,7 @@ export interface MasterInput {
   plan: ManagerPlan
   model: string
   apiKey: string
+  provider: ChatProvider
   events: PushEvents
   db: SqliteDb
   registry: AgentRegistry
@@ -64,9 +66,6 @@ export interface MasterResult {
 
 const DEFAULT_MAX_RETRIES = 2
 const DEFAULT_VALIDATION_TIMEOUT = 60000
-
-// Worker-role tool specs for the LLM — these are the tools workers can request
-const WORKER_TOOL_SPECS = toOpenAiToolSpecs(roleTools.worker as ToolName[])
 
 /**
  * Evaluate skipIf conditions for a task.
@@ -144,7 +143,7 @@ async function evaluateSkipIf(
 }
 
 export async function masterLoop(input: MasterInput): Promise<MasterResult> {
-  const { sessionId, projectDir, plan, model, apiKey, events, db, registry, launchWorker, resourceLimits, pool } = input
+  const { sessionId, projectDir, plan, model, apiKey, provider, events, db, registry, launchWorker, resourceLimits, pool } = input
 
   // Use provided file lock manager or create a new one
   const fileLocks = input.fileLocks ?? new FileLockManager()
@@ -277,7 +276,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         queue.startTask(task.id)
 
         // Start task execution in background
-        executeTask(agent.id, task, handle, apiKey, model, events, db, queue, registry, sessionId, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, resourceLimits, pool)
+        executeTask(agent.id, task, handle, apiKey, model, provider, events, db, queue, registry, sessionId, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, resourceLimits, pool)
           .catch((e) => {
             console.error(`Worker ${agent.id} failed:`, e)
           })
@@ -332,6 +331,7 @@ async function executeTask(
   handle: LaunchHandle,
   apiKey: string,
   model: string,
+  provider: ChatProvider,
   events: PushEvents,
   db: SqliteDb,
   queue: TaskQueue,
@@ -384,33 +384,38 @@ async function executeTask(
       '- After completing all instructions, respond with a brief summary of what was done',
     ].join('\n')
 
-    const messages: OpenRouterMessage[] = [
+    const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `Execute task: ${task.title}` },
     ]
 
+    const providerType = provider.name === 'anthropic' ? 'anthropic' : 'openai'
+    const workerToolSpecs = getToolSpecs(providerType).filter((t) =>
+      (roleTools.worker as string[]).includes(t.name)
+    )
+
     // Tool-use loop
     while (toolCallCount < MAX_WORKER_TOOL_CALLS) {
-      const result = await streamChatCompletion(
-        { apiKey, model, messages, tools: WORKER_TOOL_SPECS },
+      const result = await provider.streamChat(
+        { apiKey, model, messages, tools: workerToolSpecs },
         (text) => events.push('session.assistantDelta', sessionId, { text }),
         (thinking) => events.push('session.thinkingDelta', sessionId, { text: thinking }),
       )
 
-      if (!result.message.tool_calls || result.message.tool_calls.length === 0) {
+      if (!result.message.toolCalls || result.message.toolCalls.length === 0) {
         // Task complete
         break
       }
 
       messages.push(result.message)
 
-      for (const toolCall of result.message.tool_calls) {
+      for (const toolCall of result.message.toolCalls) {
         toolCallCount++
         if (toolCallCount > MAX_WORKER_TOOL_CALLS) break
 
         let resultContent: string
         try {
-          const result = await handle.callTool(toolCall.function.name, JSON.parse(toolCall.function.arguments))
+          const result = await handle.callTool(toolCall.name, JSON.parse(toolCall.arguments))
           resultContent = typeof result === 'string' ? result : JSON.stringify(result)
         } catch (e) {
           resultContent = `Error: ${e instanceof Error ? e.message : String(e)}`
@@ -419,7 +424,7 @@ async function executeTask(
         messages.push({
           role: 'tool',
           content: resultContent,
-          tool_call_id: toolCall.id,
+          toolCallId: toolCall.id,
         })
       }
     }

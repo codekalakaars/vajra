@@ -2,8 +2,19 @@
 
 import { Command } from 'commander'
 import * as dotenv from 'dotenv'
+import { resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { runCommand } from './run.js'
 
+// Find root .env file (go up from dist/ to packages/cli, then to repo root)
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+const rootDir = resolve(__dirname, '..', '..', '..')
+
+// Load .env from root directory
+dotenv.config({ path: resolve(rootDir, '.env') })
+
+// Also load from current working directory if different
 dotenv.config()
 
 const program = new Command()

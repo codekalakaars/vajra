@@ -12,7 +12,7 @@
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../session/manager.js'
 import type { ManagerPlan, PlannedTask, ToolName } from '@codekalakaars/vajra-protocol'
-import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
+import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { getManagerToolSpecs, parseToolCall } from './tools.js'
 import { scanProject } from '../native.js'
 import { buildNestedTree } from './tree.js'
@@ -191,11 +191,12 @@ export interface ManagerTurnInput {
   userMessage: string
   model: string
   apiKey: string
+  provider: ChatProvider
   events: PushEvents
   db: SqliteDb
   handle: LaunchHandle
   /** Accumulated conversation history. Mutated in place. */
-  messages: OpenRouterMessage[]
+  messages: ChatMessage[]
   /** Summary index for in-memory search. Built on first turn. */
   summaryIndex: SummaryEntry[]
 }
@@ -216,7 +217,7 @@ export type ManagerTurnResult =
 export async function managerConversationTurn(
   input: ManagerTurnInput,
 ): Promise<ManagerTurnResult> {
-  const { sessionId, projectDir, userMessage, model, apiKey, events, db, handle, messages, summaryIndex } = input
+  const { sessionId, projectDir, userMessage, model, apiKey, provider, events, db, handle, messages, summaryIndex } = input
 
   // First turn: build system prompt and project context
   if (messages.length === 0) {
@@ -247,20 +248,21 @@ export async function managerConversationTurn(
   // Add user message to conversation
   messages.push({ role: 'user', content: userMessage })
 
-  const toolSpecs = getManagerToolSpecs()
+  const providerType = provider.name === 'anthropic' ? 'anthropic' : 'openai'
+  const toolSpecs = getManagerToolSpecs(providerType)
   let toolCallCount = 0
   const MAX_TOOL_CALLS = 30
 
   // Tool-use loop (Manager may call read_file/list_files/search_files before proposing)
   while (toolCallCount < MAX_TOOL_CALLS) {
-    const result = await streamChatCompletion(
+    const result = await provider.streamChat(
       { apiKey, model, messages, tools: toolSpecs },
       (text) => events.push('session.assistantDelta', sessionId, { text }),
       (thinking) => events.push('session.thinkingDelta', sessionId, { text: thinking }),
     )
 
     // No tool calls — text response to user
-    if (!result.message.tool_calls || result.message.tool_calls.length === 0) {
+    if (!result.message.toolCalls || result.message.toolCalls.length === 0) {
       const content = result.message.content ?? ''
       const seq = nextSeq(db, sessionId)
       appendMessage(db, sessionId, seq, 'assistant', content)
@@ -271,18 +273,18 @@ export async function managerConversationTurn(
     // Has tool calls — process them
     messages.push(result.message)
 
-    for (const toolCall of result.message.tool_calls) {
+    for (const toolCall of result.message.toolCalls) {
       // Intercept propose_plan — never dispatch to worker
-      if (toolCall.function.name === 'propose_plan') {
+      if (toolCall.name === 'propose_plan') {
         let parsed: unknown
         try {
-          parsed = JSON.parse(toolCall.function.arguments)
+          parsed = JSON.parse(toolCall.arguments)
         } catch {
           // Bad JSON — tell the LLM and let it retry
           messages.push({
             role: 'tool',
             content: 'Error: propose_plan arguments were not valid JSON. Please try again.',
-            tool_call_id: toolCall.id,
+            toolCallId: toolCall.id,
           })
           continue
         }
@@ -304,7 +306,7 @@ export async function managerConversationTurn(
       }
 
       // All other tools: dispatch to sandboxed worker
-      const isFree = FREE_TOOLS.has(toolCall.function.name)
+      const isFree = FREE_TOOLS.has(toolCall.name)
       if (!isFree) {
         toolCallCount++
         if (toolCallCount > MAX_TOOL_CALLS) break
@@ -332,7 +334,7 @@ export async function managerConversationTurn(
       messages.push({
         role: 'tool',
         content: resultContent,
-        tool_call_id: toolCall.id,
+        toolCallId: toolCall.id,
       })
     }
   }
