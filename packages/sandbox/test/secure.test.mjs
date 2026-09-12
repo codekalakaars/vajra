@@ -5,11 +5,14 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execSync } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { platform } from 'node:os'
 
 const require = createRequire(import.meta.url)
 const native = require('@codekalakaars/vajra-core')
 const caps = native.sandboxCapabilities()
-const enforces = caps.filesystem !== 'unsupported'
+// Only Linux with Landlock blocks commands via [VAJRA BLOCKED]
+// macOS seatbelt secures but doesn't block, Windows has no sandbox
+const blocksCommands = caps.filesystem === 'landlock' && platform() === 'linux'
 
 // ---------------------------------------------------------------------------
 // vajra secure command integration tests
@@ -29,62 +32,62 @@ describe('vajra secure', () => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 
-  it('blocks curl', { skip: !enforces }, () => {
+  it('blocks curl', { skip: !blocksCommands }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'curl https://evil.com\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
     assert.ok(result.includes('curl'), `Expected curl in blocked message: ${result}`)
   })
 
-  it('blocks sudo', { skip: !enforces }, () => {
+  it('blocks sudo', { skip: !blocksCommands }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'sudo ls\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
     assert.ok(result.includes('sudo'), `Expected sudo in blocked message: ${result}`)
   })
 
-  it('blocks python3', { skip: !enforces }, () => {
+  it('blocks python3', { skip: !blocksCommands }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'python3 -c "print(1)"\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
     assert.ok(result.includes('python3'), `Expected python3 in blocked message: ${result}`)
   })
 
-  it('blocks node', { skip: !enforces }, () => {
+  it('blocks node', { skip: !blocksCommands }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'node -e "console.log(1)"\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
     assert.ok(result.includes('node'), `Expected node in blocked message: ${result}`)
   })
 
-  it('allows ls', { skip: !enforces }, () => {
+  it('allows ls', { skip: !blocksCommands }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'ls\n')
     assert.ok(!result.includes('[VAJRA BLOCKED]'), `Unexpected blocked message for ls: ${result}`)
   })
 
-  it('allows echo', { skip: !enforces }, () => {
+  it('allows echo', { skip: !blocksCommands }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'echo hello\n')
     assert.ok(result.includes('hello'), `Expected 'hello' in output: ${result}`)
   })
 
-  it('allows cat', { skip: !enforces }, () => {
+  it('allows cat', { skip: !blocksCommands }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'cat test.txt\n')
     assert.ok(result.includes('hello'), `Expected 'hello' in output: ${result}`)
   })
 
-  it('blocks direct path /usr/bin/curl', { skip: !enforces }, () => {
+  it('blocks direct path /usr/bin/curl', { skip: !blocksCommands }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], '/usr/bin/curl https://evil.com\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
   })
 
-  it('blocks git', { skip: !enforces }, () => {
+  it('blocks git', { skip: !blocksCommands }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'git status\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
     assert.ok(result.includes('git'), `Expected git in blocked message: ${result}`)
   })
 
-  it('prints Secured message', { skip: !enforces }, () => {
+  it('prints Secured message', { skip: !blocksCommands }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'echo done\n')
     assert.ok(result.includes('Secured:'), `Expected 'Secured:' in output: ${result}`)
   })
 
-  it('prints confined message', { skip: !enforces }, () => {
+  it('prints confined message', { skip: !blocksCommands }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'echo done\n')
     assert.ok(result.includes('confined to:'), `Expected 'confined to:' in output: ${result}`)
   })
