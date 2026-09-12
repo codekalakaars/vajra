@@ -1,0 +1,106 @@
+{
+  "summary": "Fix 5 issues in the Todo API: input validation, error handling, data integrity, missing features, and security basics.",
+  "tasks": [
+    {
+      "title": "Add input validation for POST /todos",
+      "description": "The API accepts empty titles and excessively long titles. Add validation to reject invalid input early.",
+      "instructions": [
+        "Read src/server.js to understand the current POST /todos handler",
+        "After line where body is parsed (const body = await parseBody(req)), add validation:",
+        "  - Check that body.title exists and is a string",
+        "  - Check that body.title.trim().length > 0",
+        "  - Check that body.title.length <= 500",
+        "If validation fails, return 400 with { error: 'Title is required and must be 1-500 characters' }",
+        "Add the same validation to the PUT /todos/:id handler for the title field"
+      ],
+      "readFile": ["src/server.js"],
+      "writeFile": ["src/server.js"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["node --test src/server.test.js"],
+      "dependsOn": [],
+      "type": "modify"
+    },
+    {
+      "title": "Add proper error handling for JSON parsing",
+      "description": "When the request body is not valid JSON, the server returns 500 instead of 400. Fix the parseBody function to handle malformed JSON.",
+      "instructions": [
+        "Read src/server.js to find the parseBody function",
+        "Wrap the JSON.parse(body) call in a try-catch",
+        "If JSON.parse throws, resolve with null instead of crashing",
+        "In each route handler that calls parseBody, check if the result is null",
+        "If null, return 400 with { error: 'Invalid JSON in request body' }",
+        "Apply this to POST /todos and PUT /todos/:id handlers"
+      ],
+      "readFile": ["src/server.js"],
+      "writeFile": ["src/server.js"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["node --test src/server.test.js"],
+      "dependsOn": [],
+      "type": "modify"
+    },
+    {
+      "title": "Add file locking for concurrent writes",
+      "description": "Multiple simultaneous requests can corrupt data.json. Add a simple mutex lock to prevent concurrent writes.",
+      "instructions": [
+        "At the top of src/server.js, add a writeLock variable: let writeLock = Promise.resolve();",
+        "Create a helper function acquireLock() that chains onto writeLock",
+        "Create a helper function releaseLock() that resolves the current lock",
+        "Wrap the saveTodos call in acquireLock()/releaseLock()",
+        "This ensures only one write happens at a time",
+        "Do NOT change the loadTodos function - reads can happen concurrently"
+      ],
+      "readFile": ["src/server.js"],
+      "writeFile": ["src/server.js"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["node --test src/server.test.js"],
+      "dependsOn": [],
+      "type": "modify"
+    },
+    {
+      "title": "Add filtering and pagination to GET /todos",
+      "description": "The GET /todos endpoint returns all todos. Add query parameters for filtering by status and pagination.",
+      "instructions": [
+        "Read src/server.js to find the GET /todos handler",
+        "Parse query parameters from url.searchParams:",
+        "  - 'completed' (boolean): filter by completed status",
+        "  - 'page' (number, default 1): page number",
+        "  - 'limit' (number, default 20, max 100): items per page",
+        "Apply the completed filter if specified",
+        "Apply pagination: slice the array based on page and limit",
+        "Return { todos: [...], total: N, page: P, limit: L } instead of just the array",
+        "Add tests for filtering and pagination in server.test.js"
+      ],
+      "readFile": ["src/server.js", "src/server.test.js"],
+      "writeFile": ["src/server.js", "src/server.test.js"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["node --test src/server.test.js"],
+      "dependsOn": [],
+      "type": "modify"
+    },
+    {
+      "title": "Add basic rate limiting",
+      "description": "Add a simple in-memory rate limiter to prevent abuse. Limit to 100 requests per minute per IP.",
+      "instructions": [
+        "Create a new file src/rate-limiter.js",
+        "Implement a Map that tracks request counts per IP",
+        "Export a function checkRateLimit(ip) that returns true if allowed, false if exceeded",
+        "Export a function cleanup() that removes entries older than 1 minute",
+        "In src/server.js, import checkRateLimit from './rate-limiter.js'",
+        "At the start of the request handler, check rate limit",
+        "If exceeded, return 429 with { error: 'Too many requests' }",
+        "Add tests for rate limiting in src/rate-limiter.test.js"
+      ],
+      "readFile": ["src/server.js"],
+      "writeFile": ["src/rate-limiter.js", "src/rate-limiter.test.js"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["node --test src/rate-limiter.test.js"],
+      "dependsOn": [],
+      "type": "create"
+    }
+  ]
+}

@@ -99,12 +99,15 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     for (const task of readyTasks) {
       // Try to acquire locks atomically - this prevents race conditions
       // where two tasks both pass the filter then both acquire locks
-      const allTaskFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
-      if (fileLocks.tryAcquire(allTaskFiles, task.id, 'write')) {
-        assignable.push(task)
-      } else {
-        // Could not acquire locks - check which files are causing conflict
-        for (const file of allTaskFiles) {
+      // Use read locks for readFile, write locks for writeFile/deleteFile
+      const readFiles = task.readFile
+      const writeFiles = [...task.writeFile, ...task.deleteFile]
+      
+      // Try to acquire read locks first (shared)
+      const readLocksAcquired = fileLocks.tryAcquire(readFiles, task.id, 'read')
+      if (!readLocksAcquired) {
+        // Cannot acquire read locks - another task has write lock on one of these files
+        for (const file of readFiles) {
           const owners = fileLocks.getOwners(file)
           const otherOwner = owners.find((o) => o !== task.id)
           if (otherOwner) {
@@ -117,7 +120,31 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
             break
           }
         }
+        continue
       }
+      
+      // Try to acquire write locks (exclusive)
+      const writeLocksAcquired = fileLocks.tryAcquire(writeFiles, task.id, 'write')
+      if (!writeLocksAcquired) {
+        // Cannot acquire write locks - release read locks and try again later
+        fileLocks.releaseAll(task.id)
+        for (const file of writeFiles) {
+          const owners = fileLocks.getOwners(file)
+          const otherOwner = owners.find((o) => o !== task.id)
+          if (otherOwner) {
+            events.push('session.conflictDetected', sessionId, {
+              sessionId,
+              task1: task.id,
+              task2: otherOwner,
+              files: [file],
+            })
+            break
+          }
+        }
+        continue
+      }
+      
+      assignable.push(task)
     }
 
     // Assign ready tasks
@@ -308,7 +335,16 @@ async function executeTask(
             timeout: VALIDATION_TIMEOUT,
           })
           const output = typeof validationResult === 'string' ? validationResult : JSON.stringify(validationResult)
-          if (output.toLowerCase().includes('error') || output.toLowerCase().includes('fail')) {
+          
+          // Check for command failure indicators:
+          // 1. Output contains "exit code" with non-zero code
+          // 2. Output contains common failure patterns
+          // 3. Output starts with "error" (case-insensitive)
+          const hasExitCode = /exit\s+code\s+[1-9]/i.test(output)
+          const hasFailPatterns = /\b(failed|failure|error|exception|panic)\b/i.test(output)
+          const startsWithError = output.trimStart().toLowerCase().startsWith('error')
+          
+          if (hasExitCode || (hasFailPatterns && !startsWithError)) {
             validationPassed = false
             queue.recordValidation(task.id, `${cmd}\n${output}`, false)
             break
