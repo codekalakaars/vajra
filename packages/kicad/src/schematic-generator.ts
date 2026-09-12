@@ -121,6 +121,52 @@ const EMBEDDED_LIB_SYMBOLS: Record<string, string> = {
           (name "~" (effects (font (size 1.27 1.27))))
           (number "2" (effects (font (size 1.27 1.27)))))))`,
 
+  'Device:D': `
+    (symbol "Device:D"
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "D" (id 0) (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "D" (id 1) (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
+      (property "Footprint" "" (id 2) (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+      (property "Datasheet" "~" (id 3) (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+      (symbol "Device:D_0_1"
+        (polyline (pts (xy -1.27 1.27) (xy -1.27 -1.27)) (stroke (width 0.254) (type default)) (fill (type none)))
+        (polyline (pts (xy -1.27 0) (xy 1.27 0)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy 1.27 1.27) (xy 1.27 -1.27) (xy -1.27 0) (xy 1.27 1.27))
+          (stroke (width 0.254) (type default)) (fill (type none))))
+      (symbol "Device:D_1_1"
+        (pin passive line (at -3.81 0 0) (length 2.54)
+          (name "K" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 3.81 0 180) (length 2.54)
+          (name "A" (effects (font (size 1.27 1.27))))
+          (number "2" (effects (font (size 1.27 1.27)))))))`,
+
+  'Device:LED': `
+    (symbol "Device:LED"
+      (exclude_from_sim no)
+      (in_bom yes)
+      (on_board yes)
+      (property "Reference" "D" (id 0) (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "LED" (id 1) (at 0 -2.54 0) (effects (font (size 1.27 1.27))))
+      (property "Footprint" "" (id 2) (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+      (property "Datasheet" "~" (id 3) (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+      (symbol "Device:LED_0_1"
+        (polyline (pts (xy -1.27 1.27) (xy -1.27 -1.27)) (stroke (width 0.254) (type default)) (fill (type none)))
+        (polyline (pts (xy -1.27 0) (xy 1.27 0)) (stroke (width 0) (type default)) (fill (type none)))
+        (polyline (pts (xy 1.27 1.27) (xy 1.27 -1.27) (xy -1.27 0) (xy 1.27 1.27))
+          (stroke (width 0.254) (type default)) (fill (type none)))
+        (polyline (pts (xy 1.524 2.286) (xy 2.54 3.302)) (stroke (width 0.2032) (type default)) (fill (type none)))
+        (polyline (pts (xy 2.032 1.524) (xy 3.048 2.54)) (stroke (width 0.2032) (type default)) (fill (type none))))
+      (symbol "Device:LED_1_1"
+        (pin passive line (at -3.81 0 0) (length 2.54)
+          (name "K" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 3.81 0 180) (length 2.54)
+          (name "A" (effects (font (size 1.27 1.27))))
+          (number "2" (effects (font (size 1.27 1.27)))))))`,
+
   'power:VCC': `
     (symbol "power:VCC"
       (power)

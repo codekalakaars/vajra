@@ -64,6 +64,9 @@ const VALIDATION_TIMEOUT = 60000
 // Worker-role tool specs for the LLM — these are the tools workers can request
 const WORKER_TOOL_SPECS = toOpenAiToolSpecs(roleTools.worker as ToolName[])
 
+// Master-role tool specs — includes text_to_schematic for circuit design tasks
+const MASTER_TOOL_SPECS = toOpenAiToolSpecs(roleTools.master as ToolName[])
+
 export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   const { sessionId, projectDir, plan, model, apiKey, events, db, registry, launchWorker, resourceLimits, pool } = input
 
@@ -230,6 +233,26 @@ async function executeTask(
       `Files: ${task.files.join(', ') || '(no specific files)'}`,
       '',
       'Execute the task using the available tools. When done, respond with a summary.',
+      '',
+      '## text_to_schematic tool',
+      'Use this tool to convert structured circuit descriptions into KiCad schematic and PCB files.',
+      'The tool accepts:',
+      '- components: Array of {reference, value, footprint, symbol}',
+      '- nets: Array of {name, connections: [{reference, pin}]}',
+      '- boardConstraints (optional): {width, height, layers, designRules}',
+      '',
+      'Example: To create a voltage divider with two 10k resistors:',
+      '{',
+      '  "components": [',
+      '    {"reference": "R1", "value": "10k", "footprint": "Resistor_SMD:R_0402_1005Metric", "symbol": "Device:R"},',
+      '    {"reference": "R2", "value": "10k", "footprint": "Resistor_SMD:R_0402_1005Metric", "symbol": "Device:R"}',
+      '  ],',
+      '  "nets": [',
+      '    {"name": "VIN", "connections": [{"reference": "R1", "pin": "1"}]},',
+      '    {"name": "VOUT", "connections": [{"reference": "R1", "pin": "2"}, {"reference": "R2", "pin": "1"}]},',
+      '    {"name": "GND", "connections": [{"reference": "R2", "pin": "2"}]}',
+      '  ]',
+      '}',
     ].join('\n')
 
     const messages: OpenRouterMessage[] = [
