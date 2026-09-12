@@ -17,7 +17,11 @@
       "createDir": [],
       "validation": ["npm test"],
       "dependsOn": [],
-      "type": "modify"
+      "type": "modify",
+      "timeout": 60,
+      "retries": 2,
+      "rollback": ["git checkout src/App.jsx"],
+      "skipIf": ["command passes: npm test"]
     },
     {
       "title": "Fix missing unique keys in TodoList",
@@ -33,7 +37,11 @@
       "createDir": [],
       "validation": ["npm test"],
       "dependsOn": [],
-      "type": "modify"
+      "type": "modify",
+      "timeout": 30,
+      "retries": 1,
+      "rollback": ["git checkout src/TodoList.jsx"],
+      "skipIf": []
     },
     {
       "title": "Fix missing form prevention in TodoForm",
@@ -49,7 +57,11 @@
       "createDir": [],
       "validation": ["npm test"],
       "dependsOn": [],
-      "type": "modify"
+      "type": "modify",
+      "timeout": 30,
+      "retries": 1,
+      "rollback": ["git checkout src/TodoForm.jsx"],
+      "skipIf": []
     },
     {
       "title": "Fix incorrect filter logic in App",
@@ -67,7 +79,11 @@
       "createDir": [],
       "validation": ["npm test"],
       "dependsOn": [],
-      "type": "modify"
+      "type": "modify",
+      "timeout": 60,
+      "retries": 2,
+      "rollback": ["git checkout src/App.jsx"],
+      "skipIf": []
     },
     {
       "title": "Fix division by zero in TodoStats",
@@ -84,7 +100,11 @@
       "createDir": [],
       "validation": ["npm test"],
       "dependsOn": [],
-      "type": "modify"
+      "type": "modify",
+      "timeout": 30,
+      "retries": 1,
+      "rollback": ["git checkout src/TodoStats.jsx"],
+      "skipIf": []
     },
     {
       "title": "Add input validation to TodoForm",
@@ -101,7 +121,11 @@
       "createDir": [],
       "validation": ["npm test"],
       "dependsOn": [],
-      "type": "modify"
+      "type": "modify",
+      "timeout": 30,
+      "retries": 1,
+      "rollback": ["git checkout src/TodoForm.jsx"],
+      "skipIf": []
     },
     {
       "title": "Fix clearCompleted to only remove completed todos",
@@ -118,7 +142,11 @@
       "createDir": [],
       "validation": ["npm test"],
       "dependsOn": [],
-      "type": "modify"
+      "type": "modify",
+      "timeout": 60,
+      "retries": 2,
+      "rollback": ["git checkout src/App.jsx"],
+      "skipIf": []
     },
     {
       "title": "Add input validation to TodoList edit",
@@ -135,7 +163,11 @@
       "createDir": [],
       "validation": ["npm test"],
       "dependsOn": [],
-      "type": "modify"
+      "type": "modify",
+      "timeout": 30,
+      "retries": 1,
+      "rollback": ["git checkout src/TodoList.jsx"],
+      "skipIf": []
     },
     {
       "title": "Fix localStorage dependency array",
@@ -154,7 +186,11 @@
       "createDir": [],
       "validation": ["npm test"],
       "dependsOn": [],
-      "type": "modify"
+      "type": "modify",
+      "timeout": 60,
+      "retries": 2,
+      "rollback": ["git checkout src/App.jsx"],
+      "skipIf": []
     },
     {
       "title": "Fix toggleTodo state mutation",
@@ -174,7 +210,11 @@
       "createDir": [],
       "validation": ["npm test"],
       "dependsOn": [],
-      "type": "modify"
+      "type": "modify",
+      "timeout": 60,
+      "retries": 2,
+      "rollback": ["git checkout src/App.jsx"],
+      "skipIf": []
     }
   ]
 }

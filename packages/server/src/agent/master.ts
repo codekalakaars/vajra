@@ -20,6 +20,8 @@ import { AgentRegistry, type AgentState } from './registry.js'
 import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
 import { toOpenAiToolSpecs, roleTools } from '@codekalakaars/vajra-protocol'
 import type { WorkerPool } from '../session/pool.js'
+import { access } from 'node:fs/promises'
+import { resolve } from 'node:path'
 
 export interface MasterInput {
   sessionId: string
@@ -58,11 +60,86 @@ export interface MasterResult {
   totalToolCalls: number
 }
 
-const MAX_RETRIES = 2
-const VALIDATION_TIMEOUT = 60000
+const DEFAULT_MAX_RETRIES = 2
+const DEFAULT_VALIDATION_TIMEOUT = 60000
 
 // Worker-role tool specs for the LLM — these are the tools workers can request
 const WORKER_TOOL_SPECS = toOpenAiToolSpecs(roleTools.worker as ToolName[])
+
+/**
+ * Evaluate skipIf conditions for a task.
+ * Returns true if the task should be skipped.
+ *
+ * Supported conditions:
+ * - "file exists: <path>" — skip if file exists
+ * - "file missing: <path>" — skip if file does not exist
+ * - "command passes: <cmd>" — skip if command exits 0 (requires handle)
+ * - "command fails: <cmd>" — skip if command exits non-zero (requires handle)
+ */
+async function evaluateSkipIf(
+  conditions: string[],
+  projectDir: string,
+  handle?: LaunchHandle,
+): Promise<boolean> {
+  for (const condition of conditions) {
+    const trimmed = condition.trim()
+
+    if (trimmed.toLowerCase().startsWith('file exists:')) {
+      const filePath = trimmed.slice('file exists:'.length).trim()
+      const fullPath = resolve(projectDir, filePath)
+      try {
+        await access(fullPath)
+        continue // File exists, keep checking
+      } catch {
+        return true // File doesn't exist, skip
+      }
+    }
+
+    if (trimmed.toLowerCase().startsWith('file missing:')) {
+      const filePath = trimmed.slice('file missing:'.length).trim()
+      const fullPath = resolve(projectDir, filePath)
+      try {
+        await access(fullPath)
+        return false // File exists, don't skip
+      } catch {
+        continue // File doesn't exist, keep checking
+      }
+    }
+
+    // Command conditions require a handle
+    if (!handle) continue
+
+    if (trimmed.toLowerCase().startsWith('command passes:')) {
+      const cmd = trimmed.slice('command passes:'.length).trim()
+      try {
+        const result = await handle.callTool('run_command', { command: cmd, timeout: 30000 })
+        const output = typeof result === 'string' ? result : JSON.stringify(result)
+        if (!output.toLowerCase().includes('exit code') || output.includes('exit code 0')) {
+          continue // Command passes, keep checking
+        }
+        return true // Command fails, skip
+      } catch {
+        return true // Command fails, skip
+      }
+    }
+
+    if (trimmed.toLowerCase().startsWith('command fails:')) {
+      const cmd = trimmed.slice('command fails:'.length).trim()
+      try {
+        const result = await handle.callTool('run_command', { command: cmd, timeout: 30000 })
+        const output = typeof result === 'string' ? result : JSON.stringify(result)
+        if (output.toLowerCase().includes('exit code') && !output.includes('exit code 0')) {
+          continue // Command fails, keep checking
+        }
+        return false // Command passes, don't skip
+      } catch {
+        continue // Command fails, keep checking
+      }
+    }
+  }
+
+  return false // No conditions triggered skip
+}
 
 export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   const { sessionId, projectDir, plan, model, apiKey, events, db, registry, launchWorker, resourceLimits, pool } = input
@@ -142,6 +219,23 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
           }
         }
         continue
+      }
+      
+      // Check skipIf conditions (file-based only at this stage)
+      if (task.skipIf && task.skipIf.length > 0) {
+        const shouldSkip = await evaluateSkipIf(task.skipIf, projectDir)
+        if (shouldSkip) {
+          fileLocks.releaseAll(task.id)
+          queue.skipTask(task.id)
+          completedTasks.push(task.id)
+          events.push('session.workerProgress', sessionId, {
+            sessionId,
+            agentId: masterAgent.id,
+            taskId: task.id,
+            detail: 'Skipped: skipIf condition met',
+          })
+          continue
+        }
       }
       
       assignable.push(task)
@@ -330,9 +424,10 @@ async function executeTask(
         })
 
         try {
+          const taskTimeout = (task.timeout ?? 120) * 1000
           const validationResult = await handle.callTool('run_command', {
             command: cmd,
-            timeout: VALIDATION_TIMEOUT,
+            timeout: taskTimeout,
           })
           const output = typeof validationResult === 'string' ? validationResult : JSON.stringify(validationResult)
           
@@ -371,12 +466,30 @@ async function executeTask(
     } else {
       // Validation failed — retry if possible
       const retries = task.retries ?? 0
+      const maxRetries = task.maxRetries ?? DEFAULT_MAX_RETRIES
 
-      if (retries < MAX_RETRIES) {
-        queue.recordValidation(task.id, `\n[retry ${retries + 1}/${MAX_RETRIES}]`, false)
+      if (retries < maxRetries) {
+        queue.recordValidation(task.id, `\n[retry ${retries + 1}/${maxRetries}]`, false)
         // Reset task to pending so it gets retried on the next loop iteration
         queue.retryTask(task.id)
       } else {
+        // Run rollback instructions if provided
+        if (task.rollback && task.rollback.length > 0) {
+          events.push('session.workerProgress', sessionId, {
+            sessionId,
+            agentId,
+            taskId: task.id,
+            detail: 'Running rollback instructions...',
+          })
+          for (const cmd of task.rollback) {
+            try {
+              await handle.callTool('run_command', { command: cmd, timeout: 30000 })
+            } catch {
+              // Rollback failure is non-fatal
+            }
+          }
+        }
+        
         queue.failTask(task.id)
         failedTasks.push(task.id)
         registry.updateStatus(agentId, 'failed')
@@ -384,7 +497,7 @@ async function executeTask(
           sessionId,
           agentId,
           taskId: task.id,
-          error: `Validation failed after ${MAX_RETRIES} retries`,
+          error: `Validation failed after ${maxRetries} retries`,
         })
       }
     }

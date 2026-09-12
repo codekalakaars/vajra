@@ -165,6 +165,14 @@ export interface PlannedTaskInput {
   type: 'create' | 'modify' | 'delete' | 'refactor'
   /** Tools this worker can use. Omit for task-type defaults. */
   allowedTools?: string[]
+  /** Timeout in seconds for this task. Default: 120. */
+  timeout?: number
+  /** Max retries for this task. Default: 2. Set to 0 for no retries. */
+  retries?: number
+  /** Rollback instructions if validation fails (e.g. "git checkout src/file.ts"). */
+  rollback?: string[]
+  /** Condition to skip this task (e.g. "file exists: src/config.json" or "command passes: npm test"). */
+  skipIf?: string[]
 }
 
 export interface ProposePlanArgs {
@@ -193,6 +201,10 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
       dependsOn: z.array(z.string()),
       type: z.enum(['create', 'modify', 'delete', 'refactor']),
       allowedTools: z.array(z.string()).optional(),
+      timeout: z.number().optional(),
+      retries: z.number().optional(),
+      rollback: z.array(z.string()).optional(),
+      skipIf: z.array(z.string()).optional(),
     })),
     summary: z.string(),
   }),
@@ -246,6 +258,24 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
               type: 'array',
               items: { type: 'string' },
               description: 'Tools this worker can use. Omit for defaults: create/modify get read+write+edit, delete gets read+delete.',
+            },
+            timeout: {
+              type: 'number',
+              description: 'Timeout in seconds for this task. Default: 120. Use longer timeouts for slow builds.',
+            },
+            retries: {
+              type: 'number',
+              description: 'Max retries for this task. Default: 2. Set to 0 for no retries.',
+            },
+            rollback: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Rollback instructions if validation fails. Example: ["git checkout src/file.ts"].',
+            },
+            skipIf: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Conditions to skip this task. Example: ["file exists: src/config.json", "command passes: npm test"].',
             },
           },
           required: ['title', 'description', 'instructions', 'readFile', 'writeFile', 'deleteFile', 'createDir', 'validation', 'dependsOn', 'type'],

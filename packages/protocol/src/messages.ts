@@ -51,6 +51,14 @@ export interface PlannedTask {
   type: TaskType
   /** Tools this worker can use. If omitted, defaults to task-type defaults. */
   allowedTools?: string[]
+  /** Timeout in seconds for this task. Default: 120. */
+  timeout?: number
+  /** Max retries for this task. Default: 2. Set to 0 for no retries. */
+  retries?: number
+  /** Rollback instructions if validation fails (e.g. "git checkout src/file.ts"). */
+  rollback?: string[]
+  /** Condition to skip this task (e.g. "file exists: src/config.json" or "command passes: npm test"). */
+  skipIf?: string[]
 }
 
 export interface ManagerPlan {
