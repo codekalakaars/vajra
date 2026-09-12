@@ -11,14 +11,30 @@ test('every tool schema validates its own well-formed example', () => {
     delete_dir: { path: 'a', recursive: true },
     create_dir: { path: 'a/b/c' },
     list_files: { path: '.', recursive: false },
+    search_files: { query: 'TODO' },
     copy_file: { source: 'a', destination: 'b' },
     rename_file: { source: 'a', destination: 'b', overwrite: true },
-    run_command: { command: 'git', args: ['status'] },
+    run_command: { command: 'git' },
     parse_schematic: { path: 'design.kicad_sch' },
     generate_pcb: { schematicPath: 'design.kicad_sch', constraints: { width: 100, height: 80, layers: 2 } },
     run_drc: { path: 'design.kicad_pcb' },
     export_gerbers: { pcbPath: 'design.kicad_pcb', outputDir: 'gerbers' },
     export_bom: { schPath: 'design.kicad_sch', outputPath: 'bom.csv' },
+    text_to_schematic: {
+      components: [{ reference: 'R1', value: '10k', footprint: 'Resistor_SMD:R_0402_1005Metric', symbol: 'Device:R' }],
+      nets: [{ name: 'SIG', connections: [{ reference: 'R1', pin: '1' }, { reference: 'R1', pin: '2' }] }],
+    },
+    propose_plan: {
+      tasks: [{
+        title: 'Task 1',
+        description: 'First task',
+        files: ['file1.txt'],
+        validation: 'echo ok',
+        dependsOn: [],
+        type: 'create',
+      }],
+      summary: 'A test plan',
+    },
   }
 
   for (const [name, def] of Object.entries(toolDefinitions)) {

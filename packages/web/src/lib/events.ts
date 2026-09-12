@@ -1,12 +1,22 @@
 // Typed push event bus.
 
 export type EventMap = {
+  'session.statusChanged': { sessionId: string; status: string }
   'session.assistantDelta': { sessionId: string; text: string }
   'session.thinkingDelta': { sessionId: string; text: string }
-  'session.sandboxStatus': { sessionId: string; enforced: boolean; warnings: string[] }
+  'session.planStarted': { sessionId: string }
+  'session.planTask': { sessionId: string; task: string; index: number; total: number }
+  'session.planComplete': { sessionId: string; tasks: string[] }
+  'session.planProposed': { sessionId: string; tasks: string[] }
+  'session.planConfirmed': { sessionId: string; tasks: string[] }
+  'session.workerStarted': { sessionId: string; workerId: string; task: string }
+  'session.workerCompleted': { sessionId: string; workerId: string; result: string }
+  'session.workerFailed': { sessionId: string; workerId: string; error: string }
+  'session.conflictDetected': { sessionId: string; message: string }
   'session.completed': { sessionId: string }
   'session.failed': { sessionId: string; message: string }
   'session.deleted': { sessionId: string }
+  'session.sandboxStatus': { sessionId: string; enforced: boolean; warnings: string[] }
 }
 
 export type EventName = keyof EventMap

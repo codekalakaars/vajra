@@ -36,10 +36,13 @@ importers:
 
   packages/sandbox:
     dependencies:
-      '@vajra/protocol':
+      '@codekalakaars/protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:
+      '@codekalakaars/vajra-core':
+        specifier: workspace:*
+        version: link:../..
       '@types/node':
         specifier: ^22.5.4
         version: 22.20.1
@@ -49,13 +52,16 @@ importers:
 
   packages/server:
     dependencies:
-      '@vajra/kicad':
-        specifier: workspace:*
-        version: link:../kicad
-      '@vajra/protocol':
+      '@codekalakaars/protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@vajra/sandbox':
+      '@codekalakaars/vajra-core':
+        specifier: workspace:*
+        version: link:../..
+      '@codekalakaars/vajra-kicad':
+        specifier: workspace:*
+        version: link:../kicad
+      '@codekalakaars/vajra-sandbox':
         specifier: workspace:*
         version: link:../sandbox
       better-sqlite3:
@@ -67,9 +73,6 @@ importers:
       openai:
         specifier: ^7.8.0
         version: 7.8.0(ws@8.21.3)(zod@3.25.76)
-      vajra-native:
-        specifier: workspace:*
-        version: link:../..
       ws:
         specifier: ^8.18.0
         version: 8.21.3

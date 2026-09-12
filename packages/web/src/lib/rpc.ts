@@ -14,6 +14,8 @@ type RpcMethodMap = {
   'session.stop': { params: { sessionId: string }; result: { ok: true } }
   'session.delete': { params: { sessionId: string }; result: { ok: true } }
   'session.sendMessage': { params: { sessionId: string; content: string }; result: { ok: true } }
+  'session.confirmPlan': { params: { sessionId: string; tasks: string[] }; result: { ok: true } }
+  'session.rejectPlan': { params: { sessionId: string }; result: { ok: true } }
 }
 
 export type MethodName = keyof RpcMethodMap

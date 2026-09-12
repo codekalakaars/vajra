@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
 import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage, ManagerPlan, PlannedTask } from '@codekalakaars/protocol'
-import type { FileRule, ResourceLimits } from '@codekalakaars/sandbox'
-import { FileLockManager, resolveConcurrencyConfig } from '@codekalakaars/sandbox'
+import type { FileRule, ResourceLimits } from '@codekalakaars/vajra-sandbox'
+import { FileLockManager, resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 import type { OpenRouterMessage } from '../agent/openrouter.js'
 import { managerConversationTurn, type ManagerTurnResult } from '../agent/manager.js'
 import { masterLoop } from '../agent/master.js'
@@ -125,7 +125,7 @@ export class SessionManager {
     // tool restrictions), fall back to .vajra-perms.json (exact-path rules),
     // then to read-only defaults.
     const { loadPermissions } = await import('../native.js')
-    const { loadSandboxConfig, buildLaunchJob } = await import('@codekalakaars/sandbox')
+    const { loadSandboxConfig, buildLaunchJob } = await import('@codekalakaars/vajra-sandbox')
 
     let permissions: PermissionsConfig
     let allowedTools: string[] | undefined

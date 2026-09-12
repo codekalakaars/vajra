@@ -21,7 +21,9 @@
     "test": "node --test \"test/*.test.mjs\"",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@codekalakaars/protocol": "workspace:*"
+  },
   "peerDependencies": {
     "@codekalakaars/vajra-core": "workspace:*"
   },

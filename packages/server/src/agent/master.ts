@@ -14,7 +14,7 @@
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../session/manager.js'
 import type { ManagerPlan, PlannedTask, PermissionsConfig, ToolName } from '@codekalakaars/protocol'
-import { FileLockManager, type ResourceLimits } from '@codekalakaars/sandbox'
+import { FileLockManager, type ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { TaskQueue, type TaskState } from './taskqueue.js'
 import { AgentRegistry, type AgentState } from './registry.js'
 import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
