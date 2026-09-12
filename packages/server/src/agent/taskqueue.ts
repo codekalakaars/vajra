@@ -250,15 +250,21 @@ export class TaskQueue {
     const task2 = this.tasks.get(task2Id)
     if (!task1 || !task2) return false
 
-    // Check if any file is owned by both tasks
-    for (const [file, owner] of this.fileToTask) {
-      if (owner === task1Id || owner === task2Id) {
-        // Check if the other task also references this file
-        const task1Files = this.getTaskFiles(task1Id)
-        const task2Files = this.getTaskFiles(task2Id)
-        if (task1Files.includes(file) && task2Files.includes(file)) {
-          return true
-        }
+    // Get files each task writes to (writeFile + deleteFile)
+    const task1WriteFiles = [...task1.writeFile, ...task1.deleteFile]
+    const task2WriteFiles = [...task2.writeFile, ...task2.deleteFile]
+
+    // Check if task1 writes to any file task2 reads or writes
+    for (const file of task1WriteFiles) {
+      if (task2.readFile.includes(file) || task2WriteFiles.includes(file)) {
+        return true
+      }
+    }
+
+    // Check if task2 writes to any file task1 reads
+    for (const file of task2WriteFiles) {
+      if (task1.readFile.includes(file)) {
+        return true
       }
     }
 
@@ -289,6 +295,48 @@ export class TaskQueue {
       if (owner === taskId) files.push(file)
     }
     return files
+  }
+
+  /**
+   * Check if a set of tasks can all run in parallel (no write conflicts between any pair).
+   */
+  canRunInParallel(taskIds: string[]): boolean {
+    for (let i = 0; i < taskIds.length; i++) {
+      for (let j = i + 1; j < taskIds.length; j++) {
+        if (this.hasConflict(taskIds[i], taskIds[j])) {
+          return false
+        }
+      }
+    }
+    return true
+  }
+
+  /**
+   * Group ready tasks into parallel batches (each batch has no internal conflicts).
+   */
+  getParallelBatches(): string[][] {
+    const ready = this.getReadyTasks()
+    const batches: string[][] = []
+    const assigned = new Set<string>()
+
+    for (const task of ready) {
+      if (assigned.has(task.id)) continue
+
+      const batch = [task.id]
+      assigned.add(task.id)
+
+      for (const other of ready) {
+        if (assigned.has(other.id)) continue
+        if (this.canRunInParallel([...batch, other.id])) {
+          batch.push(other.id)
+          assigned.add(other.id)
+        }
+      }
+
+      batches.push(batch)
+    }
+
+    return batches
   }
 
   getStatus(): QueueStatus {
