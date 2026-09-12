@@ -14,7 +14,7 @@
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../session/manager.js'
 import type { ManagerPlan, PlannedTask, PermissionsConfig, ToolName } from '@codekalakaars/vajra-protocol'
-import { FileLockManager, type ResourceLimits } from '@codekalakaars/vajra-sandbox'
+import { FileLockManager, ChangeHistory, type ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { TaskQueue, type TaskState } from './taskqueue.js'
 import { AgentRegistry, type AgentState } from './registry.js'
 import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
@@ -36,6 +36,8 @@ export interface MasterInput {
   launchWorker: (job: WorkerJob) => Promise<LaunchHandle>
   /** File lock manager for coordinating parallel access. */
   fileLocks?: FileLockManager
+  /** Change history for rollback support. */
+  changeHistory?: ChangeHistory
   /** Resource limits for workers. */
   resourceLimits?: ResourceLimits
   /** Worker pool for reuse (optional). If not provided, workers are destroyed after each task. */
@@ -146,6 +148,9 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
   // Use provided file lock manager or create a new one
   const fileLocks = input.fileLocks ?? new FileLockManager()
+  
+  // Use provided change history or create a new one
+  const changeHistory = input.changeHistory ?? new ChangeHistory()
 
   // Create master agent
   const masterAgent = registry.createAgent(sessionId, 'master', 'Orchestrate task execution')
@@ -272,7 +277,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         queue.startTask(task.id)
 
         // Start task execution in background
-        executeTask(agent.id, task, handle, apiKey, model, events, db, queue, registry, sessionId, fileLocks, activeWorkers, completedTasks, failedTasks, resourceLimits, pool)
+        executeTask(agent.id, task, handle, apiKey, model, events, db, queue, registry, sessionId, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, resourceLimits, pool)
           .catch((e) => {
             console.error(`Worker ${agent.id} failed:`, e)
           })
@@ -333,6 +338,7 @@ async function executeTask(
   registry: AgentRegistry,
   sessionId: string,
   fileLocks: FileLockManager,
+  changeHistory: ChangeHistory,
   activeWorkers: Map<string, { agent: AgentState; handle: LaunchHandle; taskId: string }>,
   completedTasks: string[],
   failedTasks: string[],
@@ -343,6 +349,12 @@ async function executeTask(
   let toolCallCount = 0
 
   try {
+    // Record original file content before worker starts
+    const allFiles = [...task.readFile, ...task.writeFile]
+    for (const filePath of allFiles) {
+      await changeHistory.recordBefore(task.id, filePath)
+    }
+    
     // Build a prescriptive system prompt for the worker
     const instructionLines = task.instructions.map((inst, i) => `${i + 1}. ${inst}`).join('\n')
     const readFileList = task.readFile.length > 0 ? task.readFile.join(', ') : '(none)'
@@ -469,18 +481,42 @@ async function executeTask(
       const maxRetries = task.maxRetries ?? DEFAULT_MAX_RETRIES
 
       if (retries < maxRetries) {
-        queue.recordValidation(task.id, `\n[retry ${retries + 1}/${maxRetries}]`, false)
-        // Reset task to pending so it gets retried on the next loop iteration
-        queue.retryTask(task.id)
-      } else {
-        // Run rollback instructions if provided
-        if (task.rollback && task.rollback.length > 0) {
+        // Rollback changes before retry
+        if (changeHistory.hasChanges(task.id)) {
+          await changeHistory.rollback(task.id)
           events.push('session.workerProgress', sessionId, {
             sessionId,
             agentId,
             taskId: task.id,
-            detail: 'Running rollback instructions...',
+            detail: `Rolled back changes before retry ${retries + 1}/${maxRetries}`,
           })
+        }
+        
+        queue.recordValidation(task.id, `\n[retry ${retries + 1}/${maxRetries}]`, false)
+        // Reset task to pending so it gets retried on the next loop iteration
+        queue.retryTask(task.id)
+      } else {
+        // Rollback using change history (preferred) or manual rollback commands
+        events.push('session.workerProgress', sessionId, {
+          sessionId,
+          agentId,
+          taskId: task.id,
+          detail: 'Rolling back changes...',
+        })
+        
+        // Try change history rollback first
+        if (changeHistory.hasChanges(task.id)) {
+          const result = await changeHistory.rollback(task.id)
+          events.push('session.workerProgress', sessionId, {
+            sessionId,
+            agentId,
+            taskId: task.id,
+            detail: `Restored ${result.restored.length} files, deleted ${result.deleted.length} files`,
+          })
+        }
+        
+        // Also run manual rollback commands if provided (for external changes)
+        if (task.rollback && task.rollback.length > 0) {
           for (const cmd of task.rollback) {
             try {
               await handle.callTool('run_command', { command: cmd, timeout: 30000 })
