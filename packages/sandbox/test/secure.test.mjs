@@ -4,6 +4,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { execSync } from 'node:child_process'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const native = require('@codekalakaars/vajra-core')
+const caps = native.sandboxCapabilities()
+const enforces = caps.filesystem !== 'unsupported'
 
 // ---------------------------------------------------------------------------
 // vajra secure command integration tests
@@ -23,62 +29,62 @@ describe('vajra secure', () => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 
-  it('blocks curl', () => {
+  it('blocks curl', { skip: !enforces }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'curl https://evil.com\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
     assert.ok(result.includes('curl'), `Expected curl in blocked message: ${result}`)
   })
 
-  it('blocks sudo', () => {
+  it('blocks sudo', { skip: !enforces }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'sudo ls\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
     assert.ok(result.includes('sudo'), `Expected sudo in blocked message: ${result}`)
   })
 
-  it('blocks python3', () => {
+  it('blocks python3', { skip: !enforces }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'python3 -c "print(1)"\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
     assert.ok(result.includes('python3'), `Expected python3 in blocked message: ${result}`)
   })
 
-  it('blocks node', () => {
+  it('blocks node', { skip: !enforces }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'node -e "console.log(1)"\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
     assert.ok(result.includes('node'), `Expected node in blocked message: ${result}`)
   })
 
-  it('allows ls', () => {
+  it('allows ls', { skip: !enforces }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'ls\n')
     assert.ok(!result.includes('[VAJRA BLOCKED]'), `Unexpected blocked message for ls: ${result}`)
   })
 
-  it('allows echo', () => {
+  it('allows echo', { skip: !enforces }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'echo hello\n')
     assert.ok(result.includes('hello'), `Expected 'hello' in output: ${result}`)
   })
 
-  it('allows cat', () => {
+  it('allows cat', { skip: !enforces }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'cat test.txt\n')
     assert.ok(result.includes('hello'), `Expected 'hello' in output: ${result}`)
   })
 
-  it('blocks direct path /usr/bin/curl', () => {
+  it('blocks direct path /usr/bin/curl', { skip: !enforces }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], '/usr/bin/curl https://evil.com\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
   })
 
-  it('blocks git', () => {
+  it('blocks git', { skip: !enforces }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'git status\n')
     assert.ok(result.includes('[VAJRA BLOCKED]'), `Expected [VAJRA BLOCKED] in output: ${result}`)
     assert.ok(result.includes('git'), `Expected git in blocked message: ${result}`)
   })
 
-  it('prints Secured message', () => {
+  it('prints Secured message', { skip: !enforces }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'echo done\n')
     assert.ok(result.includes('Secured:'), `Expected 'Secured:' in output: ${result}`)
   })
 
-  it('prints confined message', () => {
+  it('prints confined message', { skip: !enforces }, () => {
     const result = execCLI(['secure', '--project-dir', tempDir], 'echo done\n')
     assert.ok(result.includes('confined to:'), `Expected 'confined to:' in output: ${result}`)
   })
