@@ -266,3 +266,55 @@ export function filterFileEntries(
     return perm.read
   })
 }
+
+/**
+ * Check if a tool call is allowed based on file rules.
+ *
+ * Returns null if allowed, or an error message if denied.
+ */
+export function checkToolPermission(
+  tool: string,
+  args: Record<string, unknown>,
+  fileRules: FileRule[],
+  defaultPermissions: FilePermissions,
+  projectDir: string,
+): string | null {
+  // Tools that don't touch files are always allowed
+  const fileTools = ['read_file', 'write_file', 'edit_file', 'delete_file', 'list_files']
+  if (!fileTools.includes(tool)) {
+    return null
+  }
+
+  // Extract file path from args
+  const filePath = args.path as string | undefined
+  if (!filePath) {
+    return null
+  }
+
+  // Resolve to project-relative path
+  const relativePath = filePath.startsWith(projectDir)
+    ? filePath.slice(projectDir.length + 1)
+    : filePath
+
+  // Check file rules
+  const compiled = new CompiledRules(defaultPermissions, fileRules)
+  const perm = compiled.resolve(relativePath)
+
+  // Check permissions based on tool
+  switch (tool) {
+    case 'read_file':
+      if (!perm.read) return `Read denied for ${relativePath}`
+      break
+    case 'write_file':
+      if (!perm.write) return `Write denied for ${relativePath}`
+      break
+    case 'edit_file':
+      if (!perm.edit) return `Edit denied for ${relativePath}`
+      break
+    case 'delete_file':
+      if (!perm.delete) return `Delete denied for ${relativePath}`
+      break
+  }
+
+  return null
+}

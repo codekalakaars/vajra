@@ -11,7 +11,7 @@
 //   vajra-sandbox test     — test if sandbox works
 
 export { createSandboxConfig, type SandboxConfig, type SandboxEnvironments, type FileRule, type CreateSandboxInput } from './config.js'
-export { matchesPattern, resolveFilePermission, resolveFilePermissions, filterFileEntries } from './file-rules.js'
+export { matchesPattern, resolveFilePermission, resolveFilePermissions, filterFileEntries, checkToolPermission } from './file-rules.js'
 export { resolveAllowedTools } from './tool-rules.js'
 export { buildLaunchJob, type LaunchJob } from './sandbox-builder.js'
 export { loadSandboxConfig, loadSandboxEnvironments, saveSandboxConfig, saveSandboxEnvironments, DEFAULT_CONFIG_FILE } from './file-config.js'

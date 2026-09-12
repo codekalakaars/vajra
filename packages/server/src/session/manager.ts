@@ -129,7 +129,8 @@ export class SessionManager {
 
     let permissions: PermissionsConfig
     let allowedTools: string[] | undefined
-    let fileRules: FileRule[] = []
+    let fileRules: FileRule[] | undefined
+    let defaultFilePermissions: FilePermissions | undefined
 
     const sandboxConfig = loadSandboxConfig(input.projectDir)
     if (sandboxConfig) {
@@ -138,6 +139,7 @@ export class SessionManager {
       permissions = job.permissions
       allowedTools = job.allowedTools
       fileRules = sandboxConfig.fileRules as FileRule[]
+      defaultFilePermissions = job.defaultFilePermissions
     } else {
       // Fall back to .vajra-perms.json or defaults
       permissions = loadPermissions(input.projectDir) ?? {
@@ -156,6 +158,7 @@ export class SessionManager {
           allowUnenforced: input.allowUnenforced ?? false,
           allowedTools,
           fileRules,
+          defaultFilePermissions,
         },
         (report) => this.recordSandboxReport(sessionId, report),
       )
