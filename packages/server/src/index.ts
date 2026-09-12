@@ -8,7 +8,7 @@ import type { SessionLauncher } from './session/manager.js'
 import { forkSessionLauncher } from './session/launcher.js'
 
 dotenv.config()
-if (!process.env.OPENROUTER_API_KEY) {
+if (!process.env.OPENROUTER_API_KEY && !process.env.ANTHROPIC_API_KEY) {
   const repoRootEnv = resolve(dirname(fileURLToPath(import.meta.url)), '../../..', '.env')
   dotenv.config({ path: repoRootEnv })
 }

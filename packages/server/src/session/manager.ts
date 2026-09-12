@@ -3,7 +3,7 @@ import type { SqliteDb } from '../db/client.js'
 import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage, ManagerPlan, PlannedTask } from '@codekalakaars/vajra-protocol'
 import type { FileRule, ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { FileLockManager, resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
-import type { OpenRouterMessage } from '../agent/openrouter.js'
+import type { ChatProvider, ChatMessage } from '../agent/providers/types.js'
 import { managerConversationTurn, type ManagerTurnResult } from '../agent/manager.js'
 import { masterLoop } from '../agent/master.js'
 import { AgentRegistry } from '../agent/registry.js'
@@ -63,6 +63,7 @@ export interface CreateSessionInput {
   permissions: PermissionsConfig
   task: string
   model: string
+  provider: ChatProvider
   allowUnenforced?: boolean
 }
 
@@ -73,7 +74,7 @@ export interface PushEvents {
 /** In-memory state for an active conversation session. */
 interface ConversationState {
   /** Accumulated LLM conversation history (system + user + assistant + tool messages). */
-  history: OpenRouterMessage[]
+  history: ChatMessage[]
   /** Summary index for in-memory file search. Built on first turn. */
   summaryIndex: SummaryEntry[]
   /** The plan proposed by the Manager, awaiting user confirmation. */
@@ -82,6 +83,8 @@ interface ConversationState {
   handle: LaunchHandle
   /** File lock manager for coordinating parallel access. */
   fileLocks: FileLockManager
+  /** The chat provider for this session. */
+  provider: ChatProvider
 }
 
 export class SessionManager {
@@ -175,6 +178,7 @@ export class SessionManager {
         summaryIndex: [],
         handle,
         fileLocks: new FileLockManager(),
+        provider: input.provider,
       })
 
       // Transition to talking — the user can now chat with the Manager
@@ -323,7 +327,7 @@ export class SessionManager {
    * - `executing`: dispatch to worker (existing behavior)
    * - `confirming`: reject (user must confirm/reject, not send new messages)
    */
-  async sendMessage(sessionId: string, content: string, apiKey: string): Promise<void> {
+  async sendMessage(sessionId: string, content: string, apiKey: string, provider?: ChatProvider): Promise<void> {
     const status = this.getStatus(sessionId)
     if (!status) throw new Error(`No such session ${sessionId}`)
 
@@ -332,13 +336,13 @@ export class SessionManager {
     }
 
     if (status === 'talking') {
-      await this.sendConversationMessage(sessionId, content, apiKey)
+      await this.sendConversationMessage(sessionId, content, apiKey, provider)
       return
     }
 
     if (status === 'executing' || status === 'running') {
       // Legacy path: dispatch directly to worker
-      await this.sendWorkerMessage(sessionId, content, apiKey)
+      await this.sendWorkerMessage(sessionId, content, apiKey, provider)
       return
     }
 
@@ -380,6 +384,7 @@ export class SessionManager {
         plan,
         model: row.model,
         apiKey,
+        provider: conv.provider,
         events: this.events,
         db: this.db,
         registry,
@@ -439,13 +444,15 @@ export class SessionManager {
   /**
    * Dispatch a message to the Manager conversation loop.
    */
-  private async sendConversationMessage(sessionId: string, content: string, apiKey: string): Promise<void> {
+  private async sendConversationMessage(sessionId: string, content: string, apiKey: string, provider?: ChatProvider): Promise<void> {
     const conv = this.conversations.get(sessionId)
     if (!conv) throw new Error('No conversation state')
 
     const row = this.db
       .prepare(`SELECT project_dir, model FROM sessions WHERE id = ?`)
       .get(sessionId) as { project_dir: string; model: string }
+
+    const activeProvider = provider ?? conv.provider
 
     this.events.push('session.statusChanged', sessionId, { status: 'talking' })
 
@@ -456,6 +463,7 @@ export class SessionManager {
         userMessage: content,
         model: row.model,
         apiKey,
+        provider: activeProvider,
         events: this.events,
         db: this.db,
         handle: conv.handle,
@@ -480,8 +488,11 @@ export class SessionManager {
   /**
    * Legacy path: dispatch a message directly to the worker agent loop.
    */
-  private async sendWorkerMessage(sessionId: string, content: string, apiKey: string): Promise<void> {
+  private async sendWorkerMessage(sessionId: string, content: string, apiKey: string, provider?: ChatProvider): Promise<void> {
     const { agentLoop } = await import('../agent/loop.js')
+
+    const conv = this.conversations.get(sessionId)
+    const activeProvider = provider ?? conv?.provider
 
     const row = this.db
       .prepare(`SELECT project_dir, model FROM sessions WHERE id = ?`)
@@ -509,11 +520,16 @@ export class SessionManager {
       this.handles.set(sessionId, handle)
     }
 
+    if (!activeProvider) {
+      throw new Error('No chat provider available for this session')
+    }
+
     this.setStatus(sessionId, 'running')
     try {
       const result = await agentLoop({
         session: { id: sessionId, projectDir: row.project_dir, task: content, model: row.model },
         apiKey,
+        provider: activeProvider,
         handle,
         permissions,
         events: this.events,
