@@ -1,13 +1,20 @@
 import type { RpcRouter } from '../rpc.js'
 import type { ServerContext } from '../server.js'
 import type { SessionCreateParams, SessionAttachParams, SessionStopParams, SessionDeleteParams, SessionSendMessageParams, SessionConfirmPlanParams, SessionRejectPlanParams } from '@codekalakaars/vajra-protocol'
+import { createProvider } from '../../agent/providers/index.js'
 
 export function registerSessionHandlers(router: RpcRouter<ServerContext>): void {
   router.register('session.create', async (params: SessionCreateParams, ctx) => {
     const defaultModel = process.env.VAJRA_MODEL || 'openrouter/free'
+    const model = params.model?.trim() || defaultModel
+
+    // Create provider from model string
+    const { provider, resolvedModel } = createProvider(model, ctx.apiKey)
+
     const withDefaultModel = {
       ...params,
-      model: params.model?.trim() || defaultModel,
+      model: resolvedModel,
+      provider,
     }
     const result = await ctx.sessions.create(withDefaultModel, (sessionId) => ctx.connection.subscribe(sessionId))
 

@@ -4,6 +4,7 @@ import { Command } from 'commander'
 import * as dotenv from 'dotenv'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { runCommand } from './run.js'
 
 // Find root .env file (go up from dist/ to packages/cli, then to repo root)
@@ -40,6 +41,81 @@ program
       verbose: options.verbose,
       projectDir: options.dir,
     })
+  })
+
+program
+  .command('config')
+  .description('Show or set configuration')
+  .option('-g, --get <key>', 'Get a config value')
+  .option('-s, --set <key> <value>', 'Set a config value')
+  .option('-l, --list', 'List all config values')
+  .action((options) => {
+    const envPath = resolve(rootDir, '.env')
+    const envExists = existsSync(envPath)
+
+    if (options.get) {
+      const key = options.get
+      const value = process.env[key]
+      if (value) {
+        console.log(value)
+      } else {
+        console.error(`Config key '${key}' not found`)
+        process.exit(1)
+      }
+      return
+    }
+
+    if (options.set) {
+      const [key, ...valueParts] = options.set
+      const value = valueParts.join(' ')
+      
+      if (!key) {
+        console.error('Key is required')
+        process.exit(1)
+      }
+
+      let envContent = envExists ? readFileSync(envPath, 'utf-8') : ''
+      const regex = new RegExp(`^${key}=.*$`, 'm')
+      
+      if (regex.test(envContent)) {
+        envContent = envContent.replace(regex, `${key}=${value}`)
+      } else {
+        envContent += envContent.endsWith('\n') ? '' : '\n'
+        envContent += `${key}=${value}\n`
+      }
+
+      writeFileSync(envPath, envContent)
+      console.log(`Set ${key}=${value}`)
+      return
+    }
+
+    // Default: list all config
+    console.log('\n\x1b[1mVajra Configuration\x1b[0m\n')
+    
+    const configKeys = [
+      'OPENROUTER_API_KEY',
+      'ANTHROPIC_API_KEY',
+      'DEFAULT_MODEL',
+    ]
+
+    for (const key of configKeys) {
+      const value = process.env[key]
+      if (value) {
+        const masked = key.includes('KEY') ? value.slice(0, 8) + '...' + value.slice(-4) : value
+        console.log(`  \x1b[36m${key}\x1b[0m = ${masked}`)
+      } else {
+        console.log(`  \x1b[36m${key}\x1b[0m = \x1b[90m(not set)\x1b[0m`)
+      }
+    }
+
+    console.log('')
+    console.log(`  \x1b[36m.env file\x1b[0m = ${envExists ? envPath : '(not found)'}`)
+    console.log('')
+    console.log('  Usage:')
+    console.log('    vajra config              Show all config')
+    console.log('    vajra config -g KEY       Get a value')
+    console.log('    vajra config -s KEY VAL   Set a value')
+    console.log('')
   })
 
 program.parse()
