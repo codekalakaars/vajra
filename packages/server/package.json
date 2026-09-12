@@ -13,6 +13,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
     "@codekalakaars/vajra-protocol": "workspace:*",
     "@codekalakaars/vajra-sandbox": "workspace:*",
     "better-sqlite3": "^11.3.0",

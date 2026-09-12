@@ -41,26 +41,14 @@ function isOverloadedError(err: unknown): boolean {
   return err instanceof Error && 'status' in err && (err as { status: number }).status === 529
 }
 
-interface AnthropicContentBlock {
-  type: 'text' | 'tool_use'
-  text?: string
-  id?: string
-  name?: string
-  input?: unknown
-}
-
-interface AnthropicMessage {
-  role: 'user' | 'assistant'
-  content: string | AnthropicContentBlock[]
-}
-
-function toAnthropicMessages(messages: ChatMessage[]): { system: string; messages: AnthropicMessage[] } {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function toAnthropicMessages(messages: ChatMessage[]): { system: string; messages: any[] } {
   let system = ''
-  const out: AnthropicMessage[] = []
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const out: any[] = []
 
   for (const m of messages) {
     if (m.role === 'system') {
-      // Concatenate multiple system messages
       system += (system ? '\n\n' : '') + (m.content ?? '')
       continue
     }
@@ -71,9 +59,9 @@ function toAnthropicMessages(messages: ChatMessage[]): { system: string; message
     }
 
     if (m.role === 'assistant') {
-      // Assistant with tool calls — content block array
       if (m.toolCalls && m.toolCalls.length > 0) {
-        const blocks: AnthropicContentBlock[] = []
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const blocks: any[] = []
         if (m.content) {
           blocks.push({ type: 'text', text: m.content })
         }
@@ -99,13 +87,11 @@ function toAnthropicMessages(messages: ChatMessage[]): { system: string; message
     }
 
     if (m.role === 'tool') {
-      // Tool result → user message with tool_result content block
       const toolResultBlock = {
         type: 'tool_result' as const,
         tool_use_id: m.toolCallId ?? '',
         content: m.content ?? '',
       }
-      // Find the last user message and merge, or create new one
       const lastMsg = out[out.length - 1]
       if (lastMsg && lastMsg.role === 'user' && Array.isArray(lastMsg.content)) {
         lastMsg.content.push(toolResultBlock)
@@ -125,32 +111,6 @@ function toAnthropicTools(tools: ToolSpec[] | undefined): Anthropic.Tool[] | und
     description: t.description,
     input_schema: t.parameters as Anthropic.Tool.InputSchema,
   }))
-}
-
-function extractContentBlocks(content: string | AnthropicContentBlock[]): {
-  text: string
-  toolCalls: ToolCall[]
-} {
-  if (typeof content === 'string') {
-    return { text: content, toolCalls: [] }
-  }
-
-  let text = ''
-  const toolCalls: ToolCall[] = []
-
-  for (const block of content) {
-    if (block.type === 'text' && block.text) {
-      text += block.text
-    } else if (block.type === 'tool_use' && block.id && block.name) {
-      toolCalls.push({
-        id: block.id,
-        name: block.name,
-        arguments: typeof block.input === 'string' ? block.input : JSON.stringify(block.input ?? {}),
-      })
-    }
-  }
-
-  return { text, toolCalls }
 }
 
 export class AnthropicProvider implements ChatProvider {
@@ -173,10 +133,11 @@ export class AnthropicProvider implements ChatProvider {
       stream: true,
     }
 
-    let stream: Anthropic.RawMessageStream
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let stream: AsyncIterable<any>
     for (let attempt = 0; ; attempt++) {
       try {
-        stream = client.messages.stream(params)
+        stream = client.messages.stream(params) as unknown as AsyncIterable<unknown>
         break
       } catch (err) {
         if ((isOverloadedError(err)) && attempt < MAX_RETRIES) {
@@ -190,13 +151,14 @@ export class AnthropicProvider implements ChatProvider {
 
     let content = ''
     let stopReason: string | null = null
-    const toolCalls = new Map<string, { id: string; name: string; arguments: string }>()
+    const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
 
-    for await (const event of stream) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for await (const event of stream as AsyncIterable<any>) {
       if (event.type === 'content_block_start') {
         const block = event.content_block
         if (block.type === 'tool_use' && block.id) {
-          toolCalls.set(block.index, { id: block.id, name: block.name, arguments: '' })
+          toolCalls.set(event.index, { id: block.id, name: block.name, arguments: '' })
         }
       } else if (event.type === 'content_block_delta') {
         const delta = event.delta
@@ -206,7 +168,6 @@ export class AnthropicProvider implements ChatProvider {
         } else if (delta.type === 'thinking_delta' && delta.thinking && onThinkingDelta) {
           onThinkingDelta(delta.thinking)
         } else if (delta.type === 'input_json_delta' && delta.partial_json) {
-          // Find the tool call by index — content_block_delta events come in order
           const lastToolCall = [...toolCalls.values()].pop()
           if (lastToolCall) {
             lastToolCall.arguments += delta.partial_json

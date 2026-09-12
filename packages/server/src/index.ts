@@ -57,9 +57,9 @@ const isMain = process.argv[1] !== undefined && import.meta.url === `file://${pr
 
 if (isMain) {
   const port = Number(process.env.PORT) || 4820
-  const apiKey = process.env.OPENROUTER_API_KEY
+  const apiKey = process.env.OPENROUTER_API_KEY || process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
-    console.error('OPENROUTER_API_KEY is required (set in .env or environment)')
+    console.error('API key required: set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in .env or environment')
     console.error('  See .env.example at the repo root')
     process.exit(1)
   }
