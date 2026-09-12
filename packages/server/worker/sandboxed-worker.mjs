@@ -39,6 +39,7 @@ const dispatchTable = {
   search_files: (args) => native.searchSummary(args.query),
   write_file: (args) => native.writeFile(args.path, args.content),
   edit_file: (args) => native.editFile(args.path, args.oldString, args.newString, args.replaceAll),
+  delete_file: (args) => native.deleteFile(args.path, args.recursive),
   run_command: (args) => {
     const { execSync } = require('child_process')
     const cmd = args.command
@@ -59,7 +60,6 @@ const dispatchTable = {
     if (errors.length > 0) {
       throw new Error(`Invalid circuit: ${errors.join('; ')}`)
     }
-    const projectDir = process.env.VAJRA_PROJECT_DIR || process.cwd()
     return runPipeline(args, projectDir, args.boardConstraints)
   },
 }

@@ -10,7 +10,7 @@
 // This is the main entry point for the text_to_schematic tool.
 
 import { join } from 'node:path'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { buildSchematicFromDescription, validateCircuitDescription } from './circuit-builder.js'
 import { generateSchContent } from './schematic-generator.js'
 import { placeFootprints } from './placement.js'
@@ -25,10 +25,10 @@ import type { CircuitDescription } from './circuit-builder.js'
 export interface PipelineResult {
   /** The parsed schematic (can be used for further processing) */
   schematic: ParsedSchematic
-  /** Generated .kicad_sch content */
-  schContent: string
-  /** Generated .kicad_pcb content */
-  pcbContent: string
+  /** Path to the generated .kicad_sch file */
+  schPath: string
+  /** Path to the generated .kicad_pcb file */
+  pcbPath: string
   /** Number of components */
   componentCount: number
   /** Number of nets */
@@ -50,7 +50,7 @@ const DEFAULT_CONSTRAINTS: BoardConstraints = {
  * @param description - Structured circuit description with components and nets
  * @param projectDir - Directory to write output files to
  * @param constraints - Optional board constraints (defaults to 100x80mm, 2-layer)
- * @returns Pipeline result with schematic and PCB content
+ * @returns Pipeline result with file paths and metadata
  */
 export async function runPipeline(
   description: CircuitDescription,
@@ -86,10 +86,19 @@ export async function runPipeline(
   const designRules = resolveDesignRules(boardConstraints.designRules)
   const pcbContent = generatePcbContent(schematic, placed, connections, boardConstraints, designRules)
 
+  // Write output files to disk
+  await mkdir(projectDir, { recursive: true })
+  const schPath = join(projectDir, 'design.kicad_sch')
+  const pcbPath = join(projectDir, 'design.kicad_pcb')
+  await Promise.all([
+    writeFile(schPath, schContent, 'utf-8'),
+    writeFile(pcbPath, pcbContent, 'utf-8'),
+  ])
+
   return {
     schematic,
-    schContent,
-    pcbContent,
+    schPath,
+    pcbPath,
     componentCount: schematic.componentCount,
     netCount: schematic.netCount,
     connectionCount: connections.length,

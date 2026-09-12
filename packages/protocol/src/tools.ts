@@ -12,7 +12,7 @@ interface JsonSchemaProperty {
   properties?: Record<string, JsonSchemaProperty>
   required?: string[]
   additionalProperties?: boolean
-  enum?: string[]
+  enum?: (string | number)[]
 }
 
 export interface JsonSchema {
@@ -144,6 +144,25 @@ export const editFileTool = defineTool({
   },
 })
 
+export const deleteFileTool = defineTool({
+  name: 'delete_file',
+  description: 'Delete a file or empty directory.',
+  nativeFn: 'deleteFile',
+  schema: z.object({
+    path: z.string(),
+    recursive: z.boolean().optional(),
+  }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'Project-relative or absolute path.' },
+      recursive: { type: 'boolean', description: 'Delete directories recursively (default: false).' },
+    },
+    required: ['path'],
+    additionalProperties: false,
+  },
+})
+
 export interface PlannedTaskInput {
   title: string
   description: string
@@ -222,9 +241,9 @@ export interface TextToSchematicArgs {
 export const textToSchematicTool = defineTool<TextToSchematicArgs>({
   name: 'text_to_schematic',
   description:
-    'Convert a structured circuit description into a schematic representation. ' +
+    'Convert a structured circuit description into a schematic and PCB layout. ' +
     'Define components (reference, value, footprint, symbol) and nets (connections between component pins). ' +
-    'Returns a parsed schematic that can be used to generate PCB layouts.',
+    'Generates .kicad_sch and .kicad_pcb files in the project directory.',
   nativeFn: 'textToSchematic',
   schema: z.object({
     components: z.array(z.object({
@@ -243,7 +262,13 @@ export const textToSchematicTool = defineTool<TextToSchematicArgs>({
     boardConstraints: z.object({
       width: z.number().optional().describe('Board width in mm'),
       height: z.number().optional().describe('Board height in mm'),
-      layers: z.enum(['2', '4', '6', '8']).optional().describe('Number of copper layers'),
+      layers: z.union([z.literal(1), z.literal(2), z.literal(4)]).optional().describe('Number of copper layers (1, 2, or 4)'),
+      designRules: z.object({
+        traceWidth: z.number().optional().describe('Minimum trace width in mm'),
+        clearance: z.number().optional().describe('Minimum clearance in mm'),
+        viaSize: z.number().optional().describe('Via outer diameter in mm'),
+        viaDrill: z.number().optional().describe('Via drill diameter in mm'),
+      }).optional().describe('Design rules for PCB generation'),
     }).optional().describe('Optional board constraints for PCB generation'),
   }),
   jsonSchema: {
@@ -294,7 +319,18 @@ export const textToSchematicTool = defineTool<TextToSchematicArgs>({
         properties: {
           width: { type: 'number', description: 'Board width in mm' },
           height: { type: 'number', description: 'Board height in mm' },
-          layers: { type: 'string', enum: ['2', '4', '6', '8'], description: 'Number of copper layers' },
+          layers: { type: 'number', enum: [1, 2, 4], description: 'Number of copper layers (1, 2, or 4)' },
+          designRules: {
+            type: 'object',
+            properties: {
+              traceWidth: { type: 'number', description: 'Minimum trace width in mm' },
+              clearance: { type: 'number', description: 'Minimum clearance in mm' },
+              viaSize: { type: 'number', description: 'Via outer diameter in mm' },
+              viaDrill: { type: 'number', description: 'Via drill diameter in mm' },
+            },
+            additionalProperties: false,
+            description: 'Design rules for PCB generation.',
+          },
         },
         additionalProperties: false,
         description: 'Optional board constraints for PCB generation.',
@@ -312,6 +348,7 @@ export const toolDefinitions = {
   run_command: runCommandTool,
   write_file: writeFileTool,
   edit_file: editFileTool,
+  delete_file: deleteFileTool,
   propose_plan: proposePlanTool,
   text_to_schematic: textToSchematicTool,
 } as const satisfies Record<string, ToolDefinition>
