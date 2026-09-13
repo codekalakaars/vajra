@@ -24,8 +24,8 @@ export interface ChatMessage {
   thinking?: string
 }
 
-export interface SessionState {
-  sessionId: string | null
+export interface ProjectState {
+  projectId: string | null
   status: 'idle' | 'creating' | 'talking' | 'confirming' | 'planning' | 'executing' | 'streaming' | 'done' | 'failed'
   messages: ChatMessage[]
   thinkingText: string
@@ -38,10 +38,10 @@ export interface SessionState {
   _thinkingChunks: string[]
 }
 
-export function useSession() {
+export function useProject() {
   const client = useClient()
-  const [state, setState] = useState<SessionState>({
-    sessionId: null,
+  const [state, setState] = useState<ProjectState>({
+    projectId: null,
     status: 'idle',
     messages: [],
     thinkingText: '',
@@ -59,8 +59,8 @@ export function useSession() {
   // Throttle timer for streaming updates
   const throttleRef = useRef<{ timer: ReturnType<typeof setTimeout> | null }>({ timer: null })
 
-  // Subscribe to push events for a session
-  const subscribe = useCallback((sessionId: string) => {
+  // Subscribe to push events for a project
+  const subscribe = useCallback((projectId: string) => {
     const unsubs: Array<() => void> = []
 
     unsubs.push(
@@ -68,7 +68,7 @@ export function useSession() {
         if (payload.status === undefined) return
         setState((s) => ({
           ...s,
-          status: payload.status as SessionState['status'],
+          status: payload.status as ProjectState['status'],
           _streamingText: '',
           thinkingText: '',
           _streamingChunks: [],
@@ -272,14 +272,14 @@ export function useSession() {
     }
   }, [client])
 
-  // Create a new session
-  const createSession = useCallback(async (params: {
+  // Create a new project
+  const createProject = useCallback(async (params: {
     projectDir: string
     permissions: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }>
     model: string
   }) => {
     setState({
-      sessionId: null,
+      projectId: null,
       status: 'creating',
       messages: [],
       thinkingText: '',
@@ -293,7 +293,7 @@ export function useSession() {
     })
 
     try {
-      const result = await client.call('session.create', {
+      const result = await client.call('projects.create', {
         projectDir: params.projectDir,
         task: '',
         model: params.model,
@@ -302,13 +302,13 @@ export function useSession() {
 
       setState((s) => ({
         ...s,
-        sessionId: result.sessionId,
+        projectId: result.projectId,
         status: 'talking',
       }))
 
-      subscribe(result.sessionId)
+      subscribe(result.projectId)
 
-      return result.sessionId
+      return result.projectId
     } catch (e) {
       setState((s) => ({ ...s, status: 'failed', error: String(e) }))
       throw e
@@ -317,7 +317,7 @@ export function useSession() {
 
   // Send a message
   const sendMessage = useCallback(async (content: string) => {
-    const sid = stateRef.current.sessionId
+    const sid = stateRef.current.projectId
     if (!sid) return
 
     setState((s) => ({
@@ -331,7 +331,7 @@ export function useSession() {
     }))
 
     try {
-      await client.call('session.sendMessage', { sessionId: sid, content })
+      await client.call('projects.sendMessage', { projectId: sid, content })
     } catch (e) {
       setState((s) => ({ ...s, status: 'failed', error: String(e) }))
     }
@@ -339,13 +339,13 @@ export function useSession() {
 
   // Confirm the proposed plan
   const confirmPlan = useCallback(async (editedTasks?: PlannedTask[]) => {
-    const sid = stateRef.current.sessionId
+    const sid = stateRef.current.projectId
     if (!sid) return
 
     setState((s) => ({ ...s, status: 'executing' }))
 
     try {
-      await client.call('session.confirmPlan', { sessionId: sid, tasks: editedTasks as Array<Record<string, unknown>> | undefined })
+      await client.call('projects.confirmPlan', { projectId: sid, tasks: editedTasks as Array<Record<string, unknown>> | undefined })
     } catch (e) {
       setState((s) => ({ ...s, status: 'failed', error: String(e) }))
     }
@@ -353,11 +353,11 @@ export function useSession() {
 
   // Reject the proposed plan
   const rejectPlan = useCallback(async () => {
-    const sid = stateRef.current.sessionId
+    const sid = stateRef.current.projectId
     if (!sid) return
 
     try {
-      await client.call('session.rejectPlan', { sessionId: sid })
+      await client.call('projects.rejectPlan', { projectId: sid })
       setState((s) => ({
         ...s,
         status: 'talking',
@@ -372,10 +372,10 @@ export function useSession() {
     }
   }, [client])
 
-  // Attach to existing session
-  const attach = useCallback(async (sessionId: string) => {
+  // Attach to existing project
+  const attach = useCallback(async (projectId: string) => {
     setState({
-      sessionId,
+      projectId,
       status: 'idle',
       messages: [],
       thinkingText: '',
@@ -389,18 +389,18 @@ export function useSession() {
     })
 
     try {
-      const result = await client.call('session.attach', { sessionId })
+      const result = await client.call('projects.attach', { projectId })
 
       const messages: ChatMessage[] = (result.messages as Array<Record<string, unknown>> || [])
         .filter((m) => m.content && (m.role === 'user' || m.role === 'assistant'))
         .map((m) => ({ role: m.role as 'user' | 'assistant', content: String(m.content) }))
 
-      const session = result.session as { status: string }
-      const status = session.status === 'done' ? 'done'
-        : session.status === 'failed' ? 'failed'
-        : session.status === 'talking' ? 'talking'
-        : session.status === 'confirming' ? 'confirming'
-        : session.status === 'executing' ? 'executing'
+      const sessionData = result.session as { status: string }
+      const status = sessionData.status === 'done' ? 'done'
+        : sessionData.status === 'failed' ? 'failed'
+        : sessionData.status === 'talking' ? 'talking'
+        : sessionData.status === 'confirming' ? 'confirming'
+        : sessionData.status === 'executing' ? 'executing'
         : 'idle'
 
       setState((s) => ({
@@ -409,7 +409,7 @@ export function useSession() {
         status,
       }))
 
-      subscribe(sessionId)
+      subscribe(projectId)
     } catch (e) {
       setState((s) => ({ ...s, status: 'failed', error: String(e) }))
     }
@@ -429,11 +429,11 @@ export function useSession() {
     await client.call('project.savePermissions', { projectDir, config })
   }, [client])
 
-  const stopSession = useCallback(async () => {
-    const sid = stateRef.current.sessionId
+  const stopProject = useCallback(async () => {
+    const sid = stateRef.current.projectId
     if (!sid) return
     try {
-      await client.call('session.stop', { sessionId: sid })
+      await client.call('projects.stop', { projectId: sid })
     } catch {
       // ignore
     }
@@ -442,11 +442,11 @@ export function useSession() {
   return {
     ...state,
     client,
-    createSession,
+    createProject,
     sendMessage,
     confirmPlan,
     rejectPlan,
-    stopSession,
+    stopProject,
     attach,
     loadPermissions,
     savePermissions,

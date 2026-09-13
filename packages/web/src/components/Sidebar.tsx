@@ -5,14 +5,14 @@ import { PanelLeftClose, PanelLeft } from 'lucide-react'
 
 interface Project { id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }
 
-export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSession: () => void }) {
+export function Sidebar({ client, onNewProject }: { client: VajraClient; onNewProject: () => void }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true')
   const toggleCollapsed = () => setCollapsed((c) => { localStorage.setItem('sidebar-collapsed', String(!c)); return !c })
   const [projects, setProjects] = useState<Project[]>([])
   const [currentPath, setCurrentPath] = useState(window.location.hash)
 
   const refresh = useCallback(async () => {
-    try { const list = await client.call('session.list', {}) as Project[]; setProjects(list) } catch {}
+    try { const list = await client.call('projects.list', {}) as Project[]; setProjects(list) } catch {}
   }, [client])
 
   useEffect(() => {
@@ -23,9 +23,9 @@ export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSe
     return () => { clearInterval(interval); for (const u of unsubs) u() }
   }, [client, refresh])
 
-  const handleDelete = async (e: React.MouseEvent, sessionId: string) => {
+  const handleDelete = async (e: React.MouseEvent, projectId: string) => {
     e.stopPropagation()
-    try { await client.call('session.delete', { sessionId }); refresh() } catch {}
+    try { await client.call('projects.delete', { projectId }); refresh() } catch {}
   }
 
   const dotColor = (status: string) => status === 'running' ? '#e5e5e5' : status === 'done' ? '#737373' : status === 'failed' ? '#525252' : '#333333'
@@ -39,9 +39,9 @@ export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSe
         </button>
         <div className="mt-4 flex flex-col gap-2">
           {projects.map((s) => {
-            const isActive = currentPath === `#/session/${s.id}`
+            const isActive = currentPath === `#/project/${s.id}`
             return (
-              <div key={s.id} onClick={() => navigate(`/session/${s.id}`)} title={`${s.projectDir.split('/').pop()} — ${s.task}`}
+              <div key={s.id} onClick={() => navigate(`/project/${s.id}`)} title={`${s.projectDir.split('/').pop()} — ${s.task}`}
                 className="w-8 h-8 rounded flex items-center justify-center cursor-pointer transition-colors"
                 style={{ background: isActive ? '#222222' : '#1a1a1a' }}>
                 <div className="w-2 h-2 rounded-full" style={{ background: dotColor(s.status) }} />
@@ -64,7 +64,7 @@ export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSe
       </div>
 
       <div className="p-3" style={{ borderBottom: '1px solid #2a2a2a' }}>
-        <button onClick={onNewSession} className="w-full px-3 py-1.5 rounded text-sm transition-colors cursor-pointer" style={{ background: '#222222', color: '#e5e5e5' }}>
+        <button onClick={onNewProject} className="w-full px-3 py-1.5 rounded text-sm transition-colors cursor-pointer" style={{ background: '#222222', color: '#e5e5e5' }}>
           New Project
         </button>
       </div>
@@ -73,9 +73,9 @@ export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSe
         {projects.length === 0 ? (
           <div className="p-4 text-sm" style={{ color: '#525252' }}>No projects yet</div>
         ) : projects.map((s) => {
-          const isActive = currentPath === `#/session/${s.id}`
+          const isActive = currentPath === `#/project/${s.id}`
           return (
-            <div key={s.id} onClick={() => navigate(`/session/${s.id}`)}
+            <div key={s.id} onClick={() => navigate(`/project/${s.id}`)}
               className="group px-3 py-3 cursor-pointer transition-colors"
               style={{ borderBottom: '1px solid #2a2a2a', background: isActive ? '#1a1a1a' : 'transparent' }}
               onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = '#141414' }}

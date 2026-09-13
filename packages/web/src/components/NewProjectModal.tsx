@@ -226,14 +226,14 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
     const files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> = {}
     for (const [path, read] of Object.entries(permMap)) files[path] = { read, write: false, edit: false, delete: false }
     try {
-      const result = await client.call('session.create', {
+      const result = await client.call('projects.create', {
         projectDir: projectDir.trim(),
         task: '',
         model,
         permissions: { version: 1, default: { read: true, write: false, edit: false, delete: false }, files },
-      }) as { sessionId: string }
+      }) as { projectId: string }
       onClose()
-      navigate(`/session/${result.sessionId}`)
+      navigate(`/project/${result.projectId}`)
     } catch (e) {
       setPermError(String(e))
     } finally {
