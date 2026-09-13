@@ -6,6 +6,7 @@ import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { runCommand } from './run.js'
+import { startTUI } from './tui/index.js'
 
 // Find root .env file (go up from dist/ to packages/cli, then to repo root)
 const __filename = fileURLToPath(import.meta.url)
@@ -118,4 +119,10 @@ program
     console.log('')
   })
 
-program.parse()
+// If no command provided, launch TUI
+const args = process.argv.slice(2)
+if (args.length === 0) {
+  startTUI('0.1.0')
+} else {
+  program.parse()
+}
