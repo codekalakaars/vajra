@@ -3,16 +3,16 @@ import type { VajraClient } from '../client'
 import { navigate } from '../hooks/useHashRouter'
 import { PanelLeftClose, PanelLeft } from 'lucide-react'
 
-interface Session { id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }
+interface Project { id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }
 
 export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSession: () => void }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true')
   const toggleCollapsed = () => setCollapsed((c) => { localStorage.setItem('sidebar-collapsed', String(!c)); return !c })
-  const [sessions, setSessions] = useState<Session[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
   const [currentPath, setCurrentPath] = useState(window.location.hash)
 
   const refresh = useCallback(async () => {
-    try { const list = await client.call('session.list', {}) as Session[]; setSessions(list) } catch {}
+    try { const list = await client.call('session.list', {}) as Project[]; setProjects(list) } catch {}
   }, [client])
 
   useEffect(() => {
@@ -68,9 +68,9 @@ export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSe
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {sessions.length === 0 ? (
-          <div className="p-4 text-sm" style={{ color: '#525252' }}>No sessions yet</div>
-        ) : sessions.map((s) => {
+        {projects.length === 0 ? (
+          <div className="p-4 text-sm" style={{ color: '#525252' }}>No projects yet</div>
+        ) : projects.map((s) => {
           const isActive = currentPath === `#/session/${s.id}`
           return (
             <div key={s.id} onClick={() => navigate(`/session/${s.id}`)}

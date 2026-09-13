@@ -2,7 +2,7 @@ import { useHashRouter } from './hooks/useHashRouter'
 import { ChatView } from './views/ChatView'
 import { SessionDetailView } from './views/SessionDetailView'
 import { Sidebar } from './components/Sidebar'
-import { NewSessionModal } from './components/NewSessionModal'
+import { NewProjectModal } from './components/NewSessionModal'
 import { useClient } from './hooks/useSession'
 import { useState, useEffect, useCallback } from 'react'
 
@@ -30,7 +30,7 @@ export function App() {
           {route.path === '/session/:id' && <SessionDetailView sessionId={route.params.id} connected={connected} />}
         </div>
       </div>
-      <NewSessionModal client={client} open={showNewSession} onClose={handleCloseModal} />
+      <NewProjectModal client={client} open={showNewSession} onClose={handleCloseModal} />
     </div>
   )
 }

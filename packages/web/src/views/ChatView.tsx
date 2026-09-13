@@ -44,8 +44,8 @@ export function ChatView({ connected }: { connected: boolean }) {
     return (
       <div className="flex items-center justify-center h-full" style={{ color: C.placeholder }}>
         <div className="text-center">
-          <p className="text-lg mb-2">No active session</p>
-          <p className="text-sm">Click "New Session" to get started</p>
+          <p className="text-lg mb-2">No active project</p>
+          <p className="text-sm">Click "New Project" to get started</p>
         </div>
       </div>
     )
@@ -57,7 +57,7 @@ export function ChatView({ connected }: { connected: boolean }) {
         <div className="w-2 h-2 rounded-full" style={{ background: connected ? '#e5e5e5' : '#333333' }} />
         <span className="text-xs" style={{ color: C.placeholder }}>{connected ? 'Connected' : 'Disconnected'}</span>
         <span style={{ color: C.border }}>·</span>
-        <h2 className="text-sm font-medium" style={{ color: C.text }}>Session {session.sessionId!.slice(0, 8)}</h2>
+        <h2 className="text-sm font-medium" style={{ color: C.text }}>Project {session.sessionId!.slice(0, 8)}</h2>
         <StatusBadge status={session.status} />
       </div>
 
