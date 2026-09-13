@@ -4,20 +4,40 @@
 .scroll-hidden::-webkit-scrollbar { display: none; }
 .scroll-hidden { scrollbar-width: none; }
 
-/* Prose styling for markdown - minimal black & white */
-.prose pre { background: #111; border: 1px solid #222; border-radius: 0.25rem; }
-.prose code { color: #e5e5e5; }
+/* T3 Code inspired theme variables */
+:root {
+  --bg: #151515;
+  --bg-chrome: #131313;
+  --bg-raised: #20201f;
+  --bg-overlay: #292927;
+  --bg-muted: #1b1b1a;
+  --bg-code: #101010;
+  --border: #2d2d2d;
+  --text: #f7f7f2;
+  --text-muted: #a5a39a;
+  --placeholder: #898781;
+  --accent: #d97757;
+  --accent-hover: #e18465;
+  --input: #4d4d4c;
+}
+
+/* Prose styling for markdown */
+.prose pre { background: var(--bg-code); border: 1px solid var(--border); border-radius: 0.25rem; }
+.prose code { color: #eeeae1; }
 .prose p { margin-bottom: 0.5rem; }
-.prose h1, .prose h2, .prose h3 { color: #fff; }
+.prose h1, .prose h2, .prose h3 { color: var(--text); }
 .prose table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
-.prose th, .prose td { padding: 0.5rem 0.75rem; border: 1px solid #333; text-align: left; }
-.prose th { background: #111; font-weight: 600; color: #fff; }
-.prose td { color: #d4d4d4; }
-.prose tr:nth-child(even) { background: #0a0a0a; }
-.prose blockquote { border-left: 2px solid #444; padding-left: 1rem; color: #888; margin: 1rem 0; }
+.prose th, .prose td { padding: 0.5rem 0.75rem; border: 1px solid var(--border); text-align: left; }
+.prose th { background: var(--bg-code); font-weight: 600; color: var(--text); }
+.prose td { color: var(--text-muted); }
+.prose tr:nth-child(even) { background: var(--bg-muted); }
+.prose blockquote { border-left: 2px solid var(--border); padding-left: 1rem; color: var(--text-muted); margin: 1rem 0; }
 .prose ul { list-style-type: disc; padding-left: 1.5rem; margin: 0.5rem 0; }
 .prose ol { list-style-type: decimal; padding-left: 1.5rem; margin: 0.5rem 0; }
 .prose li { margin: 0.25rem 0; }
-.prose strong { color: #fff; }
-.prose a { color: #fff; text-decoration: underline; }
-.prose a:hover { color: #ccc; }
+.prose strong { color: var(--text); }
+.prose a { color: var(--accent); text-decoration: underline; }
+.prose a:hover { color: var(--accent-hover); }
+
+/* Selection */
+::selection { background: var(--accent); color: var(--bg); }

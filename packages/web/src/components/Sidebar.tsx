@@ -11,14 +11,6 @@ interface Session {
   createdAt: number
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  starting: 'bg-zinc-600',
-  running: 'bg-white',
-  done: 'bg-zinc-500',
-  failed: 'bg-zinc-700',
-  stopped: 'bg-zinc-800',
-}
-
 export function Sidebar({ client }: { client: VajraClient }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true')
   const toggleCollapsed = () => setCollapsed((c) => { localStorage.setItem('sidebar-collapsed', String(!c)); return !c })
@@ -66,10 +58,11 @@ export function Sidebar({ client }: { client: VajraClient }) {
 
   if (collapsed) {
     return (
-      <div className="w-12 border-r border-zinc-800 bg-black flex flex-col items-center pt-3">
+      <div className="w-12 flex flex-col items-center pt-3" style={{ borderRight: '1px solid #2d2d2d', background: '#131313' }}>
         <button
           onClick={toggleCollapsed}
-          className="p-2 text-zinc-600 hover:text-zinc-300 transition-colors"
+          className="p-2 transition-colors"
+          style={{ color: '#898781' }}
           title="Expand sidebar"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -84,11 +77,21 @@ export function Sidebar({ client }: { client: VajraClient }) {
                 key={s.id}
                 onClick={() => navigate(`/session/${s.id}`)}
                 title={`${s.projectDir.split('/').pop() || s.projectDir} — ${s.task}`}
-                className={`w-8 h-8 rounded flex items-center justify-center cursor-pointer transition-colors ${
-                  isActive ? 'bg-white text-black' : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800'
-                }`}
+                className="w-8 h-8 rounded flex items-center justify-center cursor-pointer transition-colors"
+                style={{
+                  background: isActive ? '#292927' : '#20201f',
+                  color: isActive ? '#d97757' : '#898781',
+                }}
               >
-                <div className={`w-2 h-2 rounded-full ${STATUS_COLORS[s.status] || 'bg-zinc-700'}`} />
+                <div
+                  className="w-2 h-2 rounded-full"
+                  style={{
+                    background: s.status === 'running' ? '#d97757'
+                      : s.status === 'done' ? '#a5a39a'
+                      : s.status === 'failed' ? '#ef7772'
+                      : '#4d4d4c',
+                  }}
+                />
               </div>
             )
           })}
@@ -98,12 +101,13 @@ export function Sidebar({ client }: { client: VajraClient }) {
   }
 
   return (
-    <div className="w-64 border-r border-zinc-800 bg-black flex flex-col transition-all duration-200">
-      <div className="p-3 border-b border-zinc-800 flex items-center gap-2">
-        <h1 className="text-lg font-bold text-white flex-1">Vajra</h1>
+    <div className="w-64 flex flex-col transition-all duration-200" style={{ borderRight: '1px solid #2d2d2d', background: '#131313' }}>
+      <div className="p-3 flex items-center gap-2" style={{ borderBottom: '1px solid #2d2d2d' }}>
+        <h1 className="text-lg font-bold flex-1" style={{ color: '#f7f7f2' }}>Vajra</h1>
         <button
           onClick={toggleCollapsed}
-          className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors"
+          className="p-1 transition-colors"
+          style={{ color: '#898781' }}
           title="Collapse sidebar"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -112,10 +116,11 @@ export function Sidebar({ client }: { client: VajraClient }) {
         </button>
       </div>
 
-      <div className="p-3 border-b border-zinc-800">
+      <div className="p-3" style={{ borderBottom: '1px solid #2d2d2d' }}>
         <button
           onClick={() => navigate('/')}
-          className="w-full px-3 py-1.5 bg-white hover:bg-zinc-200 rounded text-sm text-black transition-colors"
+          className="w-full px-3 py-1.5 rounded text-sm transition-colors"
+          style={{ background: '#d97757', color: '#151515' }}
         >
           New Session
         </button>
@@ -123,7 +128,7 @@ export function Sidebar({ client }: { client: VajraClient }) {
 
       <div className="flex-1 overflow-y-auto">
         {sessions.length === 0 ? (
-          !collapsed && <div className="p-4 text-sm text-zinc-600">No sessions yet</div>
+          !collapsed && <div className="p-4 text-sm" style={{ color: '#898781' }}>No sessions yet</div>
         ) : (
           sessions.map((s) => {
             const isActive = currentPath === `#/session/${s.id}`
@@ -132,28 +137,41 @@ export function Sidebar({ client }: { client: VajraClient }) {
                 key={s.id}
                 onClick={() => navigate(`/session/${s.id}`)}
                 title={collapsed ? `${s.projectDir.split('/').pop() || s.projectDir} — ${s.task}` : undefined}
-                className={`group px-3 py-3 cursor-pointer border-b border-zinc-800 transition-colors ${
-                  isActive ? 'bg-zinc-900' : 'hover:bg-zinc-900/50'
-                }`}
+                className="group px-3 py-3 cursor-pointer transition-colors"
+                style={{
+                  borderBottom: '1px solid #2d2d2d',
+                  background: isActive ? '#20201f' : 'transparent',
+                }}
+                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = '#1b1b1a' }}
+                onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent' }}
               >
                 <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_COLORS[s.status] || 'bg-zinc-700'}`} />
+                  <div
+                    className="w-2 h-2 rounded-full flex-shrink-0"
+                    style={{
+                      background: s.status === 'running' ? '#d97757'
+                        : s.status === 'done' ? '#a5a39a'
+                        : s.status === 'failed' ? '#ef7772'
+                        : '#4d4d4c',
+                    }}
+                  />
                   {!collapsed && (
-                    <span className="text-sm text-white truncate">
+                    <span className="text-sm truncate" style={{ color: '#f7f7f2' }}>
                       {s.projectDir.split('/').pop() || s.projectDir}
                     </span>
                   )}
                 </div>
                 {!collapsed && (
                   <>
-                    <div className="mt-1 text-xs text-zinc-500 truncate">{s.task}</div>
+                    <div className="mt-1 text-xs truncate" style={{ color: '#a5a39a' }}>{s.task}</div>
                     <div className="mt-1 flex items-center justify-between">
-                      <span className="text-xs text-zinc-600">
+                      <span className="text-xs" style={{ color: '#898781' }}>
                         {new Date(s.createdAt).toLocaleTimeString()}
                       </span>
                       <button
                         onClick={(e) => handleDelete(e, s.id)}
-                        className="text-xs text-zinc-600 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                        style={{ color: '#ef7772' }}
                       >
                         Delete
                       </button>
