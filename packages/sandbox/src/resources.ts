@@ -46,6 +46,14 @@ export interface ConcurrencyConfig {
   idleTimeoutMs: number
   /** Interval in ms for health check pings (default: 10000). */
   healthCheckIntervalMs: number
+  /** Enable adaptive concurrency based on system resources (default: false). */
+  adaptiveConcurrency: boolean
+  /** Minimum workers when system is under load (default: 1). */
+  minConcurrentWorkers: number
+  /** Maximum memory usage percentage before reducing concurrency (0-1, default: 0.8). */
+  maxMemoryUsage: number
+  /** Maximum CPU usage percentage before reducing concurrency (0-1, default: 0.9). */
+  maxCpuUsage: number
 }
 
 /** Default concurrency config. */
@@ -54,6 +62,10 @@ export const DEFAULT_CONCURRENCY: Required<ConcurrencyConfig> = {
   maxIdleWorkers: 1,
   idleTimeoutMs: 60_000,
   healthCheckIntervalMs: 10_000,
+  adaptiveConcurrency: false,
+  minConcurrentWorkers: 1,
+  maxMemoryUsage: 0.8,
+  maxCpuUsage: 0.9,
 }
 
 /** Merge user-provided concurrency config with defaults. */
@@ -65,5 +77,9 @@ export function resolveConcurrencyConfig(
     maxIdleWorkers: input?.maxIdleWorkers ?? DEFAULT_CONCURRENCY.maxIdleWorkers,
     idleTimeoutMs: input?.idleTimeoutMs ?? DEFAULT_CONCURRENCY.idleTimeoutMs,
     healthCheckIntervalMs: input?.healthCheckIntervalMs ?? DEFAULT_CONCURRENCY.healthCheckIntervalMs,
+    adaptiveConcurrency: input?.adaptiveConcurrency ?? DEFAULT_CONCURRENCY.adaptiveConcurrency,
+    minConcurrentWorkers: input?.minConcurrentWorkers ?? DEFAULT_CONCURRENCY.minConcurrentWorkers,
+    maxMemoryUsage: input?.maxMemoryUsage ?? DEFAULT_CONCURRENCY.maxMemoryUsage,
+    maxCpuUsage: input?.maxCpuUsage ?? DEFAULT_CONCURRENCY.maxCpuUsage,
   }
 }

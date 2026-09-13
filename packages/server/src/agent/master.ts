@@ -167,12 +167,68 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   const failedTasks: string[] = []
   let totalToolCalls = 0
 
+  // Speculative execution tracking
+  const speculativeTasks = new Map<string, { taskId: string; dependsOn: string[] }>()
+  const SPECULATIVE_CONFIDENCE_THRESHOLD = 0.8
+
+  // Pre-warm: Start forking workers for independent tasks immediately
+  const prewarmCount = Math.min(plan.independentGroups[0]?.length ?? 0, 4)
+  const prewarmedHandles = new Map<string, LaunchHandle>()
+  
+  if (prewarmCount > 0) {
+    events.push('session.workerProgress', sessionId, {
+      sessionId,
+      agentId: masterAgent.id,
+      taskId: 'master',
+      detail: `Pre-warming ${prewarmCount} workers...`,
+    })
+
+    const prewarmTasks = plan.tasks
+      .filter(t => t.dependsOn.length === 0)
+      .slice(0, prewarmCount)
+
+    const prewarmPromises = prewarmTasks.map(async (task) => {
+      try {
+        const agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
+        const permissions = computeTaskPermissions(task)
+        const toolPermissions = computeToolPermissions(task)
+
+        const handle = await launchWorker({
+          sessionId,
+          projectDir,
+          role: 'worker',
+          permissions,
+          allowedTools: toolPermissions,
+          taskId: task.id,
+        })
+
+        prewarmedHandles.set(task.id, handle)
+        return { taskId: task.id, agent, handle, success: true }
+      } catch (e) {
+        return { taskId: task.id, agent: null, handle: null, success: false, error: e }
+      }
+    })
+
+    const prewarmResults = await Promise.allSettled(prewarmPromises)
+    
+    // Log pre-warm results
+    const prewarmSuccess = prewarmResults.filter(r => r.status === 'fulfilled' && r.value.success).length
+    const prewarmFailed = prewarmResults.filter(r => r.status === 'fulfilled' && !r.value.success).length
+    
+    events.push('session.workerProgress', sessionId, {
+      sessionId,
+      agentId: masterAgent.id,
+      taskId: 'master',
+      detail: `Pre-warmed ${prewarmSuccess} workers${prewarmFailed > 0 ? `, ${prewarmFailed} failed` : ''}`,
+    })
+  }
+
   // Process loop: assign ready tasks, wait for completions
   while (true) {
     const status = queue.getStatus()
     if (status.done + status.failed + status.skipped >= status.total) break
 
-    // Get tasks ready to run
+    // Get tasks ready to run (using smart batching for cache efficiency)
     const readyTasks = queue.getReadyTasks()
 
     // Atomically check conflicts AND acquire locks for non-conflicting tasks
@@ -245,6 +301,46 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       assignable.push(task)
     }
 
+    // Speculative execution: start tasks with high-confidence dependencies
+    if (assignable.length === 0 && activeWorkers.size < (pool?.stats().adaptiveMax ?? 4)) {
+      const pendingTasks = queue.getReadyTasks().filter(t => 
+        t.dependsOn.length > 0 && 
+        !speculativeTasks.has(t.id) &&
+        t.dependsOn.some(depId => {
+          const dep = queue.getTask(depId)
+          return dep?.status === 'running' || dep?.status === 'assigned'
+        })
+      )
+
+      for (const task of pendingTasks) {
+        // Calculate confidence based on dependency status
+        const deps = task.dependsOn.map(depId => queue.getTask(depId)).filter(Boolean)
+        const runningDeps = deps.filter(d => d?.status === 'running' || d?.status === 'assigned')
+        const completedDeps = deps.filter(d => d?.status === 'done')
+        
+        // Confidence: completed deps are 100%, running deps are ~80% likely to succeed
+        const confidence = (completedDeps.length * 1.0 + runningDeps.length * 0.8) / deps.length
+
+        if (confidence >= SPECULATIVE_CONFIDENCE_THRESHOLD) {
+          events.push('session.workerProgress', sessionId, {
+            sessionId,
+            agentId: masterAgent.id,
+            taskId: task.id,
+            detail: `Speculative execution: confidence ${(confidence * 100).toFixed(0)}%`,
+          })
+          
+          // Mark as speculative
+          speculativeTasks.set(task.id, {
+            taskId: task.id,
+            dependsOn: task.dependsOn,
+          })
+          
+          // Add to assignable (will be processed in the assignment loop)
+          assignable.push(task)
+        }
+      }
+    }
+
     // Assign ready tasks
     for (const task of assignable) {
       const agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
@@ -263,14 +359,28 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       })
 
       try {
-        const handle = await launchWorker({
-          sessionId,
-          projectDir,
-          role: 'worker',
-          permissions,
-          allowedTools: toolPermissions,
-          taskId: task.id,
-        })
+        // Use prewarmed handle if available, otherwise launch new worker
+        let handle: LaunchHandle
+        const prewarmedHandle = prewarmedHandles.get(task.id)
+        if (prewarmedHandle) {
+          handle = prewarmedHandle
+          prewarmedHandles.delete(task.id)
+          events.push('session.workerProgress', sessionId, {
+            sessionId,
+            agentId: agent.id,
+            taskId: task.id,
+            detail: 'Using pre-warmed worker',
+          })
+        } else {
+          handle = await launchWorker({
+            sessionId,
+            projectDir,
+            role: 'worker',
+            permissions,
+            allowedTools: toolPermissions,
+            taskId: task.id,
+          })
+        }
 
         activeWorkers.set(agent.id, { agent, handle, taskId: task.id })
         queue.startTask(task.id)
@@ -310,6 +420,63 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   // Wait for any remaining workers
   while (activeWorkers.size > 0) {
     await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+
+  // Handle speculative task rollbacks if any dependencies failed
+  for (const [specTaskId, specInfo] of speculativeTasks) {
+    const specTask = queue.getTask(specTaskId)
+    if (!specTask || specTask.status === 'done' || specTask.status === 'failed') continue
+
+    // Check if any dependency failed
+    const depFailed = specInfo.dependsOn.some(depId => {
+      const dep = queue.getTask(depId)
+      return dep?.status === 'failed'
+    })
+
+    if (depFailed) {
+      events.push('session.workerProgress', sessionId, {
+        sessionId,
+        agentId: masterAgent.id,
+        taskId: specTaskId,
+        detail: 'Rolling back speculative execution: dependency failed',
+      })
+
+      // Rollback changes using change history
+      if (changeHistory.hasChanges(specTaskId)) {
+        const result = await changeHistory.rollback(specTaskId)
+        events.push('session.workerProgress', sessionId, {
+          sessionId,
+          agentId: masterAgent.id,
+          taskId: specTaskId,
+          detail: `Restored ${result.restored.length} files, deleted ${result.deleted.length} files`,
+        })
+      }
+
+      // Mark as failed
+      queue.failTask(specTaskId)
+      failedTasks.push(specTaskId)
+
+      // Stop the worker if it's still running
+      for (const [agentId, worker] of activeWorkers) {
+        if (worker.taskId === specTaskId) {
+          worker.handle.stop()
+          activeWorkers.delete(agentId)
+          registry.updateStatus(agentId, 'failed')
+          break
+        }
+      }
+    }
+  }
+
+  // Cleanup any unused prewarmed handles
+  for (const [taskId, handle] of prewarmedHandles) {
+    events.push('session.workerProgress', sessionId, {
+      sessionId,
+      agentId: masterAgent.id,
+      taskId,
+      detail: 'Discarding unused pre-warmed worker',
+    })
+    handle.stop()
   }
 
   registry.updateStatus(masterAgent.id, 'done')
@@ -571,7 +738,8 @@ async function executeTask(
   }
 }
 
-function computeTaskPermissions(task: TaskState): PermissionsConfig {
+// Helper to compute permissions from either PlannedTask or TaskState
+function computeTaskPermissions(task: PlannedTask | TaskState): PermissionsConfig {
   const files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> = {}
 
   // Read-only files
@@ -610,9 +778,15 @@ function computeTaskPermissions(task: TaskState): PermissionsConfig {
   }
 }
 
-function computeToolPermissions(task: TaskState): string[] {
-  // Use explicit allowedTools if provided
-  if (task.toolPermissions) {
+// Helper to compute tool permissions from either PlannedTask or TaskState
+function computeToolPermissions(task: PlannedTask | TaskState): string[] {
+  // Use explicit allowedTools if provided (PlannedTask has this directly)
+  if ('allowedTools' in task && task.allowedTools) {
+    return task.allowedTools
+  }
+  
+  // Use toolPermissions if provided (TaskState has this as JSON string)
+  if ('toolPermissions' in task && task.toolPermissions) {
     return JSON.parse(task.toolPermissions)
   }
 
