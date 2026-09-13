@@ -33,6 +33,7 @@ export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSe
   if (collapsed) {
     return (
       <div className="w-12 flex flex-col items-center pt-3" style={{ borderRight: '1px solid #2a2a2a', background: '#111111' }}>
+        <img src="/Vajra_Logo_Dark.png" alt="Vajra" className="h-6 w-auto mb-2" />
         <button onClick={toggleCollapsed} className="p-2 transition-colors" style={{ color: '#525252' }} title="Expand sidebar">
           <PanelLeft size={20} />
         </button>
@@ -55,7 +56,7 @@ export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSe
   return (
     <div className="w-64 flex flex-col transition-all duration-200" style={{ borderRight: '1px solid #2a2a2a', background: '#111111' }}>
       <div className="p-3 flex items-center gap-2" style={{ borderBottom: '1px solid #2a2a2a' }}>
-        <h1 className="text-lg font-bold flex-1" style={{ color: '#e5e5e5' }}>Vajra</h1>
+        <img src="/Vajra_Logo_Dark.png" alt="Vajra" className="h-6 w-auto flex-1" />
         <button onClick={toggleCollapsed} className="p-1 transition-colors" style={{ color: '#525252' }} title="Collapse sidebar">
           <PanelLeftClose size={16} />
         </button>
