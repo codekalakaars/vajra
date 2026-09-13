@@ -10,14 +10,14 @@ export type RpcMethodMap = {
   'project.savePermissions': { params: { projectDir: string; config: PermissionsConfig }; result: { ok: true } }
   'project.scan': { params: { projectDir: string }; result: Array<{ name: string; path: string; isDir: boolean; isMasked: boolean }> }
   'project.browse': { params: { dir: string }; result: Array<{ name: string; path: string; isDir: boolean }> }
-  'session.list': { params: Record<string, never>; result: Array<{ id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }> }
-  'session.create': { params: { projectDir: string; task: string; model: string; permissions: PermissionsConfig; allowUnenforced?: boolean }; result: { sessionId: string } }
-  'session.attach': { params: { sessionId: string }; result: { session: Record<string, unknown>; plan: Array<unknown>; messages: Array<unknown> } }
-  'session.stop': { params: { sessionId: string }; result: { ok: true } }
-  'session.delete': { params: { sessionId: string }; result: { ok: true } }
-  'session.sendMessage': { params: { sessionId: string; content: string }; result: { ok: true } }
-  'session.confirmPlan': { params: { sessionId: string; tasks?: Array<Record<string, unknown>> }; result: { ok: true } }
-  'session.rejectPlan': { params: { sessionId: string }; result: { ok: true } }
+  'projects.list': { params: Record<string, never>; result: Array<{ id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }> }
+  'projects.create': { params: { projectDir: string; task: string; model: string; permissions: PermissionsConfig; allowUnenforced?: boolean }; result: { projectId: string } }
+  'projects.attach': { params: { projectId: string }; result: { session: Record<string, unknown>; plan: Array<unknown>; messages: Array<unknown> } }
+  'projects.stop': { params: { projectId: string }; result: { ok: true } }
+  'projects.delete': { params: { projectId: string }; result: { ok: true } }
+  'projects.sendMessage': { params: { projectId: string; content: string }; result: { ok: true } }
+  'projects.confirmPlan': { params: { projectId: string; tasks?: Array<Record<string, unknown>> }; result: { ok: true } }
+  'projects.rejectPlan': { params: { projectId: string }; result: { ok: true } }
 }
 
 export type MethodName = keyof RpcMethodMap

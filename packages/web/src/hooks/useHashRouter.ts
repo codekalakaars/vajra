@@ -8,10 +8,10 @@ export interface Route {
 export function useHashRouter(): Route {
   const parse = useCallback((): Route => {
     const hash = window.location.hash.slice(1) || '/'
-    // Match /session/:id
-    const sessionMatch = hash.match(/^\/session\/([^/]+)$/)
-    if (sessionMatch) {
-      return { path: '/session/:id', params: { id: sessionMatch[1] } }
+    // Match /project/:id
+    const projectMatch = hash.match(/^\/project\/([^/]+)$/)
+    if (projectMatch) {
+      return { path: '/project/:id', params: { id: projectMatch[1] } }
     }
     // Match /
     if (hash === '/') {

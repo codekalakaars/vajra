@@ -1,26 +1,25 @@
-import { useEffect, useRef } from 'react'
-import { useSession } from '../hooks/useSession'
+import { useEffect, useRef, useState } from 'react'
+import { useProject } from '../hooks/useProject'
 import { StatusBadge } from '../components/StatusBadge'
 import { ThinkingBlock } from '../components/ThinkingBlock'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
-import { useState } from 'react'
 
-const C = { bg: '#0a0a0a', raised: '#1a1a1a', overlay: '#222222', border: '#2a2a2a', text: '#e5e5e5', textMuted: '#737373', placeholder: '#525252', input: '#333333' }
+const C = { bg: '#0a0a0a', raised: '#1a1a1a', overlay: '#222222', border: '#2a2a2a', text: '#e5e5e5', textMuted: '#737373', placeholder: '#525252', input: '#333333', muted: '#141414' }
 
-export function SessionDetailView({ sessionId, connected }: { sessionId: string; connected: boolean }) {
-  const session = useSession()
+export function ProjectDetailView({ projectId, connected }: { projectId: string; connected: boolean }) {
+  const project = useProject()
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [inputValue, setInputValue] = useState('')
   const [attached, setAttached] = useState(false)
 
-  useEffect(() => { session.attach(sessionId).then(() => setAttached(true)) }, [sessionId])
-  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight }, [session.messages, session._streamingText, session.thinkingText])
-  useEffect(() => { if (!isStreaming && inputRef.current) inputRef.current.focus() }, [session.status])
+  useEffect(() => { project.attach(projectId).then(() => setAttached(true)) }, [projectId])
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight }, [project.messages, project._streamingText, project.thinkingText])
+  useEffect(() => { if (!isStreaming && inputRef.current) inputRef.current.focus() }, [project.status])
 
-  const handleSend = async () => { const t = inputValue.trim(); if (!t) return; setInputValue(''); await session.sendMessage(t) }
+  const handleSend = async () => { const t = inputValue.trim(); if (!t) return; setInputValue(''); await project.sendMessage(t) }
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }
-  const isStreaming = session.status === 'streaming'
+  const isStreaming = project.status === 'streaming'
 
   const inputStyle = { background: C.raised, border: `1px solid ${C.border}`, color: C.text, outline: 'none' }
   const inputFocus = (e: React.FocusEvent<HTMLTextAreaElement>) => { e.currentTarget.style.borderColor = '#525252' }
@@ -32,15 +31,15 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
         <div className="w-2 h-2 rounded-full" style={{ background: connected ? '#e5e5e5' : C.input }} />
         <span className="text-xs" style={{ color: C.placeholder }}>{connected ? 'Connected' : 'Disconnected'}</span>
         <span style={{ color: C.border }}>·</span>
-        <h2 className="text-sm font-medium" style={{ color: C.text }}>Session {sessionId.slice(0, 8)}</h2>
-        <StatusBadge status={session.status} />
+        <h2 className="text-sm font-medium" style={{ color: C.text }}>Project {projectId.slice(0, 8)}</h2>
+        <StatusBadge status={project.status} />
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-hidden p-6 space-y-4">
         {!attached && <div className="text-center mt-20" style={{ color: C.placeholder }}>Loading...</div>}
-        {attached && session.messages.length === 0 && session.status !== 'streaming' && <div className="text-center mt-20" style={{ color: C.placeholder }}>No messages yet</div>}
+        {attached && project.messages.length === 0 && project.status !== 'streaming' && <div className="text-center mt-20" style={{ color: C.placeholder }}>No messages yet</div>}
 
-        {session.messages.map((msg, i) => (
+        {project.messages.map((msg, i) => (
           <div key={i}>
             {msg.role === 'user' ? (
               <div className="flex items-start gap-3 justify-end">
@@ -58,15 +57,15 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
           </div>
         ))}
 
-        {session._streamingText && (
+        {project._streamingText && (
           <div className="flex items-start gap-3">
             <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: C.overlay, color: C.text }}>V</div>
-            <div className="flex-1 min-w-0"><MarkdownRenderer content={session._streamingText} /></div>
+            <div className="flex-1 min-w-0"><MarkdownRenderer content={project._streamingText} /></div>
           </div>
         )}
 
-        {session.thinkingText && <ThinkingBlock text={session.thinkingText} />}
-        {session.error && <div className="p-3 rounded text-sm" style={{ background: C.muted, border: `1px solid ${C.border}`, color: C.textMuted }}>{session.error}</div>}
+        {project.thinkingText && <ThinkingBlock text={project.thinkingText} />}
+        {project.error && <div className="p-3 rounded text-sm" style={{ background: C.muted, border: `1px solid ${C.border}`, color: C.textMuted }}>{project.error}</div>}
       </div>
 
       {!isStreaming && (
