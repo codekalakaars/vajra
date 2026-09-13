@@ -35,3 +35,16 @@
 .prose a:hover { color: #a3a3a3; }
 
 ::selection { background: #404040; color: #e5e5e5; }
+
+/* Remove blue highlight on hover/focus for all elements */
+*:hover { outline: none; }
+*:focus { outline: none; }
+*:focus-visible { outline: none; }
+
+/* Remove default blue selection highlight */
+input, textarea, select, div, span, button, a, label {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}

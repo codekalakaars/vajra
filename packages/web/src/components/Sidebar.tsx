@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { VajraClient } from '../client'
 import { navigate } from '../hooks/useHashRouter'
+import { PanelLeftClose, PanelLeft } from 'lucide-react'
 
 interface Session { id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }
 
@@ -33,7 +34,7 @@ export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSe
     return (
       <div className="w-12 flex flex-col items-center pt-3" style={{ borderRight: '1px solid #2a2a2a', background: '#111111' }}>
         <button onClick={toggleCollapsed} className="p-2 transition-colors" style={{ color: '#525252' }} title="Expand sidebar">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+          <PanelLeft size={20} />
         </button>
         <div className="mt-4 flex flex-col gap-2">
           {sessions.map((s) => {
@@ -56,13 +57,13 @@ export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSe
       <div className="p-3 flex items-center gap-2" style={{ borderBottom: '1px solid #2a2a2a' }}>
         <h1 className="text-lg font-bold flex-1" style={{ color: '#e5e5e5' }}>Vajra</h1>
         <button onClick={toggleCollapsed} className="p-1 transition-colors" style={{ color: '#525252' }} title="Collapse sidebar">
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+          <PanelLeftClose size={16} />
         </button>
       </div>
 
       <div className="p-3" style={{ borderBottom: '1px solid #2a2a2a' }}>
-        <button onClick={onNewSession} className="w-full px-3 py-1.5 rounded text-sm transition-colors" style={{ background: '#222222', color: '#e5e5e5' }}>
-          New Session
+        <button onClick={onNewSession} className="w-full px-3 py-1.5 rounded text-sm transition-colors cursor-pointer" style={{ background: '#222222', color: '#e5e5e5' }}>
+          New Project
         </button>
       </div>
 
