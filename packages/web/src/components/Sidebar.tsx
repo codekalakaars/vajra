@@ -12,11 +12,11 @@ interface Session {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  starting: 'bg-yellow-500',
-  running: 'bg-blue-500',
-  done: 'bg-green-500',
-  failed: 'bg-red-500',
-  stopped: 'bg-gray-500',
+  starting: 'bg-zinc-600',
+  running: 'bg-white',
+  done: 'bg-zinc-500',
+  failed: 'bg-zinc-700',
+  stopped: 'bg-zinc-800',
 }
 
 export function Sidebar({ client }: { client: VajraClient }) {
@@ -66,10 +66,10 @@ export function Sidebar({ client }: { client: VajraClient }) {
 
   if (collapsed) {
     return (
-      <div className="w-12 border-r border-gray-800 bg-gray-900 flex flex-col items-center pt-3">
+      <div className="w-12 border-r border-zinc-800 bg-black flex flex-col items-center pt-3">
         <button
           onClick={toggleCollapsed}
-          className="p-2 text-gray-500 hover:text-gray-300 transition-colors"
+          className="p-2 text-zinc-600 hover:text-zinc-300 transition-colors"
           title="Expand sidebar"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -85,10 +85,10 @@ export function Sidebar({ client }: { client: VajraClient }) {
                 onClick={() => navigate(`/session/${s.id}`)}
                 title={`${s.projectDir.split('/').pop() || s.projectDir} — ${s.task}`}
                 className={`w-8 h-8 rounded flex items-center justify-center cursor-pointer transition-colors ${
-                  isActive ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                  isActive ? 'bg-white text-black' : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800'
                 }`}
               >
-                <div className={`w-2 h-2 rounded-full ${STATUS_COLORS[s.status] || 'bg-gray-500'}`} />
+                <div className={`w-2 h-2 rounded-full ${STATUS_COLORS[s.status] || 'bg-zinc-700'}`} />
               </div>
             )
           })}
@@ -98,13 +98,12 @@ export function Sidebar({ client }: { client: VajraClient }) {
   }
 
   return (
-    <div className="w-64 border-r border-gray-800 bg-gray-900 flex flex-col transition-all duration-200">
-      {/* Header */}
-      <div className="p-3 border-b border-gray-800 flex items-center gap-2">
+    <div className="w-64 border-r border-zinc-800 bg-black flex flex-col transition-all duration-200">
+      <div className="p-3 border-b border-zinc-800 flex items-center gap-2">
         <h1 className="text-lg font-bold text-white flex-1">Vajra</h1>
         <button
           onClick={toggleCollapsed}
-          className="p-1 text-gray-500 hover:text-gray-300 transition-colors"
+          className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors"
           title="Collapse sidebar"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -113,20 +112,18 @@ export function Sidebar({ client }: { client: VajraClient }) {
         </button>
       </div>
 
-      {/* New Session button */}
-      <div className="p-3 border-b border-gray-800">
+      <div className="p-3 border-b border-zinc-800">
         <button
           onClick={() => navigate('/')}
-          className="w-full px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-sm text-white transition-colors"
+          className="w-full px-3 py-1.5 bg-white hover:bg-zinc-200 rounded text-sm text-black transition-colors"
         >
           New Session
         </button>
       </div>
 
-      {/* Session list */}
       <div className="flex-1 overflow-y-auto">
         {sessions.length === 0 ? (
-          !collapsed && <div className="p-4 text-sm text-gray-500">No sessions yet</div>
+          !collapsed && <div className="p-4 text-sm text-zinc-600">No sessions yet</div>
         ) : (
           sessions.map((s) => {
             const isActive = currentPath === `#/session/${s.id}`
@@ -135,12 +132,12 @@ export function Sidebar({ client }: { client: VajraClient }) {
                 key={s.id}
                 onClick={() => navigate(`/session/${s.id}`)}
                 title={collapsed ? `${s.projectDir.split('/').pop() || s.projectDir} — ${s.task}` : undefined}
-                className={`group px-3 py-3 cursor-pointer border-b border-gray-800 transition-colors ${
-                  isActive ? 'bg-gray-800' : 'hover:bg-gray-800/50'
+                className={`group px-3 py-3 cursor-pointer border-b border-zinc-800 transition-colors ${
+                  isActive ? 'bg-zinc-900' : 'hover:bg-zinc-900/50'
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_COLORS[s.status] || 'bg-gray-500'}`} />
+                  <div className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_COLORS[s.status] || 'bg-zinc-700'}`} />
                   {!collapsed && (
                     <span className="text-sm text-white truncate">
                       {s.projectDir.split('/').pop() || s.projectDir}
@@ -149,14 +146,14 @@ export function Sidebar({ client }: { client: VajraClient }) {
                 </div>
                 {!collapsed && (
                   <>
-                    <div className="mt-1 text-xs text-gray-500 truncate">{s.task}</div>
+                    <div className="mt-1 text-xs text-zinc-500 truncate">{s.task}</div>
                     <div className="mt-1 flex items-center justify-between">
-                      <span className="text-xs text-gray-600">
+                      <span className="text-xs text-zinc-600">
                         {new Date(s.createdAt).toLocaleTimeString()}
                       </span>
                       <button
                         onClick={(e) => handleDelete(e, s.id)}
-                        className="text-xs text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="text-xs text-zinc-600 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
                       >
                         Delete
                       </button>

@@ -9,15 +9,15 @@ export function ConflictAlert({ conflicts, onDismiss }: ConflictAlertProps) {
   if (conflicts.length === 0) return null
 
   return (
-    <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 dark:border-yellow-800 dark:bg-yellow-900/20">
+    <div className="rounded-lg border border-zinc-700 bg-zinc-900 p-4">
       <div className="flex items-start justify-between">
         <div className="flex items-start gap-2">
-          <span className="text-yellow-600 dark:text-yellow-400">!</span>
+          <span className="text-zinc-400">!</span>
           <div>
-            <h3 className="text-sm font-semibold text-yellow-800 dark:text-yellow-200">
+            <h3 className="text-sm font-semibold text-white">
               File Conflicts Detected
             </h3>
-            <p className="mt-1 text-sm text-yellow-700 dark:text-yellow-300">
+            <p className="mt-1 text-sm text-zinc-400">
               {conflicts.length} conflict{conflicts.length > 1 ? 's' : ''} found. Tasks will be
               serialized to avoid simultaneous edits.
             </p>
@@ -26,7 +26,7 @@ export function ConflictAlert({ conflicts, onDismiss }: ConflictAlertProps) {
         {onDismiss && (
           <button
             onClick={onDismiss}
-            className="text-yellow-600 hover:text-yellow-800 dark:text-yellow-400 dark:hover:text-yellow-200"
+            className="text-zinc-500 hover:text-white"
           >
             <span className="sr-only">Dismiss</span>
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -37,12 +37,12 @@ export function ConflictAlert({ conflicts, onDismiss }: ConflictAlertProps) {
       </div>
       <div className="mt-3 space-y-2">
         {conflicts.map((conflict, i) => (
-          <div key={i} className="text-xs text-yellow-700 dark:text-yellow-300">
+          <div key={i} className="text-xs text-zinc-400">
             <span className="font-mono">{conflict.task1}</span>
             {' <-> '}
             <span className="font-mono">{conflict.task2}</span>
             {conflict.files.length > 0 && (
-              <span className="ml-2 text-yellow-600 dark:text-yellow-400">
+              <span className="ml-2 text-zinc-500">
                 ({conflict.files.join(', ')})
               </span>
             )}

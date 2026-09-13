@@ -10,7 +10,7 @@ export function ThinkingBlock({ text, defaultOpen = false }: { text: string; def
       <details open={open} className="group">
         <summary
           onClick={(e) => { e.preventDefault(); setOpen(!open) }}
-          className="cursor-pointer flex items-center gap-2 text-sm text-gray-400 hover:text-gray-300 select-none"
+          className="cursor-pointer flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-300 select-none"
         >
           <svg
             className={`w-4 h-4 transition-transform ${open ? 'rotate-90' : ''}`}
@@ -22,7 +22,7 @@ export function ThinkingBlock({ text, defaultOpen = false }: { text: string; def
           </svg>
           Thinking...
         </summary>
-        <div className="mt-2 pl-6 text-sm text-gray-400 border-l-2 border-gray-700 whitespace-pre-wrap">
+        <div className="mt-2 pl-6 text-sm text-zinc-500 border-l border-zinc-800 whitespace-pre-wrap">
           {text}
         </div>
       </details>

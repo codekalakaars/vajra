@@ -49,19 +49,15 @@ interface TreeNode {
 function buildTree(files: FileEntry[]): TreeNode[] {
   const root: TreeNode[] = []
   const map = new Map<string, TreeNode>()
-
-  // Sort: dirs first, then by path
   const sorted = [...files].sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
     return a.path.localeCompare(b.path)
   })
-
   for (const entry of sorted) {
     const parts = entry.path.split('/')
     const depth = parts.length - 1
     const node: TreeNode = { entry, children: [], depth }
     map.set(entry.path, node)
-
     if (depth === 0) {
       root.push(node)
     } else {
@@ -74,7 +70,6 @@ function buildTree(files: FileEntry[]): TreeNode[] {
       }
     }
   }
-
   return root
 }
 
@@ -150,7 +145,6 @@ export function ChatView({ connected }: { connected: boolean }) {
   const [inputValue, setInputValue] = useState('')
   const lastKeyRef = useRef<{ key: string; time: number }>({ key: '', time: 0 })
 
-  // Permissions state
   const [permFilter, setPermFilter] = useState('')
   const [permFiles, setPermFiles] = useState<FileEntry[]>([])
   const [permMap, setPermMap] = useState<Record<string, boolean>>({})
@@ -173,7 +167,6 @@ export function ChatView({ connected }: { connected: boolean }) {
   const allChecked = totalFiles > 0 && checkedFiles === totalFiles
   const noneChecked = checkedFiles === 0
 
-  // Load permissions when project path is provided
   const loadPermissionsForProject = useCallback(async (dir: string) => {
     if (!dir.trim()) {
       setPermLoaded(false)
@@ -185,7 +178,6 @@ export function ChatView({ connected }: { connected: boolean }) {
     setPermError(null)
     try {
       const { permissions, files } = await session.loadPermissions(dir.trim())
-      // Default: .env files unchecked (masked), everything else checked
       const map: Record<string, boolean> = {}
       for (const f of files) {
         if (!f.isDir) {
@@ -195,7 +187,6 @@ export function ChatView({ connected }: { connected: boolean }) {
       setPermFiles(files)
       setPermMap(map)
       setPermLoaded(true)
-      // Expand top-level dirs by default
       const topDirs = new Set(files.filter(f => f.isDir && !f.path.includes('/')).map(f => f.path))
       setExpandedDirs(topDirs)
     } catch (e) {
@@ -206,7 +197,6 @@ export function ChatView({ connected }: { connected: boolean }) {
     }
   }, [session])
 
-  // Double-press Esc or Ctrl+C to stop streaming
   const handleGlobalKeyDown = useCallback((e: KeyboardEvent) => {
     if (!isStreaming) return
     if (e.key === 'Escape' || (e.key === 'c' && e.ctrlKey)) {
@@ -243,13 +233,10 @@ export function ChatView({ connected }: { connected: boolean }) {
 
   const handleStart = async () => {
     if (!projectDir.trim()) return
-
-    // Build permissions config from permMap
     const files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> = {}
     for (const [path, read] of Object.entries(permMap)) {
       files[path] = { read, write: false, edit: false, delete: false }
     }
-
     try {
       await session.createSession({
         projectDir: projectDir.trim(),
@@ -301,13 +288,13 @@ export function ChatView({ connected }: { connected: boolean }) {
       return (
         <div key={entry.path}>
           <div
-            className="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-800 rounded cursor-pointer select-none"
+            className="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-900 rounded cursor-pointer select-none"
             style={{ paddingLeft: `${node.depth * 16 + 8}px` }}
             onClick={() => toggleDir(entry.path)}
           >
-            <span className="text-xs text-gray-500 w-3 text-center">{isExpanded ? '▾' : '▸'}</span>
+            <span className="text-xs text-zinc-600 w-3 text-center">{isExpanded ? '▾' : '▸'}</span>
             <span className="text-sm">{getIcon(entry)}</span>
-            <span className="text-sm text-gray-300 truncate flex-1">{entry.name}</span>
+            <span className="text-sm text-zinc-300 truncate flex-1">{entry.name}</span>
           </div>
           {isExpanded && (
             <div>
@@ -328,8 +315,8 @@ export function ChatView({ connected }: { connected: boolean }) {
           style={{ paddingLeft: `${node.depth * 16 + 8 + 16}px` }}
         >
           <span className="text-sm">{getIcon(entry)}</span>
-          <span className="text-sm text-gray-400 truncate flex-1">{entry.name}</span>
-          <span className="text-xs text-yellow-500 italic">masked</span>
+          <span className="text-sm text-zinc-500 truncate flex-1">{entry.name}</span>
+          <span className="text-xs text-zinc-600 italic">masked</span>
         </div>
       )
     }
@@ -337,19 +324,19 @@ export function ChatView({ connected }: { connected: boolean }) {
     return (
       <div
         key={entry.path}
-        className="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-800 rounded"
+        className="flex items-center gap-1.5 px-2 py-1 hover:bg-zinc-900 rounded"
         style={{ paddingLeft: `${node.depth * 16 + 8 + 16}px` }}
       >
         <span className="text-sm">{getIcon(entry)}</span>
-        <span className="text-sm text-gray-300 truncate flex-1">{entry.name}</span>
+        <span className="text-sm text-zinc-300 truncate flex-1">{entry.name}</span>
         <label className="flex items-center gap-1 cursor-pointer select-none" onClick={(e) => e.stopPropagation()}>
           <input
             type="checkbox"
             checked={allowed}
             onChange={() => togglePerm(entry.path)}
-            className="w-3.5 h-3.5 accent-blue-500 cursor-pointer"
+            className="w-3.5 h-3.5 accent-white cursor-pointer"
           />
-          <span className={`text-xs ${allowed ? 'text-gray-400' : 'text-red-400'}`}>
+          <span className={`text-xs ${allowed ? 'text-zinc-500' : 'text-zinc-600'}`}>
             {allowed ? 'read' : 'denied'}
           </span>
         </label>
@@ -359,12 +346,11 @@ export function ChatView({ connected }: { connected: boolean }) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Setup — shown before session starts */}
       {!hasSession && (
         <div className="p-6 max-w-3xl mx-auto w-full overflow-y-auto flex-1">
           <h2 className="text-xl font-bold text-white mb-6">New Session</h2>
 
-          <label className="block text-sm font-medium text-gray-300 mb-1">Project path</label>
+          <label className="block text-sm font-medium text-zinc-400 mb-1">Project path</label>
           <div className="flex gap-2 mb-4">
             <input
               type="text"
@@ -378,22 +364,22 @@ export function ChatView({ connected }: { connected: boolean }) {
                 }
               }}
               placeholder="/path/to/project"
-              className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+              className="flex-1 px-3 py-2 bg-zinc-900 border border-zinc-800 rounded text-white text-sm placeholder-zinc-600 focus:outline-none focus:border-white"
             />
             <button
               onClick={() => loadPermissionsForProject(projectDir)}
               disabled={!projectDir.trim() || permLoading}
-              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm text-gray-300 transition-colors disabled:opacity-50"
+              className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 rounded text-sm text-zinc-300 transition-colors disabled:opacity-50"
             >
               {permLoading ? '...' : 'Load'}
             </button>
           </div>
 
-          <label className="block text-sm font-medium text-gray-300 mb-1">Model</label>
+          <label className="block text-sm font-medium text-zinc-400 mb-1">Model</label>
           <select
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white text-sm mb-6 focus:outline-none focus:border-blue-500"
+            className="w-full px-3 py-2 bg-zinc-900 border border-zinc-800 rounded text-white text-sm mb-6 focus:outline-none focus:border-white"
           >
             {MODELS.map((group) => (
               <optgroup key={group.group} label={group.group}>
@@ -404,22 +390,21 @@ export function ChatView({ connected }: { connected: boolean }) {
             ))}
           </select>
 
-          {/* Permissions section */}
           {permError && (
-            <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded text-red-300 text-sm">
+            <div className="mb-4 p-3 bg-zinc-900 border border-zinc-700 rounded text-zinc-400 text-sm">
               {permError}
             </div>
           )}
 
           {showPermissions && (
-            <div className="border border-gray-700 rounded-lg overflow-hidden mb-6">
-              <div className="bg-gray-800 px-4 py-3 border-b border-gray-700">
+            <div className="border border-zinc-800 rounded-lg overflow-hidden mb-6">
+              <div className="bg-zinc-900 px-4 py-3 border-b border-zinc-800">
                 <div className="flex items-center justify-between mb-2">
                   <div>
                     <h3 className="text-sm font-medium text-white">Permissions</h3>
-                    <p className="text-xs text-gray-400 mt-0.5">
+                    <p className="text-xs text-zinc-500 mt-0.5">
                       {checkedFiles} of {totalFiles} files readable
-                      {noneChecked && <span className="text-red-400 ml-2">— agent cannot read any files</span>}
+                      {noneChecked && <span className="text-zinc-600 ml-2">— agent cannot read any files</span>}
                     </p>
                   </div>
                   <label className="flex items-center gap-1.5 cursor-pointer select-none">
@@ -427,9 +412,9 @@ export function ChatView({ connected }: { connected: boolean }) {
                       type="checkbox"
                       checked={allChecked}
                       onChange={toggleAllFiles}
-                      className="w-3.5 h-3.5 accent-blue-500 cursor-pointer"
+                      className="w-3.5 h-3.5 accent-white cursor-pointer"
                     />
-                    <span className="text-xs text-gray-400">{allChecked ? 'All on' : 'Select all'}</span>
+                    <span className="text-xs text-zinc-500">{allChecked ? 'All on' : 'Select all'}</span>
                   </label>
                 </div>
                 <input
@@ -437,12 +422,12 @@ export function ChatView({ connected }: { connected: boolean }) {
                   value={permFilter}
                   onChange={(e) => setPermFilter(e.target.value)}
                   placeholder="Filter files..."
-                  className="w-full px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                  className="w-full px-3 py-1.5 bg-black border border-zinc-700 rounded text-white text-xs placeholder-zinc-600 focus:outline-none focus:border-white"
                 />
               </div>
               <div className="max-h-80 overflow-y-auto p-2">
                 {permTree.length === 0 && (
-                  <div className="text-gray-500 text-sm text-center py-4">No files found</div>
+                  <div className="text-zinc-600 text-sm text-center py-4">No files found</div>
                 )}
                 {permTree.map((node) => renderNode(node))}
               </div>
@@ -452,30 +437,26 @@ export function ChatView({ connected }: { connected: boolean }) {
           <button
             onClick={handleStart}
             disabled={!projectDir.trim() || isStreaming || (permLoaded && noneChecked)}
-            className="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-medium transition-colors disabled:opacity-50"
+            className="w-full px-6 py-3 bg-white hover:bg-zinc-200 rounded-lg text-black font-medium transition-colors disabled:opacity-50"
           >
             {session.status === 'creating' ? 'Starting...' : 'Start'}
           </button>
         </div>
       )}
 
-      {/* Chat area — shown after session starts */}
       {hasSession && (
         <>
-          {/* Header */}
-          <div className="px-6 py-3 border-b border-gray-800 flex items-center gap-3">
-            <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
-            <span className="text-xs text-gray-500">{connected ? 'Connected' : 'Disconnected'}</span>
-            <span className="text-gray-700">·</span>
+          <div className="px-6 py-3 border-b border-zinc-800 flex items-center gap-3">
+            <div className={`w-2 h-2 rounded-full ${connected ? 'bg-white' : 'bg-zinc-700'}`} />
+            <span className="text-xs text-zinc-500">{connected ? 'Connected' : 'Disconnected'}</span>
+            <span className="text-zinc-800">·</span>
             <h2 className="text-sm font-medium text-white">
               Session {session.sessionId!.slice(0, 8)}
             </h2>
             <StatusBadge status={session.status} />
           </div>
 
-          {/* Messages */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-hidden p-6 space-y-4">
-            {/* Multi-agent status views */}
             {(session.status === 'planning' || session.status === 'executing' || session.status === 'confirming') && (
               <div className="space-y-3">
                 {session.planTasks.length > 0 && (
@@ -485,13 +466,13 @@ export function ChatView({ connected }: { connected: boolean }) {
                       <div className="mt-4 flex gap-3">
                         <button
                           onClick={() => session.confirmPlan()}
-                          className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-medium transition-colors"
+                          className="flex-1 px-4 py-2.5 bg-white hover:bg-zinc-200 rounded-lg text-black font-medium transition-colors"
                         >
                           Confirm & Execute
                         </button>
                         <button
                           onClick={() => session.rejectPlan()}
-                          className="px-4 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-gray-300 transition-colors"
+                          className="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-300 transition-colors"
                         >
                           Keep Talking
                         </button>
@@ -509,7 +490,7 @@ export function ChatView({ connected }: { connected: boolean }) {
             )}
 
             {session.status === 'idle' && session.messages.length === 0 && (
-              <div className="text-gray-500 text-center mt-20">Start a conversation to plan your task...</div>
+              <div className="text-zinc-600 text-center mt-20">Start a conversation to plan your task...</div>
             )}
 
             {session.messages.map((msg, i) => (
@@ -517,17 +498,17 @@ export function ChatView({ connected }: { connected: boolean }) {
                 {msg.role === 'user' ? (
                   <div className="flex items-start gap-3 justify-end">
                     <div className="flex-1 min-w-0 text-right">
-                      <div className="inline-block px-4 py-2.5 bg-gray-700 rounded-lg text-white text-sm whitespace-pre-wrap text-left">
+                      <div className="inline-block px-4 py-2.5 bg-zinc-800 rounded-lg text-white text-sm whitespace-pre-wrap text-left">
                         {msg.content}
                       </div>
                     </div>
-                    <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+                    <div className="w-8 h-8 rounded-full bg-zinc-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
                       Y
                     </div>
                   </div>
                 ) : (
                   <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+                    <div className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center text-sm font-bold flex-shrink-0">
                       V
                     </div>
                     <div className="flex-1 min-w-0">
@@ -539,7 +520,6 @@ export function ChatView({ connected }: { connected: boolean }) {
               </div>
             ))}
 
-            {/* Live streaming bubble */}
             {session.thinkingText && (
               <ThinkingBlock text={session.thinkingText} defaultOpen />
             )}
@@ -547,7 +527,7 @@ export function ChatView({ connected }: { connected: boolean }) {
             {session._streamingText && (
               <div>
                 <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+                  <div className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center text-sm font-bold flex-shrink-0">
                     V
                   </div>
                   <div className="flex-1 min-w-0">
@@ -558,31 +538,29 @@ export function ChatView({ connected }: { connected: boolean }) {
             )}
 
             {session.error && (
-              <div className="p-3 bg-red-900/30 border border-red-800 rounded text-red-300 text-sm">
+              <div className="p-3 bg-zinc-900 border border-zinc-700 rounded text-zinc-400 text-sm">
                 {session.error}
               </div>
             )}
           </div>
 
-          {/* Stop button — shown during streaming */}
           {isStreaming && (
-            <div className="px-4 py-2 border-t border-gray-800 flex justify-center">
+            <div className="px-4 py-2 border-t border-zinc-800 flex justify-center">
               <button
                 onClick={session.stopSession}
-                className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm text-gray-300 transition-colors flex items-center gap-2"
+                className="px-4 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-sm text-zinc-300 transition-colors flex items-center gap-2"
               >
                 <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
                   <rect x="6" y="6" width="12" height="12" rx="1" />
                 </svg>
                 Stop
-                <span className="text-xs text-gray-500 ml-1">Esc Esc / Ctrl+C Ctrl+C</span>
+                <span className="text-xs text-zinc-600 ml-1">Esc Esc / Ctrl+C Ctrl+C</span>
               </button>
             </div>
           )}
 
-          {/* Input */}
           {!isStreaming && session.status !== 'confirming' && (
-            <div className="p-4 border-t border-gray-800">
+            <div className="p-4 border-t border-zinc-800">
               <div className="max-w-3xl mx-auto flex gap-2">
                 <textarea
                   ref={inputRef}
@@ -591,12 +569,12 @@ export function ChatView({ connected }: { connected: boolean }) {
                   onKeyDown={handleKeyDown}
                   placeholder="Message..."
                   rows={1}
-                  className="flex-1 px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 resize-none focus:outline-none focus:border-blue-500"
+                  className="flex-1 px-4 py-2.5 bg-zinc-900 border border-zinc-800 rounded-lg text-white text-sm placeholder-zinc-600 resize-none focus:outline-none focus:border-white"
                 />
                 <button
                   onClick={handleSend}
                   disabled={!inputValue.trim()}
-                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm text-white transition-colors disabled:opacity-50"
+                  className="px-4 py-2.5 bg-white hover:bg-zinc-200 rounded-lg text-sm text-black transition-colors disabled:opacity-50"
                 >
                   Send
                 </button>

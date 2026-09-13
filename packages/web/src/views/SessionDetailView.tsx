@@ -12,19 +12,16 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
   const [inputValue, setInputValue] = useState('')
   const [attached, setAttached] = useState(false)
 
-  // Attach on mount
   useEffect(() => {
     session.attach(sessionId).then(() => setAttached(true))
   }, [sessionId])
 
-  // Auto-scroll during streaming
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [session.messages, session._streamingText, session.thinkingText])
 
-  // Focus input when not streaming
   useEffect(() => {
     if (!isStreaming && inputRef.current) {
       inputRef.current.focus()
@@ -49,25 +46,23 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="px-6 py-3 border-b border-gray-800 flex items-center gap-3">
-        <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
-        <span className="text-xs text-gray-500">{connected ? 'Connected' : 'Disconnected'}</span>
-        <span className="text-gray-700">·</span>
+      <div className="px-6 py-3 border-b border-zinc-800 flex items-center gap-3">
+        <div className={`w-2 h-2 rounded-full ${connected ? 'bg-white' : 'bg-zinc-700'}`} />
+        <span className="text-xs text-zinc-500">{connected ? 'Connected' : 'Disconnected'}</span>
+        <span className="text-zinc-800">·</span>
         <h2 className="text-sm font-medium text-white">
           Session {sessionId.slice(0, 8)}
         </h2>
         <StatusBadge status={session.status} />
       </div>
 
-      {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-hidden p-6 space-y-4">
         {!attached && (
-          <div className="text-gray-500 text-center mt-20">Loading...</div>
+          <div className="text-zinc-600 text-center mt-20">Loading...</div>
         )}
 
         {attached && session.messages.length === 0 && session.status !== 'streaming' && (
-          <div className="text-gray-500 text-center mt-20">No messages yet</div>
+          <div className="text-zinc-600 text-center mt-20">No messages yet</div>
         )}
 
         {session.messages.map((msg, i) => (
@@ -75,17 +70,17 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
             {msg.role === 'user' ? (
               <div className="flex items-start gap-3 justify-end">
                 <div className="flex-1 min-w-0 text-right">
-                  <div className="inline-block px-4 py-2.5 bg-gray-700 rounded-lg text-white text-sm whitespace-pre-wrap text-left">
+                  <div className="inline-block px-4 py-2.5 bg-zinc-800 rounded-lg text-white text-sm whitespace-pre-wrap text-left">
                     {msg.content}
                   </div>
                 </div>
-                <div className="w-8 h-8 rounded-full bg-gray-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-zinc-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
                   Y
                 </div>
               </div>
             ) : (
               <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+                <div className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center text-sm font-bold flex-shrink-0">
                   V
                 </div>
                 <div className="flex-1 min-w-0">
@@ -96,11 +91,10 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
           </div>
         ))}
 
-        {/* Live streaming bubble */}
         {session._streamingText && (
           <div>
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center text-sm font-bold flex-shrink-0">
                 V
               </div>
               <div className="flex-1 min-w-0">
@@ -115,15 +109,14 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
         )}
 
         {session.error && (
-          <div className="p-3 bg-red-900/30 border border-red-800 rounded text-red-300 text-sm">
+          <div className="p-3 bg-zinc-900 border border-zinc-700 rounded text-zinc-400 text-sm">
             {session.error}
           </div>
         )}
       </div>
 
-      {/* Input — shown when not actively streaming */}
       {!isStreaming && (
-        <div className="p-4 border-t border-gray-800">
+        <div className="p-4 border-t border-zinc-800">
           <div className="max-w-3xl mx-auto flex gap-2">
             <textarea
               ref={inputRef}
@@ -132,12 +125,12 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
               onKeyDown={handleKeyDown}
               placeholder="Message..."
               rows={1}
-              className="flex-1 px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 resize-none focus:outline-none focus:border-blue-500"
+              className="flex-1 px-4 py-2.5 bg-zinc-900 border border-zinc-800 rounded-lg text-white text-sm placeholder-zinc-600 resize-none focus:outline-none focus:border-white"
             />
             <button
               onClick={handleSend}
               disabled={!inputValue.trim()}
-              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm text-white transition-colors disabled:opacity-50"
+              className="px-4 py-2.5 bg-white hover:bg-zinc-200 rounded-lg text-sm text-black transition-colors disabled:opacity-50"
             >
               Send
             </button>
@@ -145,10 +138,9 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
         </div>
       )}
 
-      {/* Streaming indicator */}
       {isStreaming && (
-        <div className="px-4 py-2 border-t border-gray-800 text-xs text-gray-500 flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+        <div className="px-4 py-2 border-t border-zinc-800 text-xs text-zinc-600 flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
           Streaming...
         </div>
       )}

@@ -6,12 +6,12 @@ interface PlanViewProps {
 }
 
 const statusColors: Record<TaskStatus, string> = {
-  pending: 'bg-neutral-200 text-neutral-600 dark:bg-neutral-700 dark:text-neutral-400',
-  assigned: 'bg-blue-200 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-  running: 'bg-yellow-200 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400',
-  done: 'bg-green-200 text-green-700 dark:bg-green-900/30 dark:text-green-400',
-  failed: 'bg-red-200 text-red-700 dark:bg-red-900/30 dark:text-red-400',
-  skipped: 'bg-neutral-200 text-neutral-500 dark:bg-neutral-700 dark:text-neutral-500',
+  pending: 'bg-zinc-800 text-zinc-500 border-zinc-700',
+  assigned: 'bg-zinc-800 text-zinc-400 border-zinc-700',
+  running: 'bg-white text-black border-white',
+  done: 'bg-zinc-700 text-zinc-400 border-zinc-600',
+  failed: 'bg-zinc-800 text-zinc-500 border-zinc-700',
+  skipped: 'bg-zinc-900 text-zinc-600 border-zinc-800',
 }
 
 const typeIcons: Record<string, string> = {
@@ -25,8 +25,8 @@ export function PlanView({ tasks, taskStates }: PlanViewProps) {
   if (tasks.length === 0) return null
 
   return (
-    <div className="rounded-lg border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-800">
-      <h3 className="mb-3 text-sm font-semibold text-neutral-900 dark:text-white">
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+      <h3 className="mb-3 text-sm font-semibold text-white">
         Execution Plan ({tasks.length} tasks)
       </h3>
       <div className="space-y-2">
@@ -35,25 +35,25 @@ export function PlanView({ tasks, taskStates }: PlanViewProps) {
           return (
             <div
               key={task.id}
-              className="flex items-start gap-2 rounded-md border border-neutral-100 bg-neutral-50 p-2 dark:border-neutral-700 dark:bg-neutral-750"
+              className="flex items-start gap-2 rounded-md border border-zinc-800 bg-black p-2"
             >
               <span
-                className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded text-xs font-mono font-bold ${statusColors[status]}`}
+                className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded text-xs font-mono font-bold border ${statusColors[status]}`}
               >
                 {typeIcons[task.type] || '?'}
               </span>
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium text-neutral-900 dark:text-white">
+                <div className="text-sm font-medium text-white">
                   {task.title}
                 </div>
                 {task.files.length > 0 && (
-                  <div className="mt-0.5 text-xs text-neutral-500 dark:text-neutral-400">
+                  <div className="mt-0.5 text-xs text-zinc-500">
                     {task.files.join(', ')}
                   </div>
                 )}
               </div>
               <span
-                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${statusColors[status]}`}
+                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium border ${statusColors[status]}`}
               >
                 {status}
               </span>
