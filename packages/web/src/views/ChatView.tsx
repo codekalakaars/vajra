@@ -6,6 +6,7 @@ import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { PlanView } from '../components/PlanView'
 import { WorkerStatus } from '../components/WorkerStatus'
 import { ConflictAlert } from '../components/ConflictAlert'
+import { Square } from 'lucide-react'
 
 const C = { bg: '#0a0a0a', raised: '#1a1a1a', overlay: '#222222', border: '#2a2a2a', text: '#e5e5e5', textMuted: '#737373', placeholder: '#525252' }
 
@@ -117,7 +118,7 @@ export function ChatView({ connected }: { connected: boolean }) {
       {isStreaming && (
         <div className="px-4 py-2 flex justify-center" style={{ borderTop: `1px solid ${C.border}` }}>
           <button onClick={session.stopSession} className="px-4 py-1.5 rounded text-sm transition-colors flex items-center gap-2" style={{ background: C.raised, color: C.textMuted }}>
-            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+            <Square size={14} />
             Stop <span className="text-xs ml-1" style={{ color: C.placeholder }}>Esc Esc / Ctrl+C Ctrl+C</span>
           </button>
         </div>
