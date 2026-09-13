@@ -5,6 +5,12 @@ import { ThinkingBlock } from '../components/ThinkingBlock'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
 import { useState } from 'react'
 
+const C = {
+  bg: '#151515', raised: '#20201f', overlay: '#292927', border: '#2d2d2d',
+  text: '#f7f7f2', textMuted: '#a5a39a', placeholder: '#898781',
+  accent: '#d97757', input: '#4d4d4c',
+}
+
 export function SessionDetailView({ sessionId, connected }: { sessionId: string; connected: boolean }) {
   const session = useSession()
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -12,135 +18,76 @@ export function SessionDetailView({ sessionId, connected }: { sessionId: string;
   const [inputValue, setInputValue] = useState('')
   const [attached, setAttached] = useState(false)
 
-  useEffect(() => {
-    session.attach(sessionId).then(() => setAttached(true))
-  }, [sessionId])
+  useEffect(() => { session.attach(sessionId).then(() => setAttached(true)) }, [sessionId])
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight }, [session.messages, session._streamingText, session.thinkingText])
+  useEffect(() => { if (!isStreaming && inputRef.current) inputRef.current.focus() }, [session.status])
 
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [session.messages, session._streamingText, session.thinkingText])
-
-  useEffect(() => {
-    if (!isStreaming && inputRef.current) {
-      inputRef.current.focus()
-    }
-  }, [session.status])
-
-  const handleSend = async () => {
-    const text = inputValue.trim()
-    if (!text) return
-    setInputValue('')
-    await session.sendMessage(text)
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-  }
-
+  const handleSend = async () => { const t = inputValue.trim(); if (!t) return; setInputValue(''); await session.sendMessage(t) }
+  const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() } }
   const isStreaming = session.status === 'streaming'
+
+  const inputStyle = { background: C.raised, border: `1px solid ${C.border}`, color: C.text, outline: 'none' }
+  const inputFocus = (e: React.FocusEvent<HTMLTextAreaElement>) => { e.currentTarget.style.borderColor = C.accent }
+  const inputBlur = (e: React.FocusEvent<HTMLTextAreaElement>) => { e.currentTarget.style.borderColor = C.border }
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-6 py-3 border-b border-zinc-800 flex items-center gap-3">
-        <div className={`w-2 h-2 rounded-full ${connected ? 'bg-white' : 'bg-zinc-700'}`} />
-        <span className="text-xs text-zinc-500">{connected ? 'Connected' : 'Disconnected'}</span>
-        <span className="text-zinc-800">·</span>
-        <h2 className="text-sm font-medium text-white">
-          Session {sessionId.slice(0, 8)}
-        </h2>
+      <div className="px-6 py-3 flex items-center gap-3" style={{ borderBottom: `1px solid ${C.border}` }}>
+        <div className="w-2 h-2 rounded-full" style={{ background: connected ? C.accent : C.input }} />
+        <span className="text-xs" style={{ color: C.placeholder }}>{connected ? 'Connected' : 'Disconnected'}</span>
+        <span style={{ color: C.border }}>·</span>
+        <h2 className="text-sm font-medium" style={{ color: C.text }}>Session {sessionId.slice(0, 8)}</h2>
         <StatusBadge status={session.status} />
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-hidden p-6 space-y-4">
-        {!attached && (
-          <div className="text-zinc-600 text-center mt-20">Loading...</div>
-        )}
-
-        {attached && session.messages.length === 0 && session.status !== 'streaming' && (
-          <div className="text-zinc-600 text-center mt-20">No messages yet</div>
-        )}
+        {!attached && <div className="text-center mt-20" style={{ color: C.placeholder }}>Loading...</div>}
+        {attached && session.messages.length === 0 && session.status !== 'streaming' && <div className="text-center mt-20" style={{ color: C.placeholder }}>No messages yet</div>}
 
         {session.messages.map((msg, i) => (
           <div key={i}>
             {msg.role === 'user' ? (
               <div className="flex items-start gap-3 justify-end">
                 <div className="flex-1 min-w-0 text-right">
-                  <div className="inline-block px-4 py-2.5 bg-zinc-800 rounded-lg text-white text-sm whitespace-pre-wrap text-left">
-                    {msg.content}
-                  </div>
+                  <div className="inline-block px-4 py-2.5 rounded-lg text-sm whitespace-pre-wrap text-left" style={{ background: C.overlay, color: C.text }}>{msg.content}</div>
                 </div>
-                <div className="w-8 h-8 rounded-full bg-zinc-700 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
-                  Y
-                </div>
+                <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: C.overlay, color: C.textMuted }}>Y</div>
               </div>
             ) : (
               <div className="flex items-start gap-3">
-                <div className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center text-sm font-bold flex-shrink-0">
-                  V
-                </div>
-                <div className="flex-1 min-w-0">
-                  <MarkdownRenderer content={msg.content} />
-                </div>
+                <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: C.accent, color: C.bg }}>V</div>
+                <div className="flex-1 min-w-0"><MarkdownRenderer content={msg.content} /></div>
               </div>
             )}
           </div>
         ))}
 
         {session._streamingText && (
-          <div>
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-full bg-white text-black flex items-center justify-center text-sm font-bold flex-shrink-0">
-                V
-              </div>
-              <div className="flex-1 min-w-0">
-                <MarkdownRenderer content={session._streamingText} />
-              </div>
-            </div>
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: C.accent, color: C.bg }}>V</div>
+            <div className="flex-1 min-w-0"><MarkdownRenderer content={session._streamingText} /></div>
           </div>
         )}
 
-        {session.thinkingText && (
-          <ThinkingBlock text={session.thinkingText} />
-        )}
-
-        {session.error && (
-          <div className="p-3 bg-zinc-900 border border-zinc-700 rounded text-zinc-400 text-sm">
-            {session.error}
-          </div>
-        )}
+        {session.thinkingText && <ThinkingBlock text={session.thinkingText} />}
+        {session.error && <div className="p-3 rounded text-sm" style={{ background: '#3b2020', border: '1px solid #ef7772', color: '#ef7772' }}>{session.error}</div>}
       </div>
 
       {!isStreaming && (
-        <div className="p-4 border-t border-zinc-800">
+        <div className="p-4" style={{ borderTop: `1px solid ${C.border}` }}>
           <div className="max-w-3xl mx-auto flex gap-2">
-            <textarea
-              ref={inputRef}
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Message..."
-              rows={1}
-              className="flex-1 px-4 py-2.5 bg-zinc-900 border border-zinc-800 rounded-lg text-white text-sm placeholder-zinc-600 resize-none focus:outline-none focus:border-white"
-            />
-            <button
-              onClick={handleSend}
-              disabled={!inputValue.trim()}
-              className="px-4 py-2.5 bg-white hover:bg-zinc-200 rounded-lg text-sm text-black transition-colors disabled:opacity-50"
-            >
-              Send
-            </button>
+            <textarea ref={inputRef} value={inputValue} onChange={e => setInputValue(e.target.value)} onKeyDown={handleKeyDown}
+              placeholder="Message..." rows={1} className="flex-1 px-4 py-2.5 rounded-lg text-sm resize-none"
+              style={inputStyle} onFocus={inputFocus} onBlur={inputBlur} />
+            <button onClick={handleSend} disabled={!inputValue.trim()} className="px-4 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50"
+              style={{ background: C.accent, color: C.bg }}>Send</button>
           </div>
         </div>
       )}
 
       {isStreaming && (
-        <div className="px-4 py-2 border-t border-zinc-800 text-xs text-zinc-600 flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-white animate-pulse" />
+        <div className="px-4 py-2 text-xs flex items-center gap-2" style={{ borderTop: `1px solid ${C.border}`, color: C.placeholder }}>
+          <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: C.accent }} />
           Streaming...
         </div>
       )}

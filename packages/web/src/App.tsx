@@ -17,7 +17,7 @@ export function App() {
   }, [client])
 
   return (
-    <div className="flex h-screen bg-black text-white">
+    <div className="flex h-screen" style={{ background: '#151515', color: '#f7f7f2' }}>
       <Sidebar client={client} />
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-1 overflow-hidden">
