@@ -42,13 +42,13 @@ export interface ServerContext {
   db: SqliteDb
   sessions: SessionManager
   connection: ClientConnection
-  apiKey: string
+  apiKeys: Record<string, string>
 }
 
 export interface CreateAppServerOptions {
   db: SqliteDb
   launcher?: SessionLauncher
-  apiKey?: string
+  apiKeys?: Record<string, string>
 }
 
 export function createAppServer(httpServer: HttpServer, options: CreateAppServerOptions) {

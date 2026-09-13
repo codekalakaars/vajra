@@ -30,7 +30,7 @@ program
   .description('Start an interactive session with the manager agent')
   .argument('[task]', 'Initial task description (optional)')
   .option('-k, --api-key <key>', 'OpenRouter API key')
-  .option('-m, --model <model>', 'LLM model to use', 'anthropic/claude-3.5-sonnet')
+  .option('-m, --model <model>', 'LLM model to use', process.env.VAJRA_MODEL || 'openrouter/free')
   .option('-v, --verbose', 'Show thinking/reasoning output')
   .option('-d, --dir <directory>', 'Project directory', process.cwd())
   .action(async (task, options) => {
