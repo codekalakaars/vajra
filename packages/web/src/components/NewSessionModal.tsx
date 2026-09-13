@@ -78,13 +78,13 @@ const C = { bg: '#0a0a0a', chrome: '#111111', raised: '#1a1a1a', overlay: '#2222
 
 interface BrowseEntry { name: string; path: string; isDir: boolean }
 
-interface NewSessionModalProps {
+interface NewProjectModalProps {
   client: VajraClient
   open: boolean
   onClose: () => void
 }
 
-export function NewSessionModal({ client, open, onClose }: NewSessionModalProps) {
+export function NewProjectModal({ client, open, onClose }: NewProjectModalProps) {
   const [projectDir, setProjectDir] = useState('')
   const [model, setModel] = useState('openrouter/free')
   const [permFilter, setPermFilter] = useState('')
