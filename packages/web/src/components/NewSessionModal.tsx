@@ -61,6 +61,8 @@ function getIcon(e: FileEntry): string { if (e.isDir) return '📁'; if (e.isMas
 
 const C = { bg: '#0a0a0a', chrome: '#111111', raised: '#1a1a1a', overlay: '#222222', muted: '#141414', border: '#2a2a2a', text: '#e5e5e5', textMuted: '#737373', placeholder: '#525252' }
 
+interface BrowseEntry { name: string; path: string; isDir: boolean }
+
 interface NewSessionModalProps {
   client: VajraClient
   open: boolean
@@ -80,11 +82,82 @@ export function NewSessionModal({ client, open, onClose }: NewSessionModalProps)
   const [creating, setCreating] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
 
+  // Browse/suggestions state
+  const [suggestions, setSuggestions] = useState<BrowseEntry[]>([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
+  const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(-1)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const suggestionsRef = useRef<HTMLDivElement>(null)
+
   const permTree = useMemo(() => filterTree(buildTree(permFiles), permFilter), [permFiles, permFilter])
   const totalFiles = useMemo(() => countFiles(permTree), [permTree])
   const checkedFiles = useMemo(() => countChecked(permTree, permMap), [permTree, permMap])
   const allChecked = totalFiles > 0 && checkedFiles === totalFiles
   const noneChecked = checkedFiles === 0
+
+  const browseDirectories = useCallback(async (dir: string) => {
+    setSuggestionsLoading(true)
+    try {
+      const entries = await client.call('project.browse', { dir }) as BrowseEntry[]
+      setSuggestions(entries)
+      setShowSuggestions(true)
+      setSelectedSuggestionIdx(-1)
+    } catch {
+      setSuggestions([])
+    } finally {
+      setSuggestionsLoading(false)
+    }
+  }, [client])
+
+  // Debounced browse on input change
+  useEffect(() => {
+    if (!open) return
+    const timer = setTimeout(() => {
+      if (projectDir.length > 0) {
+        browseDirectories(projectDir)
+      } else {
+        // Show home directory contents when empty
+        browseDirectories('~')
+      }
+    }, 200)
+    return () => clearTimeout(timer)
+  }, [projectDir, open, browseDirectories])
+
+  // Close suggestions on outside click
+  useEffect(() => {
+    if (!showSuggestions) return
+    const handler = (e: MouseEvent) => {
+      if (suggestionsRef.current && !suggestionsRef.current.contains(e.target as Node) &&
+          inputRef.current && !inputRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showSuggestions])
+
+  const handleSuggestionClick = (entry: BrowseEntry) => {
+    setProjectDir(entry.path)
+    setShowSuggestions(false)
+    setSelectedSuggestionIdx(-1)
+  }
+
+  const handleSuggestionKeyDown = (e: React.KeyboardEvent) => {
+    if (!showSuggestions || suggestions.length === 0) return
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setSelectedSuggestionIdx(prev => Math.min(prev + 1, suggestions.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setSelectedSuggestionIdx(prev => Math.max(prev - 1, -1))
+    } else if (e.key === 'Enter' && selectedSuggestionIdx >= 0) {
+      e.preventDefault()
+      handleSuggestionClick(suggestions[selectedSuggestionIdx])
+    } else if (e.key === 'Escape') {
+      setShowSuggestions(false)
+    }
+  }
 
   const loadPermissions = useCallback(async (dir: string) => {
     if (!dir.trim()) { setPermLoaded(false); setPermFiles([]); setPermMap({}); return }
@@ -140,6 +213,7 @@ export function NewSessionModal({ client, open, onClose }: NewSessionModalProps)
     if (open) {
       setProjectDir(''); setModel('openrouter/free'); setPermFilter(''); setPermFiles([]); setPermMap({})
       setPermLoading(false); setPermError(null); setPermLoaded(false); setExpandedDirs(new Set()); setCreating(false)
+      setSuggestions([]); setShowSuggestions(false); setSelectedSuggestionIdx(-1)
     }
   }, [open])
 
@@ -201,10 +275,35 @@ export function NewSessionModal({ client, open, onClose }: NewSessionModalProps)
           <div>
             <label className="block text-sm font-medium mb-1" style={{ color: C.textMuted }}>Project path</label>
             <div className="flex gap-2">
-              <input type="text" value={projectDir} onChange={e => setProjectDir(e.target.value)}
-                onBlur={e => { loadPermissions(projectDir); inputBlur(e) }}
-                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); loadPermissions(projectDir) } }}
-                placeholder="/path/to/project" className="flex-1 px-3 py-2 rounded text-sm" style={inputStyle} onFocus={inputFocus} />
+              <div className="flex-1 relative">
+                <input ref={inputRef} type="text" value={projectDir} onChange={e => setProjectDir(e.target.value)}
+                  onFocus={() => { setShowSuggestions(true); if (suggestions.length === 0) browseDirectories(projectDir || '~') }}
+                  onKeyDown={handleSuggestionKeyDown}
+                  placeholder="/path/to/project" className="w-full px-3 py-2 rounded text-sm" style={inputStyle} />
+                {showSuggestions && suggestions.length > 0 && (
+                  <div ref={suggestionsRef} className="absolute z-10 w-full mt-1 max-h-48 overflow-y-auto rounded shadow-lg" style={{ background: C.raised, border: `1px solid ${C.border}` }}>
+                    {suggestions.map((entry, idx) => (
+                      <div key={entry.path}
+                        className="px-3 py-2 cursor-pointer flex items-center gap-2"
+                        style={{
+                          background: idx === selectedSuggestionIdx ? C.overlay : 'transparent',
+                          color: C.text,
+                        }}
+                        onMouseEnter={() => setSelectedSuggestionIdx(idx)}
+                        onClick={() => handleSuggestionClick(entry)}>
+                        <span style={{ color: C.placeholder }}>{entry.isDir ? '📁' : '📄'}</span>
+                        <span className="truncate text-sm">{entry.name}</span>
+                        <span className="ml-auto text-xs truncate" style={{ color: C.placeholder }}>{entry.path}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {showSuggestions && suggestionsLoading && (
+                  <div ref={suggestionsRef} className="absolute z-10 w-full mt-1 py-3 text-center text-sm" style={{ background: C.raised, border: `1px solid ${C.border}`, color: C.placeholder }}>
+                    Loading...
+                  </div>
+                )}
+              </div>
               <button onClick={() => loadPermissions(projectDir)} disabled={!projectDir.trim() || permLoading}
                 className="px-3 py-2 rounded text-sm transition-colors disabled:opacity-50" style={{ background: C.overlay, color: C.textMuted }}>
                 {permLoading ? '...' : 'Load'}
