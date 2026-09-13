@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { render, Box, Text, useInput, useApp } from 'ink'
 
 interface AppProps {
@@ -55,6 +55,11 @@ function App({ version }: AppProps) {
 }
 
 export function startTUI(version: string) {
+  if (!process.stdin.isTTY) {
+    console.log('Vajra CLI - Run with --help for usage')
+    process.exit(0)
+  }
+
   const { unmount, waitUntilExit } = render(<App version={version} />)
   return { unmount, waitUntilExit }
 }
