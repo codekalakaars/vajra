@@ -23,6 +23,8 @@ import { roleTools } from '@codekalakaars/vajra-protocol'
 import type { WorkerPool } from '../session/pool.js'
 import { access } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { compressMessages } from './context.js'
+import { buildSummaryIndex, compressSummaryByRelevance } from './summary.js'
 
 export interface MasterInput {
   sessionId: string
@@ -492,6 +494,62 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   }
 }
 
+/**
+ * Gather context from completed dependency tasks.
+ * Returns a formatted string with what each dependency produced.
+ */
+function gatherDependencyContext(task: TaskState, queue: TaskQueue, db: SqliteDb): string {
+  if (task.dependsOn.length === 0) return ''
+
+  const contextParts: string[] = []
+  let totalSize = 0
+  const MAX_CONTEXT_SIZE = 4000 // Limit total dependency context
+
+  for (const depId of task.dependsOn) {
+    if (totalSize >= MAX_CONTEXT_SIZE) break
+
+    const depTask = queue.getTask(depId)
+    if (!depTask) continue
+
+    // Get the completion summary from the database
+    const row = db.prepare(
+      `SELECT content FROM messages WHERE session_id = ? AND role = 'assistant' AND content LIKE ?
+       ORDER BY created_at DESC LIMIT 1`
+    ).get(task.sessionId, `%${depId}%`) as { content: string } | undefined
+
+    let summary = ''
+    if (row?.content) {
+      try {
+        const parsed = JSON.parse(row.content)
+        if (parsed.summary) {
+          summary = parsed.summary
+        }
+      } catch {
+        // Not JSON, use raw content
+        summary = row.content.slice(0, 500)
+      }
+    }
+
+    // Build context for this dependency
+    const filesModified = [...depTask.writeFile, ...depTask.deleteFile]
+    const depContext = [
+      `Task ${depId}: ${depTask.title}`,
+      `Status: ${depTask.status}`,
+      filesModified.length > 0 ? `Files modified: ${filesModified.join(', ')}` : '',
+      summary ? `Summary: ${summary}` : '',
+    ].filter(Boolean).join('\n')
+
+    if (depContext) {
+      contextParts.push(depContext)
+      totalSize += depContext.length
+    }
+  }
+
+  return contextParts.length > 0
+    ? `TASKS THIS DEPENDS ON (completed):\n${contextParts.join('\n\n')}`
+    : ''
+}
+
 async function executeTask(
   agentId: string,
   task: TaskState,
@@ -529,12 +587,16 @@ async function executeTask(
     const deleteFileList = task.deleteFile.length > 0 ? task.deleteFile.join(', ') : '(none)'
     const createDirList = task.createDir.length > 0 ? task.createDir.join(', ') : '(none)'
 
+    // Gather context from completed dependencies
+    const dependencyContext = gatherDependencyContext(task, queue, db)
+
     const systemPrompt = [
       'You are a worker agent. Follow the instructions EXACTLY. Do not deviate.',
       '',
       `TASK: ${task.title}`,
       task.description ? `WHY: ${task.description}` : '',
       '',
+      dependencyContext ? `DEPENDENCY CONTEXT:\n${dependencyContext}\n` : '',
       'INSTRUCTIONS (follow in order):',
       instructionLines,
       '',
@@ -563,8 +625,11 @@ async function executeTask(
 
     // Tool-use loop
     while (toolCallCount < MAX_WORKER_TOOL_CALLS) {
+      // Compress messages to fit within context window
+      const compressedMessages = compressMessages(messages, model)
+
       const result = await provider.streamChat(
-        { apiKey, model, messages, tools: workerToolSpecs },
+        { apiKey, model, messages: compressedMessages, tools: workerToolSpecs },
         (text) => events.push('session.assistantDelta', sessionId, { text }),
         (thinking) => events.push('session.thinkingDelta', sessionId, { text: thinking }),
       )

@@ -116,6 +116,14 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
   const allChecked = totalFiles > 0 && checkedFiles === totalFiles
   const noneChecked = checkedFiles === 0
 
+  const filteredSuggestions = useMemo(() => {
+    if (!projectDir) return suggestions
+    const lower = projectDir.toLowerCase()
+    return suggestions.filter(s => s.name.toLowerCase().includes(lower) || s.path.toLowerCase().includes(lower))
+  }, [suggestions, projectDir])
+
+  useEffect(() => { setSelectedSuggestionIdx(-1) }, [filteredSuggestions])
+
   const browseDirectories = useCallback(async (dir: string) => {
     setSuggestionsLoading(true)
     try {
@@ -136,9 +144,6 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
     const timer = setTimeout(() => {
       if (projectDir.length > 0) {
         browseDirectories(projectDir)
-      } else {
-        // Show home directory contents when empty
-        browseDirectories('~')
       }
     }, 200)
     return () => clearTimeout(timer)
@@ -176,10 +181,21 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
   }
 
   const handleSuggestionKeyDown = (e: React.KeyboardEvent) => {
-    if (!showSuggestions || suggestions.length === 0) return
+    if (e.key === 'Enter') {
+      if (showSuggestions && filteredSuggestions.length > 0 && selectedSuggestionIdx >= 0) {
+        e.preventDefault()
+        handleSuggestionClick(filteredSuggestions[selectedSuggestionIdx])
+      } else if (projectDir.trim()) {
+        e.preventDefault()
+        setShowSuggestions(false)
+        loadPermissions(projectDir)
+      }
+      return
+    }
+    if (!showSuggestions || filteredSuggestions.length === 0) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setSelectedSuggestionIdx(prev => Math.min(prev + 1, suggestions.length - 1))
+      setSelectedSuggestionIdx(prev => Math.min(prev + 1, filteredSuggestions.length - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setSelectedSuggestionIdx(prev => Math.max(prev - 1, -1))
@@ -314,9 +330,9 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
                     onFocus={() => { setShowSuggestions(true); if (suggestions.length === 0) browseDirectories(projectDir || '~') }}
                     onKeyDown={handleSuggestionKeyDown}
                     placeholder="/path/to/project" className="w-full px-3 py-2 rounded text-sm" style={inputStyle} />
-                  {showSuggestions && suggestions.length > 0 && (
-                    <div ref={suggestionsRef} className="absolute z-10 w-full mt-1 overflow-y-auto rounded shadow-lg" style={{ background: C.raised, border: `1px solid ${C.border}` }}>
-                      {suggestions.map((entry, idx) => (
+                  {showSuggestions && filteredSuggestions.length > 0 && (
+                    <div ref={suggestionsRef} className="absolute z-10 w-full mt-1 overflow-y-auto rounded shadow-lg" style={{ background: C.raised, border: `1px solid ${C.border}`, maxHeight: '200px' }}>
+                      {filteredSuggestions.map((entry, idx) => (
                         <div key={entry.path}
                           className="px-3 py-2 cursor-pointer flex items-center gap-2"
                           style={{
@@ -338,8 +354,8 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
                     </div>
                   )}
                 </div>
-                <button onClick={() => loadPermissions(projectDir)} disabled={!projectDir.trim() || permLoading}
-                  className="px-3 py-2 rounded text-sm transition-colors disabled:opacity-50" style={{ background: C.overlay, color: C.textMuted }}>
+                <button onClick={() => { setShowSuggestions(false); loadPermissions(projectDir) }} disabled={!projectDir.trim() || permLoading}
+                  className="px-3 py-2 rounded text-sm transition-colors disabled:opacity-50 cursor-pointer" style={{ background: '#1e2a3a', color: '#93c5fd', border: '1px solid #1e3a5f' }}>
                   {permLoading ? '...' : 'Load'}
                 </button>
               </div>
@@ -381,15 +397,15 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
 
           {/* File permissions - same style as model */}
           {permLoaded && (
-            <div>
-              <div className="flex items-center justify-between mb-1">
+            <div className="flex-1 flex flex-col mt-4" style={{ minHeight: 0 }}>
+              <div className="flex items-center justify-between mb-1 flex-shrink-0">
                 <label className="block text-sm font-medium" style={{ color: C.textMuted }}>Permissions</label>
                 <label className="flex items-center gap-1.5 cursor-pointer select-none">
                   <input type="checkbox" checked={allChecked} onChange={toggleAllFiles} className="w-3.5 h-3.5 cursor-pointer" style={{ accentColor: '#737373' }} />
                   <span className="text-xs" style={{ color: C.placeholder }}>{checkedFiles}/{totalFiles}</span>
                 </label>
               </div>
-              <div className="overflow-y-auto scroll-hidden" style={{ ...inputStyle, maxHeight: '120px' }}>
+              <div className="flex-1 overflow-y-auto scroll-hidden rounded" style={{ ...inputStyle, minHeight: 0 }}>
                 {permTree.length === 0 && <div className="text-sm" style={{ color: C.placeholder }}>No files found</div>}
                 {permTree.map(node => renderNode(node))}
               </div>
