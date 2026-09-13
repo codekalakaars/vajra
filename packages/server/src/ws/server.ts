@@ -83,7 +83,7 @@ export function createAppServer(httpServer: HttpServer, options: CreateAppServer
       }
       if (request.kind !== 'rpc') return
 
-      const ctx: ServerContext = { db: options.db, sessions, connection, apiKey: options.apiKey ?? '' }
+      const ctx: ServerContext = { db: options.db, sessions, connection, apiKeys: options.apiKeys ?? {} }
       const response = await router.dispatch(request, ctx)
       connection.send(response)
     })

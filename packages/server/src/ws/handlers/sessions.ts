@@ -9,7 +9,7 @@ export function registerSessionHandlers(router: RpcRouter<ServerContext>): void 
     const model = params.model?.trim() || defaultModel
 
     // Create provider from model string
-    const { provider, resolvedModel } = createProvider(model, ctx.apiKey)
+    const { provider, resolvedModel } = createProvider(model, ctx.apiKeys)
 
     const withDefaultModel = {
       ...params,
@@ -41,19 +41,21 @@ export function registerSessionHandlers(router: RpcRouter<ServerContext>): void 
   })
 
   router.register('session.sendMessage', (params: SessionSendMessageParams, ctx) => {
-    if (!ctx.apiKey) throw new Error('Server not configured with API key')
+    const apiKey = Object.values(ctx.apiKeys)[0]
+    if (!apiKey) throw new Error('Server not configured with API keys')
     // Fire-and-forget: the agent loop runs in the background, emitting push
     // events as it progresses. The RPC returns immediately so the client
     // doesn't time out while the LLM is working.
-    ctx.sessions.sendMessage(params.sessionId, params.content, ctx.apiKey).catch((err) => {
+    ctx.sessions.sendMessage(params.sessionId, params.content, apiKey).catch((err) => {
       console.error(`Agent loop failed for session ${params.sessionId}:`, err)
     })
     return { ok: true as const }
   })
 
   router.register('session.confirmPlan', async (params: SessionConfirmPlanParams, ctx) => {
-    if (!ctx.apiKey) throw new Error('Server not configured with API key')
-    await ctx.sessions.confirmPlan(params.sessionId, params.tasks, ctx.apiKey)
+    const apiKey = Object.values(ctx.apiKeys)[0]
+    if (!apiKey) throw new Error('Server not configured with API keys')
+    await ctx.sessions.confirmPlan(params.sessionId, params.tasks, apiKey)
     return { ok: true as const }
   })
 

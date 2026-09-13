@@ -31,9 +31,16 @@ export interface ChatRequest {
   toolChoice?: 'auto' | 'required' | 'none'
 }
 
+export interface TokenUsage {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+}
+
 export interface ChatResult {
   message: ChatMessage
   finishReason: string | null
+  usage?: TokenUsage
 }
 
 export interface ChatProvider {
