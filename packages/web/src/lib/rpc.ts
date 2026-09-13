@@ -9,6 +9,7 @@ export type RpcMethodMap = {
   'project.loadPermissions': { params: { projectDir: string }; result: PermissionsConfig }
   'project.savePermissions': { params: { projectDir: string; config: PermissionsConfig }; result: { ok: true } }
   'project.scan': { params: { projectDir: string }; result: Array<{ name: string; path: string; isDir: boolean; isMasked: boolean }> }
+  'project.browse': { params: { dir: string }; result: Array<{ name: string; path: string; isDir: boolean }> }
   'session.list': { params: Record<string, never>; result: Array<{ id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }> }
   'session.create': { params: { projectDir: string; task: string; model: string; permissions: PermissionsConfig; allowUnenforced?: boolean }; result: { sessionId: string } }
   'session.attach': { params: { sessionId: string }; result: { session: Record<string, unknown>; plan: Array<unknown>; messages: Array<unknown> } }
