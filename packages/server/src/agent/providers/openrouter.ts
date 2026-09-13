@@ -10,7 +10,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from 'openai/resources/chat'
-import type { ChatProvider, ChatRequest, ChatResult, ChatMessage, ToolCall } from './types.js'
+import type { ChatProvider, ChatRequest, ChatResult, ChatMessage, ToolCall, TokenUsage } from './types.js'
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 const MAX_RETRIES = 5
@@ -153,10 +153,21 @@ export class OpenRouterProvider implements ChatProvider {
     let content = ''
     let finishReason: string | null = null
     const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
+    let usage: TokenUsage | undefined
 
     for await (const chunk of stream) {
       const choice = chunk.choices[0]
-      if (!choice) continue
+      if (!choice) {
+        // Usage may come in the final chunk without a choice
+        if (chunk.usage) {
+          usage = {
+            promptTokens: chunk.usage.prompt_tokens,
+            completionTokens: chunk.usage.completion_tokens,
+            totalTokens: chunk.usage.total_tokens,
+          }
+        }
+        continue
+      }
 
       const delta = choice.delta
 
@@ -189,6 +200,15 @@ export class OpenRouterProvider implements ChatProvider {
       }
 
       if (choice.finish_reason) finishReason = choice.finish_reason
+
+      // Usage may come in any chunk
+      if (chunk.usage) {
+        usage = {
+          promptTokens: chunk.usage.prompt_tokens,
+          completionTokens: chunk.usage.completion_tokens,
+          totalTokens: chunk.usage.total_tokens,
+        }
+      }
     }
 
     const orderedToolCalls: ToolCall[] = [...toolCalls.entries()]
@@ -205,6 +225,6 @@ export class OpenRouterProvider implements ChatProvider {
       ...(orderedToolCalls.length > 0 ? { toolCalls: orderedToolCalls } : {}),
     }
 
-    return { message, finishReason }
+    return { message, finishReason, usage }
   }
 }

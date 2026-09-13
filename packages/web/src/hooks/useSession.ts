@@ -34,6 +34,8 @@ export interface SessionState {
   agents: AgentStatePayload[]
   conflicts: ConflictPayload[]
   _streamingText: string
+  _streamingChunks: string[]
+  _thinkingChunks: string[]
 }
 
 export function useSession() {
@@ -48,9 +50,14 @@ export function useSession() {
     agents: [],
     conflicts: [],
     _streamingText: '',
+    _streamingChunks: [],
+    _thinkingChunks: [],
   })
   const stateRef = useRef(state)
   stateRef.current = state
+
+  // Throttle timer for streaming updates
+  const throttleRef = useRef<{ timer: ReturnType<typeof setTimeout> | null }>({ timer: null })
 
   // Subscribe to push events for a session
   const subscribe = useCallback((sessionId: string) => {
@@ -64,23 +71,56 @@ export function useSession() {
           status: payload.status as SessionState['status'],
           _streamingText: '',
           thinkingText: '',
+          _streamingChunks: [],
+          _thinkingChunks: [],
         }))
       }),
     )
 
     unsubs.push(
       client.on('session.assistantDelta', (payload: PushEventPayloads['session.assistantDelta']) => {
-        setState((s) => ({
-          ...s,
-          _streamingText: s._streamingText + payload.text,
-          status: s.status === 'talking' || s.status === 'confirming' ? 'streaming' : s.status,
-        }))
+        setState((s) => {
+          const newChunks = [...s._streamingChunks, payload.text]
+          // Throttle full text join to every 100ms
+          if (!throttleRef.current.timer) {
+            throttleRef.current.timer = setTimeout(() => {
+              setState((s2) => ({
+                ...s2,
+                _streamingText: s2._streamingChunks.join(''),
+                _streamingChunks: [],
+              }))
+              throttleRef.current.timer = null
+            }, 100)
+          }
+          return {
+            ...s,
+            _streamingChunks: newChunks,
+            status: s.status === 'talking' || s.status === 'confirming' ? 'streaming' : s.status,
+          }
+        })
       }),
     )
 
     unsubs.push(
       client.on('session.thinkingDelta', (payload: PushEventPayloads['session.thinkingDelta']) => {
-        setState((s) => ({ ...s, thinkingText: s.thinkingText + payload.text }))
+        setState((s) => {
+          const newChunks = [...s._thinkingChunks, payload.text]
+          // Throttle full text join to every 100ms
+          if (!throttleRef.current.timer) {
+            throttleRef.current.timer = setTimeout(() => {
+              setState((s2) => ({
+                ...s2,
+                thinkingText: s2._thinkingChunks.join(''),
+                _thinkingChunks: [],
+              }))
+              throttleRef.current.timer = null
+            }, 100)
+          }
+          return {
+            ...s,
+            _thinkingChunks: newChunks,
+          }
+        })
       }),
     )
 
@@ -111,6 +151,8 @@ export function useSession() {
           planTasks: payload.plan.tasks,
           _streamingText: '',
           thinkingText: '',
+          _streamingChunks: [],
+          _thinkingChunks: [],
         }))
       }),
     )
@@ -122,6 +164,8 @@ export function useSession() {
           status: 'executing',
           _streamingText: '',
           thinkingText: '',
+          _streamingChunks: [],
+          _thinkingChunks: [],
         }))
       }),
     )
@@ -172,11 +216,14 @@ export function useSession() {
       client.on('session.completed', () => {
         setState((s) => {
           const newMessages = [...s.messages]
-          if (s._streamingText || s.thinkingText) {
+          // Join any remaining chunks
+          const finalStreamText = s._streamingChunks.length > 0 ? s._streamingChunks.join('') : s._streamingText
+          const finalThinkingText = s._thinkingChunks.length > 0 ? s._thinkingChunks.join('') : s.thinkingText
+          if (finalStreamText || finalThinkingText) {
             newMessages.push({
               role: 'assistant',
-              content: s._streamingText,
-              thinking: s.thinkingText || undefined,
+              content: finalStreamText,
+              thinking: finalThinkingText || undefined,
             })
           }
           return {
@@ -185,6 +232,8 @@ export function useSession() {
             status: 'done',
             thinkingText: '',
             _streamingText: '',
+            _streamingChunks: [],
+            _thinkingChunks: [],
           }
         })
       }),
@@ -194,11 +243,14 @@ export function useSession() {
       client.on('session.failed', (payload: PushEventPayloads['session.failed']) => {
         setState((s) => {
           const newMessages = [...s.messages]
-          if (s._streamingText || s.thinkingText) {
+          // Join any remaining chunks
+          const finalStreamText = s._streamingChunks.length > 0 ? s._streamingChunks.join('') : s._streamingText
+          const finalThinkingText = s._thinkingChunks.length > 0 ? s._thinkingChunks.join('') : s.thinkingText
+          if (finalStreamText || finalThinkingText) {
             newMessages.push({
               role: 'assistant',
-              content: s._streamingText,
-              thinking: s.thinkingText || undefined,
+              content: finalStreamText,
+              thinking: finalThinkingText || undefined,
             })
           }
           return {
@@ -208,6 +260,8 @@ export function useSession() {
             error: payload.message,
             thinkingText: '',
             _streamingText: '',
+            _streamingChunks: [],
+            _thinkingChunks: [],
           }
         })
       }),
@@ -234,6 +288,8 @@ export function useSession() {
       agents: [],
       conflicts: [],
       _streamingText: '',
+      _streamingChunks: [],
+      _thinkingChunks: [],
     })
 
     try {
@@ -270,6 +326,8 @@ export function useSession() {
       status: 'streaming',
       thinkingText: '',
       _streamingText: '',
+      _streamingChunks: [],
+      _thinkingChunks: [],
     }))
 
     try {
@@ -306,6 +364,8 @@ export function useSession() {
         planTasks: [],
         _streamingText: '',
         thinkingText: '',
+        _streamingChunks: [],
+        _thinkingChunks: [],
       }))
     } catch (e) {
       setState((s) => ({ ...s, status: 'failed', error: String(e) }))
@@ -324,6 +384,8 @@ export function useSession() {
       agents: [],
       conflicts: [],
       _streamingText: '',
+      _streamingChunks: [],
+      _thinkingChunks: [],
     })
 
     try {

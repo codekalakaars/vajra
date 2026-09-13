@@ -7,7 +7,7 @@
 // - Streaming uses SSE with content_block events
 
 import Anthropic from '@anthropic-ai/sdk'
-import type { ChatProvider, ChatRequest, ChatResult, ChatMessage, ToolCall, ToolSpec } from './types.js'
+import type { ChatProvider, ChatRequest, ChatResult, ChatMessage, ToolCall, ToolSpec, TokenUsage } from './types.js'
 
 const MAX_RETRIES = 5
 const INITIAL_RETRY_DELAY_MS = 1000
@@ -152,6 +152,7 @@ export class AnthropicProvider implements ChatProvider {
     let content = ''
     let stopReason: string | null = null
     const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
+    let usage: TokenUsage | undefined
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for await (const event of stream as AsyncIterable<any>) {
@@ -177,6 +178,14 @@ export class AnthropicProvider implements ChatProvider {
         if (event.delta.stop_reason) {
           stopReason = event.delta.stop_reason
         }
+        // Usage comes in the final message_delta event
+        if (event.usage) {
+          usage = {
+            promptTokens: event.usage.input_tokens,
+            completionTokens: event.usage.output_tokens,
+            totalTokens: event.usage.input_tokens + event.usage.output_tokens,
+          }
+        }
       }
     }
 
@@ -190,6 +199,6 @@ export class AnthropicProvider implements ChatProvider {
       ...(toolCallArray ? { toolCalls: toolCallArray } : {}),
     }
 
-    return { message, finishReason: stopReason }
+    return { message, finishReason: stopReason, usage }
   }
 }
