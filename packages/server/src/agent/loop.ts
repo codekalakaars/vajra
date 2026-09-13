@@ -12,6 +12,7 @@ import { getToolSpecs, parseToolCall } from './tools.js'
 import { scanProject } from '../native.js'
 import { buildNestedTree } from './tree.js'
 import { buildSummaryIndex, formatSummaryIndex, type SummaryEntry } from './summary.js'
+import { compressMessages } from './context.js'
 
 const MAX_TOOL_CALLS = 150
 const FREE_TOOLS = new Set(['search_files'])
@@ -152,11 +153,14 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
 
   // Tool-use loop
   while (toolCallCount < MAX_TOOL_CALLS) {
+    // Compress messages to fit within context window
+    const compressedMessages = compressMessages(messages, session.model)
+
     const result = await provider.streamChat(
       {
         apiKey,
         model: session.model,
-        messages,
+        messages: compressedMessages,
         tools: toolSpecs,
       },
       (text) => {

@@ -16,7 +16,8 @@ import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { getManagerToolSpecs, parseToolCall } from './tools.js'
 import { scanProject } from '../native.js'
 import { buildNestedTree } from './tree.js'
-import { buildSummaryIndex, formatSummaryIndex, type SummaryEntry } from './summary.js'
+import { buildSummaryIndex, formatSummaryIndex, formatSummaryIndexHierarchical, compressSummaryByRelevance, type SummaryEntry } from './summary.js'
+import { compressMessages } from './context.js'
 
 const FREE_TOOLS = new Set(['search_files'])
 
@@ -74,6 +75,112 @@ function buildManagerConversationPrompt(
     'File summaries (path [lines, imports, exports]: exported symbols):',
     summary,
   ].join('\n')
+}
+
+/**
+ * Read relevant code context for a task.
+ * Extracts relevant code snippets from files that the worker needs to read.
+ */
+async function readTaskContext(
+  projectDir: string,
+  readFile: string[],
+  writeFile: string[],
+  instructions: string[],
+  handle: LaunchHandle,
+): Promise<string> {
+  const contextParts: string[] = []
+  const MAX_CONTEXT_SIZE = 8000 // Limit total context size
+  let currentSize = 0
+
+  // Combine all files that need to be read or written
+  const allFiles = [...new Set([...readFile, ...writeFile])]
+
+  for (const filePath of allFiles) {
+    if (currentSize >= MAX_CONTEXT_SIZE) break
+
+    try {
+      const result = await handle.callTool('read_file', { path: filePath })
+      const content = typeof result === 'string' ? result : JSON.stringify(result)
+      
+      // Extract relevant lines based on instructions
+      const relevantLines = extractRelevantLines(content, instructions, filePath)
+      
+      if (relevantLines.length > 0) {
+        const snippet = `\n--- ${filePath} ---\n${relevantLines}\n--- end ${filePath} ---`
+        contextParts.push(snippet)
+        currentSize += snippet.length
+      }
+    } catch {
+      // File might not exist yet (for writeFile targets)
+    }
+  }
+
+  return contextParts.join('\n')
+}
+
+/**
+ * Extract relevant lines from a file based on instructions.
+ * Looks for line numbers, function names, or class names mentioned in instructions.
+ */
+function extractRelevantLines(content: string, instructions: string[], filePath: string): string {
+  const lines = content.split('\n')
+  const relevantLineNumbers = new Set<number>()
+
+  // Extract line numbers from instructions (e.g., "line 42", "lines 10-20")
+  for (const instruction of instructions) {
+    // Match "line N" or "lines N-M"
+    const lineMatches = instruction.match(/lines?\s+(\d+)(?:\s*-\s*(\d+))?/gi)
+    if (lineMatches) {
+      for (const match of lineMatches) {
+        const nums = match.match(/\d+/g)
+        if (nums) {
+          const start = parseInt(nums[0]) - 1
+          const end = nums.length > 1 ? parseInt(nums[1]) - 1 : start
+          for (let i = start; i <= end && i < lines.length; i++) {
+            relevantLineNumbers.add(i)
+          }
+        }
+      }
+    }
+
+    // Match function/class names from instructions
+    const nameMatches = instruction.match(/\b(?:function|class|const|let|var|async)\s+(\w+)/g)
+    if (nameMatches) {
+      for (const match of nameMatches) {
+        const name = match.replace(/\b(?:function|class|const|let|var|async)\s+/, '')
+        // Find this name in the file
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].includes(name)) {
+            relevantLineNumbers.add(i)
+            // Also add surrounding context (2 lines before/after)
+            for (let j = Math.max(0, i - 2); j <= Math.min(lines.length - 1, i + 2); j++) {
+              relevantLineNumbers.add(j)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // If no specific lines found, return first 50 lines as context
+  if (relevantLineNumbers.size === 0) {
+    return lines.slice(0, 50).join('\n')
+  }
+
+  // Sort and return relevant lines with context
+  const sortedLines = [...relevantLineNumbers].sort((a, b) => a - b)
+  const result: string[] = []
+  let lastLine = -1
+
+  for (const lineNum of sortedLines) {
+    if (lastLine !== -1 && lineNum > lastLine + 1) {
+      result.push('...')
+    }
+    result.push(`${lineNum + 1}: ${lines[lineNum]}`)
+    lastLine = lineNum
+  }
+
+  return result.join('\n')
 }
 
 function searchSummary(summary: SummaryEntry[], query: string): string {
@@ -234,7 +341,7 @@ export async function managerConversationTurn(
       tree = '(unable to read project tree)'
     }
 
-    const summaryText = formatSummaryIndex(summaryIndex)
+    const summaryText = formatSummaryIndexHierarchical(summaryIndex)
     messages.push({
       role: 'system',
       content: buildManagerConversationPrompt(projectDir, tree, summaryText),
@@ -255,8 +362,11 @@ export async function managerConversationTurn(
 
   // Tool-use loop (Manager may call read_file/list_files/search_files before proposing)
   while (toolCallCount < MAX_TOOL_CALLS) {
+    // Compress messages to fit within context window
+    const compressedMessages = compressMessages(messages, model)
+
     const result = await provider.streamChat(
-      { apiKey, model, messages, tools: toolSpecs },
+      { apiKey, model, messages: compressedMessages, tools: toolSpecs },
       (text) => events.push('session.assistantDelta', sessionId, { text }),
       (thinking) => events.push('session.thinkingDelta', sessionId, { text: thinking }),
     )
@@ -290,6 +400,34 @@ export async function managerConversationTurn(
         }
 
         const plan = parseProposePlanArgs(parsed)
+
+        // Inject relevant code context into task instructions
+        events.push('session.workerProgress', sessionId, {
+          sessionId,
+          agentId: 'manager',
+          taskId: 'master',
+          detail: 'Injecting code context into task instructions...',
+        })
+
+        for (const task of plan.tasks) {
+          const context = await readTaskContext(
+            projectDir,
+            task.readFile,
+            task.writeFile,
+            task.instructions,
+            handle,
+          )
+
+          if (context) {
+            // Add context to the beginning of instructions
+            task.instructions = [
+              `RELEVANT CODE CONTEXT:\n${context}`,
+              '',
+              'INSTRUCTIONS:',
+              ...task.instructions,
+            ]
+          }
+        }
 
         // Emit plan events
         events.push('session.planStarted', sessionId, { sessionId })
