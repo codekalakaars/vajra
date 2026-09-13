@@ -4,7 +4,7 @@ import { navigate } from '../hooks/useHashRouter'
 
 interface Session { id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }
 
-export function Sidebar({ client }: { client: VajraClient }) {
+export function Sidebar({ client, onNewSession }: { client: VajraClient; onNewSession: () => void }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true')
   const toggleCollapsed = () => setCollapsed((c) => { localStorage.setItem('sidebar-collapsed', String(!c)); return !c })
   const [sessions, setSessions] = useState<Session[]>([])
@@ -61,7 +61,7 @@ export function Sidebar({ client }: { client: VajraClient }) {
       </div>
 
       <div className="p-3" style={{ borderBottom: '1px solid #2a2a2a' }}>
-        <button onClick={() => navigate('/')} className="w-full px-3 py-1.5 rounded text-sm transition-colors" style={{ background: '#222222', color: '#e5e5e5' }}>
+        <button onClick={onNewSession} className="w-full px-3 py-1.5 rounded text-sm transition-colors" style={{ background: '#222222', color: '#e5e5e5' }}>
           New Session
         </button>
       </div>
