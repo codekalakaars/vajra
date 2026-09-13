@@ -351,6 +351,86 @@ export class TaskQueue {
     return batches
   }
 
+  /**
+   * Get file affinity score between two tasks.
+   * Higher score = more shared files = should run together for cache efficiency.
+   */
+  private getFileAffinityScore(task1Id: string, task2Id: string): number {
+    const task1 = this.tasks.get(task1Id)
+    const task2 = this.tasks.get(task2Id)
+    if (!task1 || !task2) return 0
+
+    const task1Files = new Set([...task1.readFile, ...task1.writeFile])
+    const task2Files = new Set([...task2.readFile, ...task2.writeFile])
+
+    let sharedCount = 0
+    for (const file of task1Files) {
+      if (task2Files.has(file)) {
+        sharedCount++
+      }
+    }
+
+    return sharedCount
+  }
+
+  /**
+   * Group ready tasks into smart batches optimized for cache efficiency.
+   * Tasks that share files are grouped together to reduce context switching.
+   * Each batch still has no write conflicts.
+   */
+  getSmartBatches(): string[][] {
+    const ready = this.getReadyTasks()
+    if (ready.length === 0) return []
+
+    const batches: string[][] = []
+    const assigned = new Set<string>()
+
+    // Build affinity graph: task -> [(otherTask, score)]
+    const affinityMap = new Map<string, Array<{ taskId: string; score: number }>>()
+    
+    for (const task of ready) {
+      const affinities: Array<{ taskId: string; score: number }> = []
+      
+      for (const other of ready) {
+        if (task.id === other.id) continue
+        
+        const score = this.getFileAffinityScore(task.id, other.id)
+        if (score > 0) {
+          affinities.push({ taskId: other.id, score })
+        }
+      }
+      
+      // Sort by affinity score (highest first)
+      affinities.sort((a, b) => b.score - a.score)
+      affinityMap.set(task.id, affinities)
+    }
+
+    // Greedy batching: start with highest affinity pairs
+    for (const task of ready) {
+      if (assigned.has(task.id)) continue
+
+      const batch = [task.id]
+      assigned.add(task.id)
+
+      // Try to add tasks with high affinity that don't conflict
+      const affinities = affinityMap.get(task.id) ?? []
+      
+      for (const { taskId: otherId } of affinities) {
+        if (assigned.has(otherId)) continue
+        
+        // Check if adding this task would cause conflicts
+        if (this.canRunInParallel([...batch, otherId])) {
+          batch.push(otherId)
+          assigned.add(otherId)
+        }
+      }
+
+      batches.push(batch)
+    }
+
+    return batches
+  }
+
   getStatus(): QueueStatus {
     const counts = { total: 0, pending: 0, assigned: 0, running: 0, done: 0, failed: 0, skipped: 0, ready: 0 }
     for (const task of this.tasks.values()) {

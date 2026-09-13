@@ -10,6 +10,7 @@
 import type { LaunchJob, LaunchHandle, SandboxReport, SessionLauncher } from './manager.js'
 import type { ConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 import { resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
+import { cpus, totalmem, freemem } from 'node:os'
 
 interface PooledWorker {
   handle: LaunchHandle
@@ -18,17 +19,18 @@ interface PooledWorker {
   idleTimer?: ReturnType<typeof setTimeout>
 }
 
-export interface WorkerPoolConfig {
-  maxConcurrentWorkers: number
-  maxIdleWorkers: number
-  idleTimeoutMs: number
-  healthCheckIntervalMs: number
-}
+export type WorkerPoolConfig = ConcurrencyConfig
 
 export interface WorkerPoolStats {
   active: number
   idle: number
   pending: number
+  /** Current adaptive max concurrent workers */
+  adaptiveMax: number
+  /** System CPU usage (0-1) */
+  cpuUsage: number
+  /** System memory usage (0-1) */
+  memoryUsage: number
 }
 
 /**
@@ -62,6 +64,16 @@ export class WorkerPool {
   /** Timers for idle worker cleanup. */
   private idleTimers: ReturnType<typeof setTimeout>[] = []
 
+  /** Adaptive concurrency timer */
+  private adaptiveTimer?: ReturnType<typeof setInterval>
+
+  /** Current adaptive max concurrent workers */
+  private adaptiveMax: number
+
+  /** System metrics */
+  private cpuUsage = 0
+  private memoryUsage = 0
+
   private config: Required<WorkerPoolConfig>
   private launcher: SessionLauncher
 
@@ -72,6 +84,12 @@ export class WorkerPool {
     this.config = resolveConcurrencyConfig(config)
     this.launcher = launcher
     this.availableSlots = this.config.maxConcurrentWorkers
+    this.adaptiveMax = this.config.maxConcurrentWorkers
+
+    // Start adaptive monitoring if enabled
+    if (this.config.adaptiveConcurrency) {
+      this.startAdaptiveMonitoring()
+    }
   }
 
   /**
@@ -146,6 +164,9 @@ export class WorkerPool {
    * Destroy all workers and reject pending acquire calls.
    */
   async drain(): Promise<void> {
+    // Stop adaptive monitoring
+    this.stopAdaptiveMonitoring()
+
     // Clear all idle timers
     for (const timer of this.idleTimers) {
       clearTimeout(timer)
@@ -184,6 +205,91 @@ export class WorkerPool {
       active: this.active.size,
       idle: this.idle.length,
       pending: this.waiters.length,
+      adaptiveMax: this.adaptiveMax,
+      cpuUsage: this.cpuUsage,
+      memoryUsage: this.memoryUsage,
+    }
+  }
+
+  /**
+   * Start adaptive concurrency monitoring.
+   * Checks system resources every 5 seconds and adjusts max workers.
+   */
+  private startAdaptiveMonitoring(): void {
+    this.adaptiveTimer = setInterval(() => {
+      this.updateSystemMetrics()
+      this.adjustConcurrency()
+    }, 5000)
+  }
+
+  /**
+   * Update system CPU and memory usage metrics.
+   */
+  private updateSystemMetrics(): void {
+    // Calculate CPU usage (average across all cores)
+    const cpusInfo = cpus()
+    let totalIdle = 0
+    let totalTick = 0
+    
+    for (const cpu of cpusInfo) {
+      for (const type in cpu.times) {
+        totalTick += cpu.times[type as keyof typeof cpu.times]
+      }
+      totalIdle += cpu.times.idle
+    }
+    
+    this.cpuUsage = 1 - (totalIdle / totalTick)
+
+    // Calculate memory usage
+    const totalMem = totalmem()
+    const freeMem = freemem()
+    this.memoryUsage = 1 - (freeMem / totalMem)
+  }
+
+  /**
+   * Adjust max concurrent workers based on system metrics.
+   */
+  private adjustConcurrency(): void {
+    if (!this.config.adaptiveConcurrency) return
+
+    const baseMax = this.config.maxConcurrentWorkers
+    const minMax = this.config.minConcurrentWorkers
+
+    // Reduce workers if system is under heavy load
+    let targetMax = baseMax
+
+    // CPU-based adjustment
+    if (this.cpuUsage > this.config.maxCpuUsage) {
+      const cpuOverload = (this.cpuUsage - this.config.maxCpuUsage) / (1 - this.config.maxCpuUsage)
+      targetMax = Math.max(minMax, Math.floor(baseMax * (1 - cpuOverload * 0.5)))
+    }
+
+    // Memory-based adjustment
+    if (this.memoryUsage > this.config.maxMemoryUsage) {
+      const memOverload = (this.memoryUsage - this.config.maxMemoryUsage) / (1 - this.config.maxMemoryUsage)
+      targetMax = Math.max(minMax, Math.floor(targetMax * (1 - memOverload * 0.5)))
+    }
+
+    // Apply adjustment with smooth transition (max 1 worker change per cycle)
+    if (targetMax < this.adaptiveMax) {
+      this.adaptiveMax = Math.max(targetMax, this.adaptiveMax - 1)
+    } else if (targetMax > this.adaptiveMax) {
+      this.adaptiveMax = Math.min(targetMax, this.adaptiveMax + 1)
+    }
+
+    // Update available slots if we reduced capacity
+    if (this.adaptiveMax < this.availableSlots + this.active.size) {
+      this.availableSlots = Math.max(0, this.adaptiveMax - this.active.size)
+    }
+  }
+
+  /**
+   * Stop adaptive monitoring.
+   */
+  private stopAdaptiveMonitoring(): void {
+    if (this.adaptiveTimer) {
+      clearInterval(this.adaptiveTimer)
+      this.adaptiveTimer = undefined
     }
   }
 
