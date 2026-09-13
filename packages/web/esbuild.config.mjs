@@ -23,8 +23,9 @@ const ctx = await context({
   sourcemap: !isProd,
   jsx: 'automatic',
   define: {
-    'process.env.NODE_ENV': isProd ? '"production"' : '"development"',
+    'process.env.NODE_ENV': isProd ? '"production"': '"development"',
   },
+  conditions: ['style'],
 })
 
 if (isWatch) {
