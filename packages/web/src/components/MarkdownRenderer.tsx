@@ -124,7 +124,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
   return (
     <div
       className="prose prose-invert prose-sm max-w-none leading-relaxed"
-      style={{ color: '#f7f7f2' }}
+      style={{ color: '#e5e5e5' }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )
