@@ -4,18 +4,20 @@
 .scroll-hidden::-webkit-scrollbar { display: none; }
 .scroll-hidden { scrollbar-width: none; }
 
-/* Prose styling for markdown */
-.prose pre { background: #1e1e2e; border-radius: 0.5rem; }
-.prose code { color: #cdd6f4; }
+/* Prose styling for markdown - minimal black & white */
+.prose pre { background: #111; border: 1px solid #222; border-radius: 0.25rem; }
+.prose code { color: #e5e5e5; }
 .prose p { margin-bottom: 0.5rem; }
 .prose h1, .prose h2, .prose h3 { color: #fff; }
 .prose table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
-.prose th, .prose td { padding: 0.5rem 0.75rem; border: 1px solid #374151; text-align: left; }
-.prose th { background: #1f2937; font-weight: 600; color: #f3f4f6; }
-.prose td { color: #d1d5db; }
-.prose tr:nth-child(even) { background: #111827; }
-.prose blockquote { border-left: 3px solid #4b5563; padding-left: 1rem; color: #9ca3af; margin: 1rem 0; }
+.prose th, .prose td { padding: 0.5rem 0.75rem; border: 1px solid #333; text-align: left; }
+.prose th { background: #111; font-weight: 600; color: #fff; }
+.prose td { color: #d4d4d4; }
+.prose tr:nth-child(even) { background: #0a0a0a; }
+.prose blockquote { border-left: 2px solid #444; padding-left: 1rem; color: #888; margin: 1rem 0; }
 .prose ul { list-style-type: disc; padding-left: 1.5rem; margin: 0.5rem 0; }
 .prose ol { list-style-type: decimal; padding-left: 1.5rem; margin: 0.5rem 0; }
 .prose li { margin: 0.25rem 0; }
-.prose strong { color: #f3f4f6; }
+.prose strong { color: #fff; }
+.prose a { color: #fff; text-decoration: underline; }
+.prose a:hover { color: #ccc; }

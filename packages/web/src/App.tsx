@@ -17,13 +17,9 @@ export function App() {
   }, [client])
 
   return (
-    <div className="flex h-screen bg-gray-950 text-gray-100">
-      {/* Sidebar */}
+    <div className="flex h-screen bg-black text-white">
       <Sidebar client={client} />
-
-      {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Route content */}
         <div className="flex-1 overflow-hidden">
           {route.path === '/' && <ChatView connected={connected} />}
           {route.path === '/session/:id' && <SessionDetailView sessionId={route.params.id} connected={connected} />}

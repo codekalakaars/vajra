@@ -123,7 +123,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
 
   return (
     <div
-      className="prose prose-invert prose-sm max-w-none text-gray-200 leading-relaxed"
+      className="prose prose-invert prose-sm max-w-none text-zinc-300 leading-relaxed"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )
