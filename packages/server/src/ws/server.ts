@@ -2,10 +2,10 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import type { Server as HttpServer } from 'node:http'
 import type { ClientMessage, PushEvent } from '@codekalakaars/vajra-protocol'
 import type { SqliteDb } from '../db/client.js'
-import { SessionManager, notImplementedLauncher, type SessionLauncher } from '../session/manager.js'
+import { ProjectManager, notImplementedLauncher, type ProjectLauncher } from '../project/manager.js'
 import { RpcRouter } from './rpc.js'
 import { registerProjectHandlers } from './handlers/projects.js'
-import { registerSessionHandlers } from './handlers/sessions.js'
+import { registerProjectHandlers as registerSessionHandlers } from './handlers/projects-handler.js'
 
 class ClientConnection {
   private subscriptions = new Set<string>()
@@ -15,12 +15,12 @@ class ClientConnection {
     private registry: Map<string, Set<ClientConnection>>,
   ) {}
 
-  subscribe(sessionId: string): void {
-    this.subscriptions.add(sessionId)
-    let set = this.registry.get(sessionId)
+  subscribe(projectId: string): void {
+    this.subscriptions.add(projectId)
+    let set = this.registry.get(projectId)
     if (!set) {
       set = new Set()
-      this.registry.set(sessionId, set)
+      this.registry.set(projectId, set)
     }
     set.add(this)
   }
@@ -32,22 +32,22 @@ class ClientConnection {
   }
 
   cleanup(): void {
-    for (const sessionId of this.subscriptions) {
-      this.registry.get(sessionId)?.delete(this)
+    for (const projectId of this.subscriptions) {
+      this.registry.get(projectId)?.delete(this)
     }
   }
 }
 
 export interface ServerContext {
   db: SqliteDb
-  sessions: SessionManager
+  projects: ProjectManager
   connection: ClientConnection
   apiKeys: Record<string, string>
 }
 
 export interface CreateAppServerOptions {
   db: SqliteDb
-  launcher?: SessionLauncher
+  launcher?: ProjectLauncher
   apiKeys?: Record<string, string>
 }
 
@@ -55,15 +55,15 @@ export function createAppServer(httpServer: HttpServer, options: CreateAppServer
   const subscribers = new Map<string, Set<ClientConnection>>()
 
   const events = {
-    push(event: string, sessionId: string, payload: unknown): void {
-      const message: PushEvent = { kind: 'event', event, sessionId, payload }
-      for (const conn of subscribers.get(sessionId) ?? []) {
+    push(event: string, projectId: string, payload: unknown): void {
+      const message: PushEvent = { kind: 'event', event, sessionId: projectId, payload }
+      for (const conn of subscribers.get(projectId) ?? []) {
         conn.send(message)
       }
     },
   }
 
-  const sessions = new SessionManager(options.db, options.launcher ?? notImplementedLauncher, events)
+  const projects = new ProjectManager(options.db, options.launcher ?? notImplementedLauncher, events)
 
   const router = new RpcRouter<ServerContext>()
   registerProjectHandlers(router)
@@ -83,7 +83,7 @@ export function createAppServer(httpServer: HttpServer, options: CreateAppServer
       }
       if (request.kind !== 'rpc') return
 
-      const ctx: ServerContext = { db: options.db, sessions, connection, apiKeys: options.apiKeys ?? {} }
+      const ctx: ServerContext = { db: options.db, projects, connection, apiKeys: options.apiKeys ?? {} }
       const response = await router.dispatch(request, ctx)
       connection.send(response)
     })
@@ -91,5 +91,5 @@ export function createAppServer(httpServer: HttpServer, options: CreateAppServer
     ws.on('close', () => connection.cleanup())
   })
 
-  return { wss, sessions }
+  return { wss, projects }
 }

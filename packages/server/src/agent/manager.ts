@@ -10,7 +10,7 @@
 // sandboxed worker via the LaunchHandle, same as the single-agent loop.
 
 import type { SqliteDb } from '../db/client.js'
-import type { PushEvents, LaunchHandle } from '../session/manager.js'
+import type { PushEvents, LaunchHandle } from '../project/manager.js'
 import type { ManagerPlan, PlannedTask, ToolName } from '@codekalakaars/vajra-protocol'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { getManagerToolSpecs, parseToolCall } from './tools.js'
@@ -25,6 +25,7 @@ function buildManagerConversationPrompt(
   projectDir: string,
   tree: string,
   summary: string,
+  architecture?: string,
 ): string {
   return [
     'You are the Manager — a software engineering planning agent.',
@@ -59,6 +60,10 @@ function buildManagerConversationPrompt(
     '- dependsOn: Task IDs this depends on',
     '- type: create, modify, delete, or refactor',
     '- allowedTools: Tools this worker can use (optional, defaults to task-type defaults)',
+    '- complexity: low, medium, or high (affects task sizing)',
+    '- validationStrategy: hierarchical, incremental, or contextAware (optional)',
+    '- rollback: Commands to undo changes if validation fails (optional)',
+    '- alternativeApproaches: Different ways to solve this task (optional)',
     '',
     'CRITICAL: Instructions should be so specific that a worker with no context can execute them.',
     'Bad: "Add error handling to the API"',
@@ -67,6 +72,20 @@ function buildManagerConversationPrompt(
     'Tasks should be independent where possible; specify dependencies explicitly.',
     'Aim for 2-8 tasks; keep related work together.',
     '',
+    'Task Sizing Guidelines:',
+    '- Low complexity: Single file, simple changes (1-2 hours)',
+    '- Medium complexity: Multiple files, moderate changes (2-4 hours)',
+    '- High complexity: Architecture changes, many files (4+ hours)',
+    '',
+    'Validation Strategies:',
+    '- hierarchical: Run unit tests first, then integration, then e2e (default)',
+    '- incremental: Validate after each task completes',
+    '- contextAware: Only validate files that changed in this task',
+    '',
+    'Error Recovery:',
+    '- rollback: Commands to undo changes if validation fails',
+    '- alternativeApproaches: Different ways to solve this task',
+    '',
     'Project directory: ' + projectDir,
     '',
     'Project structure:',
@@ -74,6 +93,8 @@ function buildManagerConversationPrompt(
     '',
     'File summaries (path [lines, imports, exports]: exported symbols):',
     summary,
+    '',
+    ...(architecture ? ['Architecture:', architecture] : []),
   ].join('\n')
 }
 
@@ -206,6 +227,96 @@ function searchSummary(summary: SummaryEntry[], query: string): string {
     .join('\n\n')
 }
 
+/**
+ * Identify key files in the project for initial exploration.
+ * Returns files that are likely entry points, configs, or architecture-defining.
+ */
+function identifyKeyFiles(summary: SummaryEntry[], tree: string): string[] {
+  const keyFiles: string[] = []
+  
+  // Common entry points and config files
+  const entryPatterns = [
+    /package\.json$/,
+    /tsconfig\.json$/,
+    /src\/index\.(ts|js|tsx|jsx)$/,
+    /src\/main\.(ts|js|tsx|jsx)$/,
+    /src\/app\.(ts|js|tsx|jsx)$/,
+    /src\/App\.(ts|js|tsx|jsx)$/,
+    /src\/routes?\.(ts|js)$/,
+    /src\/server\.(ts|js)$/,
+    /src\/client\.(ts|js)$/,
+    /README\.md$/,
+    /.*config\.(ts|js|json)$/,
+    /.*\.config\.(ts|js|json)$/,
+  ]
+  
+  // Find files matching entry patterns
+  for (const entry of summary) {
+    for (const pattern of entryPatterns) {
+      if (pattern.test(entry.path)) {
+        keyFiles.push(entry.path)
+        break
+      }
+    }
+  }
+  
+  // Find files with high export counts (likely architecture-defining)
+  const highExportFiles = summary
+    .filter(e => e.exportCount >= 3)
+    .sort((a, b) => b.exportCount - a.exportCount)
+    .slice(0, 5)
+    .map(e => e.path)
+  
+  keyFiles.push(...highExportFiles)
+  
+  // Find files with many imports (likely integration points)
+  const highImportFiles = summary
+    .filter(e => e.importCount >= 5)
+    .sort((a, b) => b.importCount - a.importCount)
+    .slice(0, 5)
+    .map(e => e.path)
+  
+  keyFiles.push(...highImportFiles)
+  
+  // Deduplicate and return top files
+  return [...new Set(keyFiles)].slice(0, 10)
+}
+
+/**
+ * Analyze project architecture from key files.
+ * Returns a summary of the project's structure and patterns.
+ */
+async function analyzeArchitecture(
+  projectDir: string,
+  summary: SummaryEntry[],
+  handle: LaunchHandle,
+): Promise<string> {
+  const keyFiles = identifyKeyFiles(summary, '')
+  const architectureParts: string[] = []
+  
+  // Read key files to understand architecture
+  for (const filePath of keyFiles.slice(0, 5)) {
+    try {
+      const result = await handle.callTool('read_file', { path: filePath })
+      const content = typeof result === 'string' ? result : JSON.stringify(result)
+      
+      // Extract architecture-relevant info
+      const lines = content.split('\n')
+      const imports = lines.filter(l => l.startsWith('import ')).slice(0, 5)
+      const exports = lines.filter(l => l.startsWith('export ')).slice(0, 5)
+      
+      architectureParts.push(`--- ${filePath} ---`)
+      if (imports.length > 0) architectureParts.push(`Imports: ${imports.join(', ')}`)
+      if (exports.length > 0) architectureParts.push(`Exports: ${exports.join(', ')}`)
+      architectureParts.push('')
+    } catch {
+      // Skip unreadable files
+    }
+  }
+  
+  return architectureParts.join('\n')
+}
+
 function parseProposePlanArgs(raw: unknown): ManagerPlan {
   const args = raw as {
     tasks: Array<{
@@ -220,11 +331,14 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
       dependsOn: string[]
       type: string
       allowedTools?: string[]
+      complexity?: string
+      validationStrategy?: string
+      alternativeApproaches?: string[]
     }>
     summary: string
   }
 
-  const tasks: PlannedTask[] = args.tasks.map((t, i) => ({
+  let tasks: PlannedTask[] = args.tasks.map((t, i) => ({
     id: `task-${i + 1}`,
     title: t.title,
     description: t.description,
@@ -237,6 +351,9 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
     dependsOn: t.dependsOn ?? [],
     type: (['create', 'modify', 'delete', 'refactor'].includes(t.type) ? t.type : 'modify') as PlannedTask['type'],
     allowedTools: t.allowedTools,
+    complexity: (['low', 'medium', 'high'].includes(t.complexity ?? '') ? t.complexity : 'medium') as 'low' | 'medium' | 'high',
+    validationStrategy: (['hierarchical', 'incremental', 'contextAware'].includes(t.validationStrategy ?? '') ? t.validationStrategy : 'hierarchical') as 'hierarchical' | 'incremental' | 'contextAware',
+    alternativeApproaches: t.alternativeApproaches ?? [],
   }))
 
   // Validate dependency references exist
@@ -244,6 +361,12 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
   for (const task of tasks) {
     task.dependsOn = task.dependsOn.filter((dep) => taskIds.has(dep))
   }
+
+  // Detect and remove circular dependencies
+  tasks = detectAndRemoveCircularDeps(tasks)
+
+  // Add file-level dependencies (tasks that write to files read by other tasks)
+  tasks = addFileLevelDependencies(tasks)
 
   // Compute independent groups from dependency graph
   const independentGroups: string[][] = []
@@ -264,16 +387,157 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
     independentGroups.push(group)
   }
 
+  // Optimize task ordering for parallelism
+  const optimizedTasks = optimizeTaskOrder(tasks, independentGroups)
+
+  // Estimate task durations
+  const tasksWithDuration = estimateTaskDurations(optimizedTasks)
+
   return {
-    tasks,
+    tasks: tasksWithDuration,
     independentGroups,
     estimatedWorkers: Math.max(1, ...independentGroups.map((g) => g.length)),
   }
 }
 
+/**
+ * Estimate task duration based on complexity and file count.
+ * Returns tasks with estimatedDuration added.
+ */
+function estimateTaskDurations(tasks: PlannedTask[]): PlannedTask[] {
+  // Base duration in minutes by complexity
+  const baseDuration: Record<string, number> = {
+    low: 30,    // 30 minutes
+    medium: 120, // 2 hours
+    high: 240,   // 4 hours
+  }
+
+  return tasks.map(task => {
+    const base = baseDuration[task.complexity ?? 'medium'] ?? 120
+    
+    // Adjust based on file count
+    const fileCount = task.readFile.length + task.writeFile.length
+    const fileMultiplier = Math.max(1, fileCount / 3) // 3 files = 1x, 6 files = 2x
+    
+    // Adjust based on validation count
+    const validationMultiplier = Math.max(1, task.validation.length / 2) // 2 commands = 1x
+    
+    const estimatedDuration = Math.round(base * fileMultiplier * validationMultiplier)
+    
+    return {
+      ...task,
+      estimatedDuration,
+    }
+  })
+}
+
+/**
+ * Detect and remove circular dependencies using DFS.
+ * Returns tasks with circular dependencies removed.
+ */
+function detectAndRemoveCircularDeps(tasks: PlannedTask[]): PlannedTask[] {
+  const taskMap = new Map(tasks.map(t => [t.id, t]))
+  const visited = new Set<string>()
+  const recursionStack = new Set<string>()
+  const circularDeps = new Set<string>()
+
+  function dfs(taskId: string): boolean {
+    if (recursionStack.has(taskId)) {
+      // Found circular dependency
+      circularDeps.add(taskId)
+      return true
+    }
+    if (visited.has(taskId)) return false
+
+    visited.add(taskId)
+    recursionStack.add(taskId)
+
+    const task = taskMap.get(taskId)
+    if (task) {
+      for (const dep of task.dependsOn) {
+        if (dfs(dep)) {
+          circularDeps.add(taskId)
+        }
+      }
+    }
+
+    recursionStack.delete(taskId)
+    return circularDeps.has(taskId)
+  }
+
+  // Check all tasks for circular dependencies
+  for (const task of tasks) {
+    dfs(task.id)
+  }
+
+  // Remove circular dependencies
+  if (circularDeps.size > 0) {
+    console.warn(`Removing circular dependencies from tasks: ${[...circularDeps].join(', ')}`)
+    for (const task of tasks) {
+      if (circularDeps.has(task.id)) {
+        task.dependsOn = [] // Remove all dependencies for circular tasks
+      } else {
+        task.dependsOn = task.dependsOn.filter(dep => !circularDeps.has(dep))
+      }
+    }
+  }
+
+  return tasks
+}
+
+/**
+ * Add file-level dependencies based on file access patterns.
+ * If task A writes to a file that task B reads, B should depend on A.
+ */
+function addFileLevelDependencies(tasks: PlannedTask[]): PlannedTask[] {
+  const taskMap = new Map(tasks.map(t => [t.id, t]))
+  
+  for (const task of tasks) {
+    // Find tasks that write to files this task reads
+    for (const other of tasks) {
+      if (task.id === other.id) continue
+      
+      // Check if other task writes to files this task reads
+      const writesToReadFiles = other.writeFile.some(file => 
+        task.readFile.includes(file) || task.writeFile.includes(file)
+      )
+      
+      if (writesToReadFiles && !task.dependsOn.includes(other.id)) {
+        // Add dependency if not already present
+        task.dependsOn.push(other.id)
+      }
+    }
+  }
+  
+  return tasks
+}
+
+/**
+ * Optimize task order for better parallelism.
+ * Reorders tasks within groups to maximize parallel execution.
+ */
+function optimizeTaskOrder(tasks: PlannedTask[], independentGroups: string[][]): PlannedTask[] {
+  const taskMap = new Map(tasks.map(t => [t.id, t]))
+  const optimized: PlannedTask[] = []
+  
+  for (const group of independentGroups) {
+    // Sort tasks within group by complexity (low first for quick wins)
+    const groupTasks = group
+      .map(id => taskMap.get(id)!)
+      .sort((a, b) => {
+        const complexityOrder = { low: 0, medium: 1, high: 2 }
+        return (complexityOrder[a.complexity ?? 'medium'] ?? 1) - (complexityOrder[b.complexity ?? 'medium'] ?? 1)
+      })
+    
+    optimized.push(...groupTasks)
+  }
+  
+  return optimized
+}
+
 function appendMessage(
   db: SqliteDb,
-  sessionId: string,
+  projectId: string,
   seq: number,
   role: string,
   content: string | null,
@@ -281,19 +545,19 @@ function appendMessage(
   db.prepare(
     `INSERT INTO messages (session_id, seq, role, content, created_at)
      VALUES (?, ?, ?, ?, ?)`,
-  ).run(sessionId, seq, role, content, Date.now())
+  ).run(projectId, seq, role, content, Date.now())
 }
 
-function nextSeq(db: SqliteDb, sessionId: string): number {
+function nextSeq(db: SqliteDb, projectId: string): number {
   const row = db.prepare(`SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM messages WHERE session_id = ?`)
-    .get(sessionId) as { next_seq: number }
+    .get(projectId) as { next_seq: number }
   return row.next_seq
 }
 
 // ---- Public API ----
 
 export interface ManagerTurnInput {
-  sessionId: string
+  projectId: string
   projectDir: string
   userMessage: string
   model: string
@@ -324,11 +588,12 @@ export type ManagerTurnResult =
 export async function managerConversationTurn(
   input: ManagerTurnInput,
 ): Promise<ManagerTurnResult> {
-  const { sessionId, projectDir, userMessage, model, apiKey, provider, events, db, handle, messages, summaryIndex } = input
+  const { projectId, projectDir, userMessage, model, apiKey, provider, events, db, handle, messages, summaryIndex } = input
 
   // First turn: build system prompt and project context
   if (messages.length === 0) {
     let tree = ''
+    let architecture = ''
     try {
       const entries = scanProject(projectDir)
       tree = buildNestedTree(entries)
@@ -337,6 +602,15 @@ export async function managerConversationTurn(
         const indexed = buildSummaryIndex(projectDir, entries)
         summaryIndex.push(...indexed)
       }
+      
+      // Auto-analyze architecture from key files
+      events.push('projects.workerProgress', projectId, {
+        projectId,
+        agentId: 'manager',
+        taskId: 'master',
+        detail: 'Analyzing project architecture...',
+      })
+      architecture = await analyzeArchitecture(projectDir, summaryIndex, handle)
     } catch {
       tree = '(unable to read project tree)'
     }
@@ -344,13 +618,13 @@ export async function managerConversationTurn(
     const summaryText = formatSummaryIndexHierarchical(summaryIndex)
     messages.push({
       role: 'system',
-      content: buildManagerConversationPrompt(projectDir, tree, summaryText),
+      content: buildManagerConversationPrompt(projectDir, tree, summaryText, architecture),
     })
   }
 
   // Persist user message
-  const userSeq = nextSeq(db, sessionId)
-  appendMessage(db, sessionId, userSeq, 'user', userMessage)
+  const userSeq = nextSeq(db, projectId)
+  appendMessage(db, projectId, userSeq, 'user', userMessage)
 
   // Add user message to conversation
   messages.push({ role: 'user', content: userMessage })
@@ -367,15 +641,15 @@ export async function managerConversationTurn(
 
     const result = await provider.streamChat(
       { apiKey, model, messages: compressedMessages, tools: toolSpecs },
-      (text) => events.push('session.assistantDelta', sessionId, { text }),
-      (thinking) => events.push('session.thinkingDelta', sessionId, { text: thinking }),
+      (text) => events.push('projects.assistantDelta', projectId, { text }),
+      (thinking) => events.push('projects.thinkingDelta', projectId, { text: thinking }),
     )
 
     // No tool calls — text response to user
     if (!result.message.toolCalls || result.message.toolCalls.length === 0) {
       const content = result.message.content ?? ''
-      const seq = nextSeq(db, sessionId)
-      appendMessage(db, sessionId, seq, 'assistant', content)
+      const seq = nextSeq(db, projectId)
+      appendMessage(db, projectId, seq, 'assistant', content)
       messages.push(result.message)
       return { type: 'response', response: content }
     }
@@ -402,8 +676,8 @@ export async function managerConversationTurn(
         const plan = parseProposePlanArgs(parsed)
 
         // Inject relevant code context into task instructions
-        events.push('session.workerProgress', sessionId, {
-          sessionId,
+        events.push('projects.workerProgress', projectId, {
+          projectId,
           agentId: 'manager',
           taskId: 'master',
           detail: 'Injecting code context into task instructions...',
@@ -430,15 +704,15 @@ export async function managerConversationTurn(
         }
 
         // Emit plan events
-        events.push('session.planStarted', sessionId, { sessionId })
+        events.push('projects.planStarted', projectId, { projectId })
         for (const t of plan.tasks) {
-          events.push('session.planTask', sessionId, { sessionId, task: t })
+          events.push('projects.planTask', projectId, { projectId, task: t })
         }
-        events.push('session.planComplete', sessionId, { sessionId, plan })
+        events.push('projects.planComplete', projectId, { projectId, plan })
 
         // Persist the plan as the final assistant message
-        const planSeq = nextSeq(db, sessionId)
-        appendMessage(db, sessionId, planSeq, 'assistant', JSON.stringify(plan))
+        const planSeq = nextSeq(db, projectId)
+        appendMessage(db, projectId, planSeq, 'assistant', JSON.stringify(plan))
 
         return { type: 'plan', plan }
       }

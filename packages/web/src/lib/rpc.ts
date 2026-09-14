@@ -12,7 +12,7 @@ export type RpcMethodMap = {
   'project.browse': { params: { dir: string }; result: Array<{ name: string; path: string; isDir: boolean }> }
   'projects.list': { params: Record<string, never>; result: Array<{ id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }> }
   'projects.create': { params: { projectDir: string; task: string; model: string; permissions: PermissionsConfig; allowUnenforced?: boolean }; result: { projectId: string } }
-  'projects.attach': { params: { projectId: string }; result: { session: Record<string, unknown>; plan: Array<unknown>; messages: Array<unknown> } }
+  'projects.attach': { params: { projectId: string }; result: { project: Record<string, unknown>; plan: Array<unknown>; messages: Array<unknown> } }
   'projects.stop': { params: { projectId: string }; result: { ok: true } }
   'projects.delete': { params: { projectId: string }; result: { ok: true } }
   'projects.sendMessage': { params: { projectId: string; content: string }; result: { ok: true } }

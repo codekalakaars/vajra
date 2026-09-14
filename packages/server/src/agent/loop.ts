@@ -5,7 +5,7 @@
 // worker. Streams text and thinking deltas via push events.
 
 import type { SqliteDb } from '../db/client.js'
-import type { PushEvents, LaunchHandle } from '../session/manager.js'
+import type { PushEvents, LaunchHandle } from '../project/manager.js'
 import type { PermissionsConfig, ToolName } from '@codekalakaars/vajra-protocol'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { getToolSpecs, parseToolCall } from './tools.js'
@@ -18,7 +18,7 @@ const MAX_TOOL_CALLS = 150
 const FREE_TOOLS = new Set(['search_files'])
 
 export interface AgentLoopInput {
-  session: {
+  project: {
     id: string
     projectDir: string
     task: string
@@ -95,7 +95,7 @@ function searchSummary(summary: SummaryEntry[], query: string): string {
 
 function appendMessage(
   db: SqliteDb,
-  sessionId: string,
+  projectId: string,
   seq: number,
   role: string,
   content: string | null,
@@ -106,12 +106,12 @@ function appendMessage(
   db.prepare(
     `INSERT INTO messages (session_id, seq, role, content, tool_name, tool_call_id, tool_args, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(sessionId, seq, role, content, toolName ?? null, toolCallId ?? null, toolCalls ?? null, Date.now())
+  ).run(projectId, seq, role, content, toolName ?? null, toolCallId ?? null, toolCalls ?? null, Date.now())
 }
 
-function nextSeq(db: SqliteDb, sessionId: string): number {
+function nextSeq(db: SqliteDb, projectId: string): number {
   const row = db.prepare(`SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM messages WHERE session_id = ?`)
-    .get(sessionId) as { next_seq: number }
+    .get(projectId) as { next_seq: number }
   return row.next_seq
 }
 
@@ -121,31 +121,31 @@ function nextSeq(db: SqliteDb, sessionId: string): number {
  * LLM tools to search and read files, and handles tool calls in a loop.
  */
 export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult> {
-  const { session, apiKey, provider, handle, events, db } = input
+  const { project, apiKey, provider, handle, events, db } = input
 
   // Build project context
   let tree: string
   let summaryIndex: SummaryEntry[]
   try {
-    const entries = scanProject(session.projectDir)
+    const entries = scanProject(project.projectDir)
     tree = buildNestedTree(entries)
-    summaryIndex = buildSummaryIndex(session.projectDir, entries)
+    summaryIndex = buildSummaryIndex(project.projectDir, entries)
   } catch {
     tree = '(unable to read project tree)'
     summaryIndex = []
   }
 
   const summaryText = formatSummaryIndex(summaryIndex)
-  const systemPrompt = buildSystemPrompt(session.projectDir, session.task, tree, summaryText, MAX_TOOL_CALLS)
+  const systemPrompt = buildSystemPrompt(project.projectDir, project.task, tree, summaryText, MAX_TOOL_CALLS)
 
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: session.task },
+    { role: 'user', content: project.task },
   ]
 
   // Persist the user message
-  const userSeq = nextSeq(db, session.id)
-  appendMessage(db, session.id, userSeq, 'user', session.task)
+  const userSeq = nextSeq(db, project.id)
+  appendMessage(db, project.id, userSeq, 'user', project.task)
 
   const providerType = provider.name === 'anthropic' ? 'anthropic' : 'openai'
   const toolSpecs = getToolSpecs(providerType)
@@ -154,28 +154,28 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
   // Tool-use loop
   while (toolCallCount < MAX_TOOL_CALLS) {
     // Compress messages to fit within context window
-    const compressedMessages = compressMessages(messages, session.model)
+    const compressedMessages = compressMessages(messages, project.model)
 
     const result = await provider.streamChat(
       {
         apiKey,
-        model: session.model,
+        model: project.model,
         messages: compressedMessages,
         tools: toolSpecs,
       },
       (text) => {
-        events.push('session.assistantDelta', session.id, { text })
+        events.push('projects.assistantDelta', project.id, { text })
       },
       (thinking) => {
-        events.push('session.thinkingDelta', session.id, { text: thinking })
+        events.push('projects.thinkingDelta', project.id, { text: thinking })
       },
     )
 
     // If no tool calls, we're done
     if (!result.message.toolCalls || result.message.toolCalls.length === 0) {
       const content = result.message.content ?? ''
-      const seq = nextSeq(db, session.id)
-      appendMessage(db, session.id, seq, 'assistant', content)
+      const seq = nextSeq(db, project.id)
+      appendMessage(db, project.id, seq, 'assistant', content)
       return { summary: content, toolCallCount }
     }
 
@@ -192,7 +192,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
       }
 
       const parsed = parseToolCall(toolCall)
-      events.push('session.toolCall', session.id, {
+      events.push('projects.toolCall', project.id, {
         callId: toolCall.id,
         tool: toolCall.name,
         args: parsed.ok ? parsed.call.args : {},
@@ -216,7 +216,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
         }
       }
 
-      events.push('session.toolResult', session.id, {
+      events.push('projects.toolResult', project.id, {
         callId: toolCall.id,
         tool: toolCall.name,
         ok: !resultContent.startsWith('Error:'),
@@ -231,10 +231,10 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
       })
 
       // Persist tool result
-      const toolSeq = nextSeq(db, session.id)
+      const toolSeq = nextSeq(db, project.id)
       appendMessage(
         db,
-        session.id,
+        project.id,
         toolSeq,
         'tool',
         resultContent,
@@ -247,6 +247,6 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
 
   // Exceeded max tool calls
   const finalContent = `Exceeded maximum tool calls (${MAX_TOOL_CALLS}). Stopping.`
-  events.push('session.assistantDelta', session.id, { text: finalContent })
+  events.push('projects.assistantDelta', project.id, { text: finalContent })
   return { summary: finalContent, toolCallCount }
 }

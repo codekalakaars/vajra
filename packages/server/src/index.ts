@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url'
 import dotenv from 'dotenv'
 import { openDb } from './db/client.js'
 import { createAppServer } from './ws/server.js'
-import type { SessionLauncher } from './session/manager.js'
-import { forkSessionLauncher } from './session/launcher.js'
+import type { ProjectLauncher } from './project/manager.js'
+import { forkProjectLauncher } from './project/launcher.js'
 
 dotenv.config()
 if (!process.env.OPENROUTER_API_KEY && !process.env.ANTHROPIC_API_KEY) {
@@ -16,7 +16,7 @@ if (!process.env.OPENROUTER_API_KEY && !process.env.ANTHROPIC_API_KEY) {
 export interface StartOptions {
   port?: number
   dbPath?: string
-  launcher?: SessionLauncher
+  launcher?: ProjectLauncher
   apiKeys?: Record<string, string>
 }
 
@@ -65,7 +65,7 @@ if (isMain) {
     console.error('  See .env.example at the repo root')
     process.exit(1)
   }
-  startServer({ port, apiKeys, launcher: forkSessionLauncher }).then((server) => {
+  startServer({ port, apiKeys, launcher: forkProjectLauncher }).then((server) => {
     console.log(`vajra server listening on :${server.port}`)
   })
 }

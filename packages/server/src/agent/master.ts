@@ -12,7 +12,7 @@
 // sandboxed worker. It communicates with workers through the main process.
 
 import type { SqliteDb } from '../db/client.js'
-import type { PushEvents, LaunchHandle } from '../session/manager.js'
+import type { PushEvents, LaunchHandle } from '../project/manager.js'
 import type { ManagerPlan, PlannedTask, PermissionsConfig, ToolName } from '@codekalakaars/vajra-protocol'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { FileLockManager, ChangeHistory, type ResourceLimits } from '@codekalakaars/vajra-sandbox'
@@ -20,14 +20,14 @@ import { TaskQueue, type TaskState } from './taskqueue.js'
 import { AgentRegistry, type AgentState } from './registry.js'
 import { getToolSpecs } from './tools.js'
 import { roleTools } from '@codekalakaars/vajra-protocol'
-import type { WorkerPool } from '../session/pool.js'
+import type { WorkerPool } from '../project/pool.js'
 import { access } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { compressMessages } from './context.js'
 import { buildSummaryIndex, compressSummaryByRelevance } from './summary.js'
 
 export interface MasterInput {
-  sessionId: string
+  projectId: string
   projectDir: string
   plan: ManagerPlan
   model: string
@@ -49,7 +49,7 @@ export interface MasterInput {
 }
 
 export interface WorkerJob {
-  sessionId: string
+  projectId: string
   projectDir: string
   role: 'worker'
   permissions: PermissionsConfig
@@ -145,7 +145,7 @@ async function evaluateSkipIf(
 }
 
 export async function masterLoop(input: MasterInput): Promise<MasterResult> {
-  const { sessionId, projectDir, plan, model, apiKey, provider, events, db, registry, launchWorker, resourceLimits, pool } = input
+  const { projectId, projectDir, plan, model, apiKey, provider, events, db, registry, launchWorker, resourceLimits, pool } = input
 
   // Use provided file lock manager or create a new one
   const fileLocks = input.fileLocks ?? new FileLockManager()
@@ -154,11 +154,11 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   const changeHistory = input.changeHistory ?? new ChangeHistory()
 
   // Create master agent
-  const masterAgent = registry.createAgent(sessionId, 'master', 'Orchestrate task execution')
+  const masterAgent = registry.createAgent(projectId, 'master', 'Orchestrate task execution')
   registry.updateStatus(masterAgent.id, 'running')
 
   // Initialize task queue
-  const queue = new TaskQueue(db, sessionId)
+  const queue = new TaskQueue(db, projectId)
   for (const task of plan.tasks) {
     queue.addTask(task)
   }
@@ -178,8 +178,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   const prewarmedHandles = new Map<string, LaunchHandle>()
   
   if (prewarmCount > 0) {
-    events.push('session.workerProgress', sessionId, {
-      sessionId,
+    events.push('projects.workerProgress', projectId, {
+      projectId,
       agentId: masterAgent.id,
       taskId: 'master',
       detail: `Pre-warming ${prewarmCount} workers...`,
@@ -191,12 +191,12 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
     const prewarmPromises = prewarmTasks.map(async (task) => {
       try {
-        const agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
+        const agent = registry.createAgent(projectId, 'worker', task.title, masterAgent.id)
         const permissions = computeTaskPermissions(task)
         const toolPermissions = computeToolPermissions(task)
 
         const handle = await launchWorker({
-          sessionId,
+          projectId,
           projectDir,
           role: 'worker',
           permissions,
@@ -217,8 +217,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     const prewarmSuccess = prewarmResults.filter(r => r.status === 'fulfilled' && r.value.success).length
     const prewarmFailed = prewarmResults.filter(r => r.status === 'fulfilled' && !r.value.success).length
     
-    events.push('session.workerProgress', sessionId, {
-      sessionId,
+    events.push('projects.workerProgress', projectId, {
+      projectId,
       agentId: masterAgent.id,
       taskId: 'master',
       detail: `Pre-warmed ${prewarmSuccess} workers${prewarmFailed > 0 ? `, ${prewarmFailed} failed` : ''}`,
@@ -250,8 +250,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
           const owners = fileLocks.getOwners(file)
           const otherOwner = owners.find((o) => o !== task.id)
           if (otherOwner) {
-            events.push('session.conflictDetected', sessionId, {
-              sessionId,
+            events.push('projects.conflictDetected', projectId, {
+              projectId,
               task1: task.id,
               task2: otherOwner,
               files: [file],
@@ -271,8 +271,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
           const owners = fileLocks.getOwners(file)
           const otherOwner = owners.find((o) => o !== task.id)
           if (otherOwner) {
-            events.push('session.conflictDetected', sessionId, {
-              sessionId,
+            events.push('projects.conflictDetected', projectId, {
+              projectId,
               task1: task.id,
               task2: otherOwner,
               files: [file],
@@ -290,8 +290,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
           fileLocks.releaseAll(task.id)
           queue.skipTask(task.id)
           completedTasks.push(task.id)
-          events.push('session.workerProgress', sessionId, {
-            sessionId,
+          events.push('projects.workerProgress', projectId, {
+            projectId,
             agentId: masterAgent.id,
             taskId: task.id,
             detail: 'Skipped: skipIf condition met',
@@ -324,8 +324,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         const confidence = (completedDeps.length * 1.0 + runningDeps.length * 0.8) / deps.length
 
         if (confidence >= SPECULATIVE_CONFIDENCE_THRESHOLD) {
-          events.push('session.workerProgress', sessionId, {
-            sessionId,
+          events.push('projects.workerProgress', projectId, {
+            projectId,
             agentId: masterAgent.id,
             taskId: task.id,
             detail: `Speculative execution: confidence ${(confidence * 100).toFixed(0)}%`,
@@ -345,7 +345,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
     // Assign ready tasks
     for (const task of assignable) {
-      const agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
+      const agent = registry.createAgent(projectId, 'worker', task.title, masterAgent.id)
       queue.assignTask(task.id, agent.id)
       registry.updateStatus(agent.id, 'running')
 
@@ -354,8 +354,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       const toolPermissions = computeToolPermissions(task)
 
       // Launch the worker
-      events.push('session.workerStarted', sessionId, {
-        sessionId,
+      events.push('projects.workerStarted', projectId, {
+        projectId,
         agentId: agent.id,
         taskId: task.id,
       })
@@ -367,15 +367,15 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         if (prewarmedHandle) {
           handle = prewarmedHandle
           prewarmedHandles.delete(task.id)
-          events.push('session.workerProgress', sessionId, {
-            sessionId,
+          events.push('projects.workerProgress', projectId, {
+            projectId,
             agentId: agent.id,
             taskId: task.id,
             detail: 'Using pre-warmed worker',
           })
         } else {
           handle = await launchWorker({
-            sessionId,
+            projectId,
             projectDir,
             role: 'worker',
             permissions,
@@ -388,7 +388,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         queue.startTask(task.id)
 
         // Start task execution in background
-        executeTask(agent.id, task, handle, apiKey, model, provider, events, db, queue, registry, sessionId, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, resourceLimits, pool)
+        executeTask(agent.id, task, handle, apiKey, model, provider, events, db, queue, registry, projectId, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, resourceLimits, pool)
           .catch((e) => {
             console.error(`Worker ${agent.id} failed:`, e)
           })
@@ -401,8 +401,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         // Release file locks
         fileLocks.release(task.id)
 
-        events.push('session.workerFailed', sessionId, {
-          sessionId,
+        events.push('projects.workerFailed', projectId, {
+          projectId,
           agentId: agent.id,
           taskId: task.id,
           error: e instanceof Error ? e.message : String(e),
@@ -436,8 +436,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     })
 
     if (depFailed) {
-      events.push('session.workerProgress', sessionId, {
-        sessionId,
+      events.push('projects.workerProgress', projectId, {
+        projectId,
         agentId: masterAgent.id,
         taskId: specTaskId,
         detail: 'Rolling back speculative execution: dependency failed',
@@ -446,8 +446,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       // Rollback changes using change history
       if (changeHistory.hasChanges(specTaskId)) {
         const result = await changeHistory.rollback(specTaskId)
-        events.push('session.workerProgress', sessionId, {
-          sessionId,
+        events.push('projects.workerProgress', projectId, {
+          projectId,
           agentId: masterAgent.id,
           taskId: specTaskId,
           detail: `Restored ${result.restored.length} files, deleted ${result.deleted.length} files`,
@@ -472,8 +472,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
   // Cleanup any unused prewarmed handles
   for (const [taskId, handle] of prewarmedHandles) {
-    events.push('session.workerProgress', sessionId, {
-      sessionId,
+    events.push('projects.workerProgress', projectId, {
+      projectId,
       agentId: masterAgent.id,
       taskId,
       detail: 'Discarding unused pre-warmed worker',
@@ -515,7 +515,7 @@ function gatherDependencyContext(task: TaskState, queue: TaskQueue, db: SqliteDb
     const row = db.prepare(
       `SELECT content FROM messages WHERE session_id = ? AND role = 'assistant' AND content LIKE ?
        ORDER BY created_at DESC LIMIT 1`
-    ).get(task.sessionId, `%${depId}%`) as { content: string } | undefined
+    ).get(task.projectId, `%${depId}%`) as { content: string } | undefined
 
     let summary = ''
     if (row?.content) {
@@ -561,7 +561,7 @@ async function executeTask(
   db: SqliteDb,
   queue: TaskQueue,
   registry: AgentRegistry,
-  sessionId: string,
+  projectId: string,
   fileLocks: FileLockManager,
   changeHistory: ChangeHistory,
   activeWorkers: Map<string, { agent: AgentState; handle: LaunchHandle; taskId: string }>,
@@ -630,8 +630,8 @@ async function executeTask(
 
       const result = await provider.streamChat(
         { apiKey, model, messages: compressedMessages, tools: workerToolSpecs },
-        (text) => events.push('session.assistantDelta', sessionId, { text }),
-        (thinking) => events.push('session.thinkingDelta', sessionId, { text: thinking }),
+        (text) => events.push('projects.assistantDelta', projectId, { text }),
+        (thinking) => events.push('projects.thinkingDelta', projectId, { text: thinking }),
       )
 
       if (!result.message.toolCalls || result.message.toolCalls.length === 0) {
@@ -665,8 +665,8 @@ async function executeTask(
     let validationPassed = true
     if (task.validation.length > 0) {
       for (const cmd of task.validation) {
-        events.push('session.workerProgress', sessionId, {
-          sessionId,
+        events.push('projects.workerProgress', projectId, {
+          projectId,
           agentId,
           taskId: task.id,
           detail: `Running validation: ${cmd}`,
@@ -706,8 +706,8 @@ async function executeTask(
       queue.completeTask(task.id, true)
       completedTasks.push(task.id)
       registry.updateStatus(agentId, 'done')
-      events.push('session.workerCompleted', sessionId, {
-        sessionId,
+      events.push('projects.workerCompleted', projectId, {
+        projectId,
         agentId,
         taskId: task.id,
         validationPassed: true,
@@ -721,8 +721,8 @@ async function executeTask(
         // Rollback changes before retry
         if (changeHistory.hasChanges(task.id)) {
           await changeHistory.rollback(task.id)
-          events.push('session.workerProgress', sessionId, {
-            sessionId,
+          events.push('projects.workerProgress', projectId, {
+            projectId,
             agentId,
             taskId: task.id,
             detail: `Rolled back changes before retry ${retries + 1}/${maxRetries}`,
@@ -734,8 +734,8 @@ async function executeTask(
         queue.retryTask(task.id)
       } else {
         // Rollback using change history (preferred) or manual rollback commands
-        events.push('session.workerProgress', sessionId, {
-          sessionId,
+        events.push('projects.workerProgress', projectId, {
+          projectId,
           agentId,
           taskId: task.id,
           detail: 'Rolling back changes...',
@@ -744,8 +744,8 @@ async function executeTask(
         // Try change history rollback first
         if (changeHistory.hasChanges(task.id)) {
           const result = await changeHistory.rollback(task.id)
-          events.push('session.workerProgress', sessionId, {
-            sessionId,
+          events.push('projects.workerProgress', projectId, {
+            projectId,
             agentId,
             taskId: task.id,
             detail: `Restored ${result.restored.length} files, deleted ${result.deleted.length} files`,
@@ -766,8 +766,8 @@ async function executeTask(
         queue.failTask(task.id)
         failedTasks.push(task.id)
         registry.updateStatus(agentId, 'failed')
-        events.push('session.workerFailed', sessionId, {
-          sessionId,
+        events.push('projects.workerFailed', projectId, {
+          projectId,
           agentId,
           taskId: task.id,
           error: `Validation failed after ${maxRetries} retries`,
@@ -778,8 +778,8 @@ async function executeTask(
     queue.failTask(task.id)
     failedTasks.push(task.id)
     registry.updateStatus(agentId, 'failed')
-    events.push('session.workerFailed', sessionId, {
-      sessionId,
+    events.push('projects.workerFailed', projectId, {
+      projectId,
       agentId,
       taskId: task.id,
       error: e instanceof Error ? e.message : String(e),
