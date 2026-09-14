@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { VajraClient } from '../client'
-import { navigate } from '../hooks/useHashRouter'
+import { navigate } from '../hooks/useRouter'
 import { PanelLeftClose, PanelLeft } from 'lucide-react'
 
 interface Project { id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }

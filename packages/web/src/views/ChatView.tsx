@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useProject } from '../hooks/useProject'
 import { StatusBadge } from '../components/StatusBadge'
 import { ThinkingBlock } from '../components/ThinkingBlock'
@@ -7,8 +7,32 @@ import { PlanView } from '../components/PlanView'
 import { WorkerStatus } from '../components/WorkerStatus'
 import { ConflictAlert } from '../components/ConflictAlert'
 import { Square } from 'lucide-react'
+import { ModelSelector } from '../components/ModelSelector'
+import type { PlannedTask } from '@codekalakaars/vajra-protocol'
 
 const C = { bg: '#0a0a0a', raised: '#1a1a1a', overlay: '#222222', border: '#2a2a2a', text: '#e5e5e5', textMuted: '#737373', placeholder: '#525252', muted: '#141414' }
+
+interface ParsedPlan {
+  tasks: PlannedTask[]
+  independentGroups: string[][]
+  estimatedWorkers: number
+}
+
+function tryParsePlan(content: string): ParsedPlan | null {
+  try {
+    const obj = JSON.parse(content)
+    if (obj && Array.isArray(obj.tasks) && obj.tasks.length > 0 && obj.tasks[0].id && obj.tasks[0].title && obj.tasks[0].instructions) {
+      return { tasks: obj.tasks, independentGroups: obj.independentGroups || [], estimatedWorkers: obj.estimatedWorkers || 1 }
+    }
+  } catch {}
+  return null
+}
+
+function PlanMessage({ content }: { content: string }) {
+  const plan = useMemo(() => tryParsePlan(content), [content])
+  if (!plan) return <MarkdownRenderer content={content} />
+  return <PlanView tasks={plan.tasks} independentGroups={plan.independentGroups} estimatedWorkers={plan.estimatedWorkers} />
+}
 
 export function ChatView({ connected }: { connected: boolean }) {
   const project = useProject()
@@ -59,21 +83,20 @@ export function ChatView({ connected }: { connected: boolean }) {
         <span style={{ color: C.border }}>·</span>
         <h2 className="text-sm font-medium" style={{ color: C.text }}>Project {project.projectId!.slice(0, 8)}</h2>
         <StatusBadge status={project.status} />
+        <div className="ml-auto">
+          <ModelSelector model={project.model} onSelect={project.setModel} disabled={project.status === 'streaming' || project.status === 'executing' || project.status === 'planning'} />
+        </div>
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-hidden p-6 space-y-4">
         {(project.status === 'planning' || project.status === 'executing' || project.status === 'confirming') && (
           <div className="space-y-3">
             {project.planTasks.length > 0 && (
-              <div>
-                <PlanView tasks={project.planTasks} />
-                {project.status === 'confirming' && (
-                  <div className="mt-4 flex gap-3">
-                    <button onClick={() => project.confirmPlan()} className="flex-1 px-4 py-2.5 rounded-lg font-medium transition-colors" style={{ background: C.overlay, color: C.text }}>Confirm & Execute</button>
-                    <button onClick={() => project.rejectPlan()} className="px-4 py-2.5 rounded-lg transition-colors" style={{ background: C.raised, color: C.textMuted }}>Keep Talking</button>
-                  </div>
-                )}
-              </div>
+              <PlanView
+                tasks={project.planTasks}
+                independentGroups={project.independentGroups}
+                estimatedWorkers={project.estimatedWorkers}
+              />
             )}
             {project.agents.length > 0 && <WorkerStatus agents={project.agents} />}
             {project.conflicts.length > 0 && <ConflictAlert conflicts={project.conflicts} />}
@@ -96,7 +119,7 @@ export function ChatView({ connected }: { connected: boolean }) {
                 <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: C.overlay, color: C.text }}>V</div>
                 <div className="flex-1 min-w-0">
                   {msg.thinking && <ThinkingBlock text={msg.thinking} />}
-                  <MarkdownRenderer content={msg.content} />
+                  <PlanMessage content={msg.content} />
                 </div>
               </div>
             )}
@@ -115,7 +138,20 @@ export function ChatView({ connected }: { connected: boolean }) {
         {project.error && <div className="p-3 rounded text-sm" style={{ background: C.muted, border: `1px solid ${C.border}`, color: C.textMuted }}>{project.error}</div>}
       </div>
 
-      {isStreaming && (
+      {project.status === 'confirming' && (
+        <div className="p-4" style={{ borderTop: `1px solid ${C.border}`, background: '#0d0d0d' }}>
+          <div className="max-w-3xl mx-auto flex gap-3">
+            <button onClick={() => project.confirmPlan()} className="flex-1 px-4 py-3 rounded-lg font-semibold text-sm transition-all hover:opacity-90" style={{ background: '#2563eb', color: '#ffffff' }}>
+              Confirm & Execute
+            </button>
+            <button onClick={() => project.rejectPlan()} className="px-4 py-3 rounded-lg text-sm transition-all hover:opacity-90" style={{ background: C.raised, color: C.textMuted, border: `1px solid ${C.border}` }}>
+              Keep Talking
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isStreaming && project.status !== 'confirming' && (
         <div className="px-4 py-2 flex justify-center" style={{ borderTop: `1px solid ${C.border}` }}>
           <button onClick={project.stopProject} className="px-4 py-1.5 rounded text-sm transition-colors flex items-center gap-2" style={{ background: C.raised, color: C.textMuted }}>
             <Square size={14} />

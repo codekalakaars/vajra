@@ -26,11 +26,14 @@ export interface ChatMessage {
 
 export interface ProjectState {
   projectId: string | null
+  model: string
   status: 'idle' | 'creating' | 'talking' | 'confirming' | 'planning' | 'executing' | 'streaming' | 'done' | 'failed'
   messages: ChatMessage[]
   thinkingText: string
   error: string | null
   planTasks: PlannedTask[]
+  independentGroups: string[][]
+  estimatedWorkers: number
   agents: AgentStatePayload[]
   conflicts: ConflictPayload[]
   _streamingText: string
@@ -42,11 +45,14 @@ export function useProject() {
   const client = useClient()
   const [state, setState] = useState<ProjectState>({
     projectId: null,
+    model: 'openrouter/free',
     status: 'idle',
     messages: [],
     thinkingText: '',
     error: null,
     planTasks: [],
+    independentGroups: [],
+    estimatedWorkers: 1,
     agents: [],
     conflicts: [],
     _streamingText: '',
@@ -56,8 +62,9 @@ export function useProject() {
   const stateRef = useRef(state)
   stateRef.current = state
 
-  // Throttle timer for streaming updates
-  const throttleRef = useRef<{ timer: ReturnType<typeof setTimeout> | null }>({ timer: null })
+  // Separate throttle timers for assistant and thinking streaming
+  const assistantThrottleRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; pending: string }>({ timer: null, pending: '' })
+  const thinkingThrottleRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; pending: string }>({ timer: null, pending: '' })
 
   // Subscribe to push events for a project
   const subscribe = useCallback((projectId: string) => {
@@ -66,61 +73,61 @@ export function useProject() {
     unsubs.push(
       client.on('projects.statusChanged', (payload: any) => {
         if (payload.status === undefined) return
-        setState((s) => ({
-          ...s,
-          status: payload.status as ProjectState['status'],
-          _streamingText: '',
-          thinkingText: '',
-          _streamingChunks: [],
-          _thinkingChunks: [],
-        }))
+        setState((s) => {
+          // Only clear streaming text on terminal statuses — not during streaming itself
+          const terminal = payload.status === 'done' || payload.status === 'failed' || payload.status === 'stopped'
+          return {
+            ...s,
+            status: payload.status as ProjectState['status'],
+            ...(terminal ? {
+              _streamingText: '',
+              thinkingText: '',
+              _streamingChunks: [],
+              _thinkingChunks: [],
+            } : {}),
+          }
+        })
       }),
     )
 
     unsubs.push(
       client.on('projects.assistantDelta', (payload: any) => {
-        setState((s) => {
-          const newChunks = [...s._streamingChunks, payload.text]
-          // Throttle full text join to every 100ms
-          if (!throttleRef.current.timer) {
-            throttleRef.current.timer = setTimeout(() => {
-              setState((s2) => ({
-                ...s2,
-                _streamingText: s2._streamingChunks.join(''),
-                _streamingChunks: [],
+        // Append directly to accumulator — no separate chunks buffer
+        assistantThrottleRef.current.pending += payload.text
+        if (!assistantThrottleRef.current.timer) {
+          assistantThrottleRef.current.timer = setTimeout(() => {
+            const pending = assistantThrottleRef.current.pending
+            assistantThrottleRef.current.pending = ''
+            assistantThrottleRef.current.timer = null
+            if (pending) {
+              setState((s) => ({
+                ...s,
+                _streamingText: s._streamingText + pending,
+                status: s.status === 'talking' || s.status === 'confirming' ? 'streaming' : s.status,
               }))
-              throttleRef.current.timer = null
-            }, 100)
-          }
-          return {
-            ...s,
-            _streamingChunks: newChunks,
-            status: s.status === 'talking' || s.status === 'confirming' ? 'streaming' : s.status,
-          }
-        })
+            }
+          }, 50)
+        }
       }),
     )
 
     unsubs.push(
       client.on('projects.thinkingDelta', (payload: any) => {
-        setState((s) => {
-          const newChunks = [...s._thinkingChunks, payload.text]
-          // Throttle full text join to every 100ms
-          if (!throttleRef.current.timer) {
-            throttleRef.current.timer = setTimeout(() => {
-              setState((s2) => ({
-                ...s2,
-                thinkingText: s2._thinkingChunks.join(''),
-                _thinkingChunks: [],
+        // Append directly to accumulator — no separate chunks buffer
+        thinkingThrottleRef.current.pending += payload.text
+        if (!thinkingThrottleRef.current.timer) {
+          thinkingThrottleRef.current.timer = setTimeout(() => {
+            const pending = thinkingThrottleRef.current.pending
+            thinkingThrottleRef.current.pending = ''
+            thinkingThrottleRef.current.timer = null
+            if (pending) {
+              setState((s) => ({
+                ...s,
+                thinkingText: s.thinkingText + pending,
               }))
-              throttleRef.current.timer = null
-            }, 100)
-          }
-          return {
-            ...s,
-            _thinkingChunks: newChunks,
-          }
-        })
+            }
+          }, 50)
+        }
       }),
     )
 
@@ -139,7 +146,13 @@ export function useProject() {
 
     unsubs.push(
       client.on('projects.planComplete', (payload: any) => {
-        setState((s) => ({ ...s, status: 'executing', planTasks: payload.plan.tasks }))
+        setState((s) => ({
+          ...s,
+          status: 'executing',
+          planTasks: payload.plan.tasks,
+          independentGroups: payload.plan.independentGroups || [],
+          estimatedWorkers: payload.plan.estimatedWorkers || 1,
+        }))
       }),
     )
 
@@ -149,6 +162,8 @@ export function useProject() {
           ...s,
           status: 'confirming',
           planTasks: payload.plan.tasks,
+          independentGroups: payload.plan.independentGroups || [],
+          estimatedWorkers: payload.plan.estimatedWorkers || 1,
           _streamingText: '',
           thinkingText: '',
           _streamingChunks: [],
@@ -214,11 +229,18 @@ export function useProject() {
 
     unsubs.push(
       client.on('projects.completed', () => {
+        // Flush any pending throttle text before finalizing
+        const pendingAssistant = assistantThrottleRef.current.pending
+        const pendingThinking = thinkingThrottleRef.current.pending
+        assistantThrottleRef.current.pending = ''
+        thinkingThrottleRef.current.pending = ''
+        if (assistantThrottleRef.current.timer) { clearTimeout(assistantThrottleRef.current.timer); assistantThrottleRef.current.timer = null }
+        if (thinkingThrottleRef.current.timer) { clearTimeout(thinkingThrottleRef.current.timer); thinkingThrottleRef.current.timer = null }
+
         setState((s) => {
           const newMessages = [...s.messages]
-          // Join any remaining chunks
-          const finalStreamText = s._streamingChunks.length > 0 ? s._streamingChunks.join('') : s._streamingText
-          const finalThinkingText = s._thinkingChunks.length > 0 ? s._thinkingChunks.join('') : s.thinkingText
+          const finalStreamText = (s._streamingText + pendingAssistant).trim()
+          const finalThinkingText = (s.thinkingText + pendingThinking).trim()
           if (finalStreamText || finalThinkingText) {
             newMessages.push({
               role: 'assistant',
@@ -241,11 +263,18 @@ export function useProject() {
 
     unsubs.push(
       client.on('projects.failed', (payload: any) => {
+        // Flush any pending throttle text before finalizing
+        const pendingAssistant = assistantThrottleRef.current.pending
+        const pendingThinking = thinkingThrottleRef.current.pending
+        assistantThrottleRef.current.pending = ''
+        thinkingThrottleRef.current.pending = ''
+        if (assistantThrottleRef.current.timer) { clearTimeout(assistantThrottleRef.current.timer); assistantThrottleRef.current.timer = null }
+        if (thinkingThrottleRef.current.timer) { clearTimeout(thinkingThrottleRef.current.timer); thinkingThrottleRef.current.timer = null }
+
         setState((s) => {
           const newMessages = [...s.messages]
-          // Join any remaining chunks
-          const finalStreamText = s._streamingChunks.length > 0 ? s._streamingChunks.join('') : s._streamingText
-          const finalThinkingText = s._thinkingChunks.length > 0 ? s._thinkingChunks.join('') : s.thinkingText
+          const finalStreamText = (s._streamingText + pendingAssistant).trim()
+          const finalThinkingText = (s.thinkingText + pendingThinking).trim()
           if (finalStreamText || finalThinkingText) {
             newMessages.push({
               role: 'assistant',
@@ -280,11 +309,14 @@ export function useProject() {
   }) => {
     setState({
       projectId: null,
+      model: params.model,
       status: 'creating',
       messages: [],
       thinkingText: '',
       error: null,
       planTasks: [],
+      independentGroups: [],
+      estimatedWorkers: 1,
       agents: [],
       conflicts: [],
       _streamingText: '',
@@ -319,6 +351,12 @@ export function useProject() {
   const sendMessage = useCallback(async (content: string) => {
     const sid = stateRef.current.projectId
     if (!sid) return
+
+    // Clear any pending throttle timers and accumulated text from the previous stream
+    assistantThrottleRef.current.pending = ''
+    thinkingThrottleRef.current.pending = ''
+    if (assistantThrottleRef.current.timer) { clearTimeout(assistantThrottleRef.current.timer); assistantThrottleRef.current.timer = null }
+    if (thinkingThrottleRef.current.timer) { clearTimeout(thinkingThrottleRef.current.timer); thinkingThrottleRef.current.timer = null }
 
     setState((s) => ({
       ...s,
@@ -376,11 +414,14 @@ export function useProject() {
   const attach = useCallback(async (projectId: string) => {
     setState({
       projectId,
+      model: 'openrouter/free',
       status: 'idle',
       messages: [],
       thinkingText: '',
       error: null,
       planTasks: [],
+      independentGroups: [],
+      estimatedWorkers: 1,
       agents: [],
       conflicts: [],
       _streamingText: '',
@@ -395,7 +436,24 @@ export function useProject() {
         .filter((m) => m.content && (m.role === 'user' || m.role === 'assistant'))
         .map((m) => ({ role: m.role as 'user' | 'assistant', content: String(m.content) }))
 
-      const projectData = result.project as { status: string }
+      // Extract plan from assistant messages (look for last message containing plan JSON)
+      let planTasks: PlannedTask[] = []
+      let independentGroups: string[][] = []
+      let estimatedWorkers = 1
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].role !== 'assistant') continue
+        try {
+          const obj = JSON.parse(messages[i].content)
+          if (obj && Array.isArray(obj.tasks) && obj.tasks.length > 0 && obj.tasks[0].id && obj.tasks[0].title && obj.tasks[0].instructions) {
+            planTasks = obj.tasks
+            independentGroups = obj.independentGroups || []
+            estimatedWorkers = obj.estimatedWorkers || 1
+            break
+          }
+        } catch {}
+      }
+
+      const projectData = result.project as { status: string; model: string }
       const status = projectData.status === 'done' ? 'done'
         : projectData.status === 'failed' ? 'failed'
         : projectData.status === 'talking' ? 'talking'
@@ -405,8 +463,12 @@ export function useProject() {
 
       setState((s) => ({
         ...s,
+        model: projectData.model || s.model,
         messages,
         status,
+        planTasks,
+        independentGroups,
+        estimatedWorkers,
       }))
 
       subscribe(projectId)
@@ -439,6 +501,17 @@ export function useProject() {
     }
   }, [client])
 
+  const setModel = useCallback(async (model: string) => {
+    const sid = stateRef.current.projectId
+    setState((s) => ({ ...s, model }))
+    if (!sid) return
+    try {
+      await client.call('projects.setModel', { projectId: sid, model })
+    } catch {
+      // ignore
+    }
+  }, [client])
+
   return {
     ...state,
     client,
@@ -447,6 +520,7 @@ export function useProject() {
     confirmPlan,
     rejectPlan,
     stopProject,
+    setModel,
     attach,
     loadPermissions,
     savePermissions,

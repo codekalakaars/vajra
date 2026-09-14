@@ -18,6 +18,7 @@ export type RpcMethodMap = {
   'projects.sendMessage': { params: { projectId: string; content: string }; result: { ok: true } }
   'projects.confirmPlan': { params: { projectId: string; tasks?: Array<Record<string, unknown>> }; result: { ok: true } }
   'projects.rejectPlan': { params: { projectId: string }; result: { ok: true } }
+  'projects.setModel': { params: { projectId: string; model: string }; result: { ok: true } }
 }
 
 export type MethodName = keyof RpcMethodMap
