@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { VajraClient } from '../client'
-import type { PlannedTask, AgentStatePayload, ConflictPayload, PushEventPayloads, PermissionsConfig } from '@codekalakaars/vajra-protocol'
+import type { PlannedTask, AgentStatePayload, ConflictPayload, PermissionsConfig } from '@codekalakaars/vajra-protocol'
 
 // Singleton client — persists across re-renders
 let clientSingleton: VajraClient | null = null
@@ -64,7 +64,7 @@ export function useProject() {
     const unsubs: Array<() => void> = []
 
     unsubs.push(
-      client.on('session.statusChanged', (payload: PushEventPayloads['session.statusChanged']) => {
+      client.on('projects.statusChanged', (payload: any) => {
         if (payload.status === undefined) return
         setState((s) => ({
           ...s,
@@ -78,7 +78,7 @@ export function useProject() {
     )
 
     unsubs.push(
-      client.on('session.assistantDelta', (payload: PushEventPayloads['session.assistantDelta']) => {
+      client.on('projects.assistantDelta', (payload: any) => {
         setState((s) => {
           const newChunks = [...s._streamingChunks, payload.text]
           // Throttle full text join to every 100ms
@@ -102,7 +102,7 @@ export function useProject() {
     )
 
     unsubs.push(
-      client.on('session.thinkingDelta', (payload: PushEventPayloads['session.thinkingDelta']) => {
+      client.on('projects.thinkingDelta', (payload: any) => {
         setState((s) => {
           const newChunks = [...s._thinkingChunks, payload.text]
           // Throttle full text join to every 100ms
@@ -126,25 +126,25 @@ export function useProject() {
 
     // Plan events
     unsubs.push(
-      client.on('session.planStarted', () => {
+      client.on('projects.planStarted', () => {
         setState((s) => ({ ...s, status: 'planning', planTasks: [] }))
       }),
     )
 
     unsubs.push(
-      client.on('session.planTask', (payload: PushEventPayloads['session.planTask']) => {
+      client.on('projects.planTask', (payload: any) => {
         setState((s) => ({ ...s, planTasks: [...s.planTasks, payload.task] }))
       }),
     )
 
     unsubs.push(
-      client.on('session.planComplete', (payload: PushEventPayloads['session.planComplete']) => {
+      client.on('projects.planComplete', (payload: any) => {
         setState((s) => ({ ...s, status: 'executing', planTasks: payload.plan.tasks }))
       }),
     )
 
     unsubs.push(
-      client.on('session.planProposed', (payload: PushEventPayloads['session.planProposed']) => {
+      client.on('projects.planProposed', (payload: any) => {
         setState((s) => ({
           ...s,
           status: 'confirming',
@@ -158,7 +158,7 @@ export function useProject() {
     )
 
     unsubs.push(
-      client.on('session.planConfirmed', () => {
+      client.on('projects.planConfirmed', () => {
         setState((s) => ({
           ...s,
           status: 'executing',
@@ -172,7 +172,7 @@ export function useProject() {
 
     // Worker events
     unsubs.push(
-      client.on('session.workerStarted', (payload: PushEventPayloads['session.workerStarted']) => {
+      client.on('projects.workerStarted', (payload: any) => {
         setState((s) => ({
           ...s,
           agents: [...s.agents, { id: payload.agentId, role: 'worker', status: 'running', taskSummary: payload.taskId }],
@@ -181,7 +181,7 @@ export function useProject() {
     )
 
     unsubs.push(
-      client.on('session.workerCompleted', (payload: PushEventPayloads['session.workerCompleted']) => {
+      client.on('projects.workerCompleted', (payload: any) => {
         setState((s) => ({
           ...s,
           agents: s.agents.map((a) =>
@@ -192,7 +192,7 @@ export function useProject() {
     )
 
     unsubs.push(
-      client.on('session.workerFailed', (payload: PushEventPayloads['session.workerFailed']) => {
+      client.on('projects.workerFailed', (payload: any) => {
         setState((s) => ({
           ...s,
           agents: s.agents.map((a) =>
@@ -204,7 +204,7 @@ export function useProject() {
 
     // Conflict events
     unsubs.push(
-      client.on('session.conflictDetected', (payload: PushEventPayloads['session.conflictDetected']) => {
+      client.on('projects.conflictDetected', (payload: any) => {
         setState((s) => ({
           ...s,
           conflicts: [...s.conflicts, { task1: payload.task1, task2: payload.task2, files: payload.files }],
@@ -213,7 +213,7 @@ export function useProject() {
     )
 
     unsubs.push(
-      client.on('session.completed', () => {
+      client.on('projects.completed', () => {
         setState((s) => {
           const newMessages = [...s.messages]
           // Join any remaining chunks
@@ -240,7 +240,7 @@ export function useProject() {
     )
 
     unsubs.push(
-      client.on('session.failed', (payload: PushEventPayloads['session.failed']) => {
+      client.on('projects.failed', (payload: any) => {
         setState((s) => {
           const newMessages = [...s.messages]
           // Join any remaining chunks
@@ -395,12 +395,12 @@ export function useProject() {
         .filter((m) => m.content && (m.role === 'user' || m.role === 'assistant'))
         .map((m) => ({ role: m.role as 'user' | 'assistant', content: String(m.content) }))
 
-      const sessionData = result.session as { status: string }
-      const status = sessionData.status === 'done' ? 'done'
-        : sessionData.status === 'failed' ? 'failed'
-        : sessionData.status === 'talking' ? 'talking'
-        : sessionData.status === 'confirming' ? 'confirming'
-        : sessionData.status === 'executing' ? 'executing'
+      const projectData = result.project as { status: string }
+      const status = projectData.status === 'done' ? 'done'
+        : projectData.status === 'failed' ? 'failed'
+        : projectData.status === 'talking' ? 'talking'
+        : projectData.status === 'confirming' ? 'confirming'
+        : projectData.status === 'executing' ? 'executing'
         : 'idle'
 
       setState((s) => ({

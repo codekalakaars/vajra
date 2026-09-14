@@ -24,7 +24,7 @@ export interface PlannedTask {
 
 export interface TaskState {
   id: string
-  sessionId: string
+  projectId: string
   parentTaskId: string | null
   title: string
   description: string | null
@@ -69,7 +69,7 @@ export class TaskQueue {
 
   constructor(
     private db: SqliteDb,
-    private sessionId: string,
+    private projectId: string,
   ) {}
 
   addTask(task: PlannedTask, filePermissions?: string, toolPermissions?: string): TaskState {
@@ -82,7 +82,7 @@ export class TaskQueue {
       )
       .run(
         task.id,
-        this.sessionId,
+        this.projectId,
         task.title,
         task.description,
         filePermissions ?? null,
@@ -102,7 +102,7 @@ export class TaskQueue {
 
     const state: TaskState = {
       id: task.id,
-      sessionId: this.sessionId,
+      projectId: this.projectId,
       parentTaskId: null,
       title: task.title,
       description: task.description,
@@ -456,7 +456,7 @@ export class TaskQueue {
   }
 
   /**
-   * Get all tasks for a session.
+   * Get all tasks for a project.
    */
   getAllTasks(): TaskState[] {
     return [...this.tasks.values()]

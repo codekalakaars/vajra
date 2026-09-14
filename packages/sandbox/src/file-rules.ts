@@ -266,3 +266,54 @@ export function filterFileEntries(
     return perm.read
   })
 }
+
+/**
+ * Check if a tool call is allowed by the sandbox file rules.
+ *
+ * Returns a denial message string if the tool is denied, or null if allowed.
+ */
+export function checkToolPermission(
+  tool: string,
+  args: Record<string, unknown>,
+  fileRules: readonly FileRule[],
+  defaultPermissions: FilePermissions,
+  projectDir: string,
+): string | null {
+  if (fileRules.length === 0) return null
+
+  const compiled = new CompiledRules(defaultPermissions, fileRules)
+
+  // Extract file paths from tool args based on tool type
+  const filePaths: string[] = []
+  if (typeof args.path === 'string') filePaths.push(args.path)
+  if (typeof args.filePath === 'string') filePaths.push(args.filePath)
+
+  // For run_command, check the working directory
+  if (tool === 'run_command' && typeof args.cwd === 'string') {
+    filePaths.push(args.cwd)
+  }
+
+  if (filePaths.length === 0) return null
+
+  for (const filePath of filePaths) {
+    // Make path relative to project dir
+    const relativePath = filePath.startsWith(projectDir)
+      ? filePath.slice(projectDir.length + 1)
+      : filePath
+
+    const perm = compiled.resolve(relativePath)
+
+    // Check if the tool requires a specific permission
+    if (tool === 'read_file' || tool === 'list_files' || tool === 'search_files') {
+      if (!perm.read) return `Access denied: read not allowed for '${relativePath}'`
+    } else if (tool === 'write_file') {
+      if (!perm.write) return `Access denied: write not allowed for '${relativePath}'`
+    } else if (tool === 'edit_file') {
+      if (!perm.edit) return `Access denied: edit not allowed for '${relativePath}'`
+    } else if (tool === 'delete_file') {
+      if (!perm.delete) return `Access denied: delete not allowed for '${relativePath}'`
+    }
+  }
+
+  return null
+}

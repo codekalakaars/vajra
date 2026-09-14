@@ -1,7 +1,7 @@
 import { fork, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import type { LaunchJob, LaunchHandle, SandboxReport, SessionLauncher } from './manager.js'
+import type { LaunchJob, LaunchHandle, SandboxReport, ProjectLauncher } from './manager.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const workerPath = join(here, '..', '..', 'worker', 'sandboxed-worker.mjs')
@@ -52,14 +52,14 @@ class WorkerHandle implements LaunchHandle {
 
   stop(): void {
     for (const pending of this.pending.values()) {
-      pending.reject(new Error('Session stopped'))
+      pending.reject(new Error('Project stopped'))
     }
     this.pending.clear()
     this.child.kill()
   }
 }
 
-export const forkSessionLauncher: SessionLauncher = (job: LaunchJob, onSandboxReport) => {
+export const forkProjectLauncher: ProjectLauncher = (job: LaunchJob, onSandboxReport) => {
   return new Promise((resolve, reject) => {
     const child = fork(workerPath, [], {
       env: buildWorkerEnv(),

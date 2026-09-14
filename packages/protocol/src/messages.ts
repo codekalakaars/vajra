@@ -59,6 +59,14 @@ export interface PlannedTask {
   rollback?: string[]
   /** Condition to skip this task (e.g. "file exists: src/config.json" or "command passes: npm test"). */
   skipIf?: string[]
+  /** Task complexity: low, medium, or high. Affects task sizing and ordering. */
+  complexity?: 'low' | 'medium' | 'high'
+  /** Validation strategy: hierarchical, incremental, or contextAware. */
+  validationStrategy?: 'hierarchical' | 'incremental' | 'contextAware'
+  /** Alternative approaches to solve this task. */
+  alternativeApproaches?: string[]
+  /** Estimated duration in minutes. */
+  estimatedDuration?: number
 }
 
 export interface ManagerPlan {

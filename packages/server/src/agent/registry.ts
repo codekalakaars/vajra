@@ -6,7 +6,7 @@ export type AgentStatus = 'pending' | 'running' | 'done' | 'failed'
 
 export interface AgentState {
   id: string
-  sessionId: string
+  projectId: string
   role: AgentRole
   status: AgentStatus
   taskSummary: string | null
@@ -19,7 +19,7 @@ export class AgentRegistry {
   constructor(private db: SqliteDb) {}
 
   createAgent(
-    sessionId: string,
+    projectId: string,
     role: AgentRole,
     taskSummary: string,
     parentAgentId?: string,
@@ -32,11 +32,11 @@ export class AgentRegistry {
         `INSERT INTO agents (id, session_id, role, status, task_summary, parent_agent_id, created_at)
          VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
       )
-      .run(id, sessionId, role, taskSummary, parentAgentId ?? null, now)
+      .run(id, projectId, role, taskSummary, parentAgentId ?? null, now)
 
     return {
       id,
-      sessionId,
+      projectId,
       role,
       status: 'pending',
       taskSummary,
@@ -77,10 +77,10 @@ export class AgentRegistry {
     return this.rowToState(row)
   }
 
-  getBySession(sessionId: string): AgentState[] {
+  getByProject(projectId: string): AgentState[] {
     const rows = this.db
       .prepare(`SELECT * FROM agents WHERE session_id = ? ORDER BY created_at`)
-      .all(sessionId) as Array<{
+      .all(projectId) as Array<{
       id: string
       session_id: string
       role: AgentRole
@@ -94,19 +94,19 @@ export class AgentRegistry {
     return rows.map((r) => this.rowToState(r))
   }
 
-  getWorkers(sessionId: string): AgentState[] {
-    return this.getBySession(sessionId).filter((a) => a.role === 'worker')
+  getWorkers(projectId: string): AgentState[] {
+    return this.getByProject(projectId).filter((a) => a.role === 'worker')
   }
 
-  getActiveWorkers(sessionId: string): AgentState[] {
-    return this.getBySession(sessionId).filter(
+  getActiveWorkers(projectId: string): AgentState[] {
+    return this.getByProject(projectId).filter(
       (a) => a.role === 'worker' && (a.status === 'pending' || a.status === 'running'),
     )
   }
 
-  deleteBySession(sessionId: string): void {
-    this.db.prepare(`DELETE FROM agent_messages WHERE session_id = ?`).run(sessionId)
-    this.db.prepare(`DELETE FROM agents WHERE session_id = ?`).run(sessionId)
+  deleteByProject(projectId: string): void {
+    this.db.prepare(`DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
+    this.db.prepare(`DELETE FROM agents WHERE session_id = ?`).run(projectId)
   }
 
   private rowToState(row: {
@@ -121,7 +121,7 @@ export class AgentRegistry {
   }): AgentState {
     return {
       id: row.id,
-      sessionId: row.session_id,
+      projectId: row.session_id,
       role: row.role,
       status: row.status,
       taskSummary: row.task_summary,

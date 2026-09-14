@@ -1,10 +1,9 @@
 // Typed push event bus.
 
-import type { PushEventPayloads, PushEventName } from '@codekalakaars/vajra-protocol'
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type EventMap = Record<string, any>
 
-export type EventMap = PushEventPayloads
-
-export type EventName = PushEventName
+export type EventName = string
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Handler<T> = (payload: T) => void
@@ -13,7 +12,8 @@ export class EventBus {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private listeners = new Map<string, Set<Handler<any>>>()
 
-  on<E extends EventName>(event: E, handler: Handler<EventMap[E]>): () => void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on(event: string, handler: Handler<any>): () => void {
     let set = this.listeners.get(event)
     if (!set) {
       set = new Set()

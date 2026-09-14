@@ -7,7 +7,7 @@
 // - Idle timeout (destroy idle workers after N ms)
 // - Graceful shutdown
 
-import type { LaunchJob, LaunchHandle, SandboxReport, SessionLauncher } from './manager.js'
+import type { LaunchJob, LaunchHandle, SandboxReport, ProjectLauncher } from './manager.js'
 import type { ConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 import { resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 import { cpus, totalmem, freemem } from 'node:os'
@@ -75,11 +75,11 @@ export class WorkerPool {
   private memoryUsage = 0
 
   private config: Required<WorkerPoolConfig>
-  private launcher: SessionLauncher
+  private launcher: ProjectLauncher
 
   constructor(
     config: Partial<WorkerPoolConfig>,
-    launcher: SessionLauncher,
+    launcher: ProjectLauncher,
   ) {
     this.config = resolveConcurrencyConfig(config)
     this.launcher = launcher
@@ -107,7 +107,7 @@ export class WorkerPool {
     if (reuseIndex >= 0) {
       const worker = this.idle.splice(reuseIndex, 1)[0]
       this.clearIdleTimer(worker)
-      this.active.set(job.sessionId, worker)
+      this.active.set(job.projectId, worker)
       return worker.handle
     }
 
@@ -310,7 +310,8 @@ export class WorkerPool {
     }
 
     this.startHealthCheck(pooled)
-    this.active.set(job.sessionId, pooled)
+      this.active.set(job.projectId, pooled)
+
 
     return handle
   }

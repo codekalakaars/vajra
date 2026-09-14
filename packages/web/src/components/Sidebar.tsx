@@ -19,7 +19,7 @@ export function Sidebar({ client, onNewProject }: { client: VajraClient; onNewPr
     refresh()
     const interval = setInterval(refresh, 5000)
     window.addEventListener('hashchange', () => { setCurrentPath(window.location.hash); refresh() })
-    const unsubs = [client.on('session.completed', () => refresh()), client.on('session.failed', () => refresh()), client.on('session.deleted', () => refresh())]
+    const unsubs = [client.on('projects.completed', () => refresh()), client.on('projects.failed', () => refresh()), client.on('projects.deleted', () => refresh())]
     return () => { clearInterval(interval); for (const u of unsubs) u() }
   }, [client, refresh])
 
