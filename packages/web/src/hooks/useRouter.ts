@@ -5,33 +5,31 @@ export interface Route {
   params: Record<string, string>
 }
 
-export function useHashRouter(): Route {
+export function useRouter(): Route {
   const parse = useCallback((): Route => {
-    const hash = window.location.hash.slice(1) || '/'
-    // Match /project/:id
-    const projectMatch = hash.match(/^\/project\/([^/]+)$/)
+    const pathname = window.location.pathname
+    const projectMatch = pathname.match(/^\/project\/([^/]+)$/)
     if (projectMatch) {
       return { path: '/project/:id', params: { id: projectMatch[1] } }
     }
-    // Match /
-    if (hash === '/') {
+    if (pathname === '/') {
       return { path: '/', params: {} }
     }
-    // Default to home
     return { path: '/', params: {} }
   }, [])
 
   const [route, setRoute] = useState<Route>(parse)
 
   useEffect(() => {
-    const onHash = () => setRoute(parse())
-    window.addEventListener('hashchange', onHash)
-    return () => window.removeEventListener('hashchange', onHash)
+    const onPop = () => setRoute(parse())
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
   }, [parse])
 
   return route
 }
 
 export function navigate(path: string): void {
-  window.location.hash = path
+  window.history.pushState(null, '', path)
+  window.dispatchEvent(new PopStateEvent('popstate'))
 }

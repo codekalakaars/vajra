@@ -1,4 +1,4 @@
-import { AgentStatePayload } from '@codekalakaars/protocol'
+import { AgentStatePayload } from '@codekalakaars/vajra-protocol'
 
 interface WorkerStatusProps { agents: AgentStatePayload[] }
 const roleLabels: Record<string, string> = { manager: 'Manager', master: 'Master', worker: 'Worker' }

@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import type { VajraClient } from '../client'
-import { navigate } from '../hooks/useHashRouter'
+import { navigate } from '../hooks/useRouter'
 import { X, Folder, File, FileText, FileCode, FileJson, FileSpreadsheet, FileImage, Globe, Lock, Settings, Loader2 } from 'lucide-react'
 
 const MODELS = [
@@ -86,7 +86,7 @@ interface NewProjectModalProps {
 
 export function NewProjectModal({ client, open, onClose }: NewProjectModalProps) {
   const [projectDir, setProjectDir] = useState('')
-  const [model, setModel] = useState('openrouter/free')
+  const [model, setModel] = useState('openrouter/nvidia/nemotron-3-ultra-550b-a55b:free')
   const [permFilter, setPermFilter] = useState('')
   const [permFiles, setPermFiles] = useState<FileEntry[]>([])
   const [permMap, setPermMap] = useState<Record<string, boolean>>({})

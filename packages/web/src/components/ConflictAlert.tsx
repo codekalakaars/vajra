@@ -1,4 +1,4 @@
-import { ConflictPayload } from '@codekalakaars/protocol'
+import { ConflictPayload } from '@codekalakaars/vajra-protocol'
 import { AlertTriangle, X } from 'lucide-react'
 
 interface ConflictAlertProps { conflicts: ConflictPayload[]; onDismiss?: () => void }

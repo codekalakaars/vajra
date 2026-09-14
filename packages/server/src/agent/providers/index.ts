@@ -30,17 +30,26 @@ const knownModels = new Map<string, Set<string>>([
 /**
  * Parse a model string and return the provider name and raw model name.
  * "openrouter/claude-3.5-sonnet" → { provider: "openrouter", model: "claude-3.5-sonnet" }
+ * "openrouter/free" → { provider: "openrouter", model: "openrouter/free" }
+ * "nvidia/nemotron-3-ultra-550b-a55b:free" → { provider: "openrouter", model: "nvidia/nemotron-3-ultra-550b-a55b:free" }
  * "claude-3.5-sonnet" → { provider: "openrouter", model: "claude-3.5-sonnet" }
  */
 export function parseModelString(model: string): { provider: string; model: string } {
-  const slashIdx = model.indexOf('/')
-  if (slashIdx === -1) {
-    return { provider: 'openrouter', model }
+  // Check if it starts with a known provider prefix
+  if (model.startsWith('openrouter/')) {
+    const afterPrefix = model.slice('openrouter/'.length)
+    // Special OpenRouter meta-models (free, auto, auto-beta) need the full slug
+    if (afterPrefix === 'free' || afterPrefix === 'auto' || afterPrefix === 'auto-beta') {
+      return { provider: 'openrouter', model }
+    }
+    return { provider: 'openrouter', model: afterPrefix }
   }
-  return {
-    provider: model.slice(0, slashIdx),
-    model: model.slice(slashIdx + 1),
+  if (model.startsWith('anthropic/')) {
+    return { provider: 'anthropic', model: model.slice('anthropic/'.length) }
   }
+  // No known prefix — default to openrouter (handles bare model names and
+  // OpenRouter-style model IDs like "nvidia/nemotron-3-ultra-550b-a55b:free")
+  return { provider: 'openrouter', model }
 }
 
 /**

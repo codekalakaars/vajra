@@ -32,7 +32,7 @@ export function registerProjectHandlers(router: RpcRouter<ServerContext>): void 
   router.register('projects.attach', (params: SessionAttachParams, ctx) => {
     const projectId = getProjectId(params)
     ctx.connection.subscribe(projectId)
-    return ctx.projects.attach(projectId)
+    return ctx.projects.attach(projectId, ctx.apiKeys)
   })
 
   router.register('projects.stop', (params: SessionStopParams, ctx) => {
@@ -64,6 +64,12 @@ export function registerProjectHandlers(router: RpcRouter<ServerContext>): void 
 
   router.register('projects.rejectPlan', (params: SessionRejectPlanParams, ctx) => {
     ctx.projects.rejectPlan(getProjectId(params))
+    return { ok: true as const }
+  })
+
+  router.register('projects.setModel', (params: { projectId: string; model: string }, ctx) => {
+    const projectId = getProjectId(params)
+    ctx.projects.setModel(projectId, params.model)
     return { ok: true as const }
   })
 }

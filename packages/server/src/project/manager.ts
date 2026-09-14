@@ -208,7 +208,7 @@ export class ProjectManager {
     }))
   }
 
-  attach(projectId: string) {
+  async attach(projectId: string, apiKeys?: Record<string, string>) {
     const row = this.db
       .prepare(
         `SELECT id, project_dir, task, model, status, created_at,
@@ -248,6 +248,30 @@ export class ProjectManager {
         tool_result: string | null
         created_at: number
       }>
+
+    // Initialize conversation state if not already present (e.g. after page refresh)
+    if (!this.conversations.has(projectId)) {
+      const handle = this.handles.get(projectId)
+      // Create provider if API keys are available
+      let provider: ChatProvider | undefined
+      if (apiKeys && Object.keys(apiKeys).length > 0) {
+        const { createProvider } = await import('../agent/providers/index.js')
+        const result = createProvider(row.model, apiKeys)
+        provider = result.provider
+      }
+      this.conversations.set(projectId, {
+        history: messages.map((m) => ({
+          role: m.role as 'user' | 'assistant' | 'system',
+          content: m.content ?? '',
+          ...(m.tool_name && { toolCalls: [{ id: m.tool_call_id ?? '', name: m.tool_name, arguments: m.tool_args ? JSON.parse(m.tool_args) : {} }] }),
+          ...(m.tool_result && m.tool_call_id && { toolCallId: m.tool_call_id }),
+        })),
+        summaryIndex: [],
+        handle: handle!,
+        fileLocks: new FileLockManager(),
+        provider: provider!,
+      })
+    }
 
     return {
       project: {
@@ -297,6 +321,10 @@ export class ProjectManager {
     this.setStatus(projectId, 'stopped', Date.now())
   }
 
+  setModel(projectId: string, model: string): void {
+    this.db.prepare(`UPDATE sessions SET model = ? WHERE id = ?`).run(model, projectId)
+  }
+
   delete(projectId: string): void {
     const handle = this.handles.get(projectId)
     if (handle) {
@@ -335,7 +363,13 @@ export class ProjectManager {
       throw new Error('Cannot send messages while plan is awaiting confirmation. Confirm or reject the plan first.')
     }
 
-    if (status === 'talking') {
+    // Allow recovery from failed status — reset to talking
+    if (status === 'failed') {
+      this.setStatus(projectId, 'talking')
+      this.events.push('projects.statusChanged', projectId, { status: 'talking' })
+    }
+
+    if (status === 'talking' || status === 'failed') {
       await this.sendConversationMessage(projectId, content, apiKey, provider)
       return
     }
