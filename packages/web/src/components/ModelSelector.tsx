@@ -5,13 +5,11 @@ const C = { bg: '#0a0a0a', raised: '#1a1a1a', overlay: '#222222', border: '#2a2a
 
 const MODELS = [
   { group: 'Strong', options: [
-    { value: 'thinkingmachines/inkling:free', label: 'Inkling 975B (1M ctx)' },
     { value: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'Nemotron 3 Ultra 550B' },
     { value: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'Nemotron 3 Super 120B' },
+    { value: 'dots-studio/dots-3-note-preview:free', label: 'Dots3-Note 280B' },
   ]},
   { group: 'General', options: [
-    { value: 'thinkingmachines/inkling-small:free', label: 'Inkling Small 276B' },
-    { value: 'dots-studio/dots-3-note-preview:free', label: 'Dots3-Note 280B' },
     { value: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B' },
     { value: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B' },
     { value: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', label: 'Nemotron 3 Nano 30B' },
