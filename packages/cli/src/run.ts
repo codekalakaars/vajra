@@ -30,9 +30,9 @@ async function evaluateSkipIf(conditions: string[], projectDir: string): Promise
       const fullPath = resolve(projectDir, filePath)
       try {
         await access(fullPath)
-        continue
-      } catch {
         return true
+      } catch {
+        continue
       }
     }
 
@@ -64,6 +64,19 @@ function computeTaskPermissions(task: { readFile: string[]; writeFile: string[];
     files[file] = { read: true, write: false, edit: false, delete: true }
   }
 
+  const allFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
+  const dirs = new Set(allFiles.map(f => {
+    const parts = f.split('/')
+    parts.pop()
+    return parts.join('/')
+  }).filter(Boolean))
+
+  for (const dir of dirs) {
+    if (!files[dir]) {
+      files[dir] = { read: true, write: false, edit: false, delete: false }
+    }
+  }
+
   return files
 }
 
@@ -87,6 +100,7 @@ async function executeTask(
   const readFileList = task.readFile.length > 0 ? task.readFile.join(', ') : '(none)'
   const writeFileList = task.writeFile.length > 0 ? task.writeFile.join(', ') : '(none)'
   const deleteFileList = task.deleteFile.length > 0 ? task.deleteFile.join(', ') : '(none)'
+  const createDirList = task.createDir.length > 0 ? task.createDir.join(', ') : '(none)'
 
   const systemPrompt = [
     'You are a worker agent. Follow the instructions EXACTLY. Do not deviate.',
@@ -100,6 +114,7 @@ async function executeTask(
     `FILES TO READ: ${readFileList}`,
     `FILES TO WRITE: ${writeFileList}`,
     task.deleteFile.length > 0 ? `FILES TO DELETE (handled externally): ${deleteFileList}` : '',
+    task.createDir.length > 0 ? `DIRS TO CREATE (handled externally): ${createDirList}` : '',
     '',
     'RULES:',
     '- Execute each instruction step by step',
