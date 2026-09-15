@@ -43,6 +43,7 @@ const knownModels = new Map<string, Set<string>>([
     'kimi-k2.5', 'kimi-k2.6', 'kimi-k2.7-code', 'kimi-k3',
     'big-pickle', 'glm-5.2', 'glm-5.1', 'glm-5',
     'minimax-m3', 'minimax-m2.7', 'minimax-m2.5',
+    'mimo-v2.5',
   ])],
 ])
 
