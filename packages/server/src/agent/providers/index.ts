@@ -11,10 +11,13 @@ import { OpenRouterProvider } from './openrouter.js'
 import { AnthropicProvider } from './anthropic.js'
 import { ZenProvider } from './zen.js'
 
+const ZEN_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
+
 const providers = new Map<string, () => ChatProvider>([
   ['openrouter', () => new OpenRouterProvider()],
   ['anthropic', () => new AnthropicProvider()],
   ['zen', () => new ZenProvider()],
+  ['go', () => new ZenProvider(ZEN_GO_BASE_URL)],
 ])
 
 // Known models per provider (lowercase). Used for validation.
@@ -45,6 +48,14 @@ const knownModels = new Map<string, Set<string>>([
     'minimax-m3', 'minimax-m2.7', 'minimax-m2.5',
     'mimo-v2.5',
   ])],
+  ['go', new Set([
+    'mimo-v2.5', 'mimo-v2.5-pro',
+    'deepseek-v4-pro', 'deepseek-v4-flash',
+    'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.6',
+    'minimax-m3', 'minimax-m2.7',
+    'glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'glm-5.1',
+    'gpt-5.6-luna', 'grok-4.5', 'grok-4.6',
+  ])],
 ])
 
 /**
@@ -69,6 +80,9 @@ export function parseModelString(model: string): { provider: string; model: stri
   }
   if (model.startsWith('zen/')) {
     return { provider: 'zen', model: model.slice('zen/'.length) }
+  }
+  if (model.startsWith('go/')) {
+    return { provider: 'go', model: model.slice('go/'.length) }
   }
   // No known prefix — default to openrouter (handles bare model names and
   // OpenRouter-style model IDs like "nvidia/nemotron-3-ultra-550b-a55b:free")

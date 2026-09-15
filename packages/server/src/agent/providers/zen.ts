@@ -13,11 +13,12 @@ import type {
 import type { ChatProvider, ChatRequest, ChatResult, ChatMessage, ToolCall, TokenUsage } from './types.js'
 
 const ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
+const ZEN_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
 const MAX_RETRIES = 5
 const INITIAL_RETRY_DELAY_MS = 1000
 
-function createClient(apiKey: string): OpenAI {
-  return new OpenAI({ baseURL: ZEN_BASE_URL, apiKey, maxRetries: 0 })
+function createClient(apiKey: string, baseURL: string = ZEN_BASE_URL): OpenAI {
+  return new OpenAI({ baseURL, apiKey, maxRetries: 0 })
 }
 
 function sleep(ms: number): Promise<void> {
@@ -107,13 +108,18 @@ function toSdkTools(tools: ChatRequest['tools']): ChatCompletionTool[] | undefin
 
 export class ZenProvider implements ChatProvider {
   readonly name = 'zen'
+  private baseURL: string
+
+  constructor(baseURL?: string) {
+    this.baseURL = baseURL ?? ZEN_BASE_URL
+  }
 
   async streamChat(
     request: ChatRequest,
     onTextDelta: (text: string) => void,
     onThinkingDelta?: (text: string) => void,
   ): Promise<ChatResult> {
-    const client = createClient(request.apiKey)
+    const client = createClient(request.apiKey, this.baseURL)
     const params = {
       model: request.model,
       messages: toSdkMessages(request.messages),
