@@ -163,8 +163,13 @@ export function ChatView({ connected }: { connected: boolean }) {
       {!isStreaming && project.status !== 'confirming' && (
         <div className="p-4" style={{ borderTop: `1px solid ${C.border}` }}>
           <div className="max-w-3xl mx-auto flex gap-2">
-            <textarea ref={inputRef} value={inputValue} onChange={e => setInputValue(e.target.value)} onKeyDown={handleKeyDown}
-              placeholder="Message..." rows={1} className="flex-1 px-4 py-2.5 rounded-lg text-sm resize-none" style={{ ...inputStyle, background: C.raised }} onFocus={inputFocus} onBlur={inputBlur} />
+            <textarea ref={inputRef} value={inputValue} onChange={e => {
+              setInputValue(e.target.value)
+              // Auto-resize
+              e.currentTarget.style.height = 'auto'
+              e.currentTarget.style.height = Math.min(e.currentTarget.scrollHeight, 150) + 'px'
+            }} onKeyDown={handleKeyDown}
+              placeholder="Message..." rows={1} className="flex-1 px-4 py-2.5 rounded-lg text-sm resize-none" style={{ ...inputStyle, background: C.raised, maxHeight: '150px' }} onFocus={inputFocus} onBlur={inputBlur} />
             <button onClick={handleSend} disabled={!inputValue.trim()} className="px-4 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50"
               style={{ background: C.overlay, color: C.text }}>Send</button>
           </div>

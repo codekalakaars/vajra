@@ -20,6 +20,9 @@ const STATUS_LABELS: Record<string, string> = {
   done: 'Complete',
   failed: 'Error',
   stopped: 'Stopped',
+  streaming: 'Streaming',
+  creating: 'Creating',
+  idle: 'Ready',
 }
 
 export function StatusBadge({ status }: { status: string }) {
