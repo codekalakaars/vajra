@@ -4,7 +4,6 @@ import { ChevronDown, Cpu } from 'lucide-react'
 const C = { bg: '#0a0a0a', raised: '#1a1a1a', overlay: '#222222', border: '#2a2a2a', text: '#e5e5e5', textMuted: '#737373', placeholder: '#525252' }
 
 const MODELS = [
-  { group: 'Auto', options: [{ value: 'openrouter/free', label: 'Auto-route free models' }] },
   { group: 'Strong', options: [
     { value: 'thinkingmachines/inkling:free', label: 'Inkling 975B (1M ctx)' },
     { value: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'Nemotron 3 Ultra 550B' },
