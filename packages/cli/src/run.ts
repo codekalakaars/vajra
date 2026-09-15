@@ -99,7 +99,7 @@ async function executeTask(
     '',
     `FILES TO READ: ${readFileList}`,
     `FILES TO WRITE: ${writeFileList}`,
-    `FILES TO DELETE: ${deleteFileList}`,
+    task.deleteFile.length > 0 ? `FILES TO DELETE (handled externally): ${deleteFileList}` : '',
     '',
     'RULES:',
     '- Execute each instruction step by step',
@@ -158,9 +158,8 @@ async function executeTask(
 
           const hasExitCode = /exit\s+code\s+[1-9]/i.test(output)
           const hasFailPatterns = /\b(failed|failure|error|exception|panic)\b/i.test(output)
-          const startsWithError = output.trimStart().toLowerCase().startsWith('error')
 
-          if (hasExitCode || (hasFailPatterns && !startsWithError)) {
+          if (hasExitCode || hasFailPatterns) {
             return false
           }
         } catch {
@@ -316,6 +315,7 @@ export async function runCommand(options: RunOptions): Promise<void> {
 
           const allTaskFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
           if (!fileLocks.tryAcquire(allTaskFiles, task.id, 'write')) {
+            fileLocks.release(task.id)
             continue
           }
 

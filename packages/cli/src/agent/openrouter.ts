@@ -51,7 +51,17 @@ function sleep(ms: number): Promise<void> {
 }
 
 function isRateLimitError(err: unknown): boolean {
-  return err instanceof Error && 'status' in err && (err as { status: number }).status === 429
+  if (!(err instanceof Error)) return false
+  const status = (err as { status?: number }).status
+  if (status === 503) return true
+  if (status === 429) {
+    const msg = err.message?.toLowerCase() ?? ''
+    if (msg.includes('per-day') || msg.includes('daily')) return false
+    return true
+  }
+  const msg = err.message?.toLowerCase() ?? ''
+  if (msg.includes('overloaded') || msg.includes('rate limit') || msg.includes('too many requests')) return true
+  return false
 }
 
 function extractErrorMessage(err: unknown): string {
@@ -184,11 +194,66 @@ export async function streamChatCompletion(
     stream: true,
   }
 
-  let stream: AsyncIterable<ChatCompletionChunk>
   for (let attempt = 0; ; attempt++) {
     try {
-      stream = await client.chat.completions.create(params) as AsyncIterable<ChatCompletionChunk>
-      break
+      const stream = await client.chat.completions.create(params) as AsyncIterable<ChatCompletionChunk>
+
+      let content = ''
+      let finishReason: string | null = null
+      const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
+
+      for await (const chunk of stream) {
+        const choice = chunk.choices[0]
+        if (!choice) continue
+
+        const delta = choice.delta
+
+        if (delta?.content) {
+          content += delta.content
+          onTextDelta(delta.content)
+        }
+
+        if (onThinkingDelta) {
+          const d = delta as Record<string, unknown> | undefined
+          const rd = d?.reasoning_details as Array<Record<string, unknown>> | undefined
+          if (rd) {
+            for (const detail of rd) {
+              if (detail.type === 'reasoning.text' && typeof detail.text === 'string') {
+                onThinkingDelta(detail.text)
+              }
+            }
+          }
+        }
+
+        if (delta?.tool_calls) {
+          for (const fragment of delta.tool_calls) {
+            const idx = fragment.index
+            const existing = toolCalls.get(idx) ?? { id: '', name: '', arguments: '' }
+            if (fragment.id) existing.id = fragment.id
+            if (fragment.function?.name) existing.name = fragment.function.name
+            if (fragment.function?.arguments) existing.arguments += fragment.function.arguments
+            toolCalls.set(idx, existing)
+          }
+        }
+
+        if (choice.finish_reason) finishReason = choice.finish_reason
+      }
+
+      const orderedToolCalls: OpenRouterToolCall[] = [...toolCalls.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([, tc]) => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.name, arguments: tc.arguments },
+        }))
+
+      const message: OpenRouterMessage = {
+        role: 'assistant',
+        content: content.length > 0 ? content : null,
+        ...(orderedToolCalls.length > 0 ? { tool_calls: orderedToolCalls } : {}),
+      }
+
+      return { message, finishReason }
     } catch (err) {
       if (isRateLimitError(err) && attempt < MAX_RETRIES) {
         const delay = retryAfterMs(err)
@@ -198,61 +263,4 @@ export async function streamChatCompletion(
       throw new Error(extractErrorMessage(err))
     }
   }
-
-  let content = ''
-  let finishReason: string | null = null
-  const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
-
-  for await (const chunk of stream) {
-    const choice = chunk.choices[0]
-    if (!choice) continue
-
-    const delta = choice.delta
-
-    if (delta?.content) {
-      content += delta.content
-      onTextDelta(delta.content)
-    }
-
-    if (onThinkingDelta) {
-      const d = delta as Record<string, unknown> | undefined
-      const rd = d?.reasoning_details as Array<Record<string, unknown>> | undefined
-      if (rd) {
-        for (const detail of rd) {
-          if (detail.type === 'reasoning.text' && typeof detail.text === 'string') {
-            onThinkingDelta(detail.text)
-          }
-        }
-      }
-    }
-
-    if (delta?.tool_calls) {
-      for (const fragment of delta.tool_calls) {
-        const idx = fragment.index
-        const existing = toolCalls.get(idx) ?? { id: '', name: '', arguments: '' }
-        if (fragment.id) existing.id = fragment.id
-        if (fragment.function?.name) existing.name = fragment.function.name
-        if (fragment.function?.arguments) existing.arguments += fragment.function.arguments
-        toolCalls.set(idx, existing)
-      }
-    }
-
-    if (choice.finish_reason) finishReason = choice.finish_reason
-  }
-
-  const orderedToolCalls: OpenRouterToolCall[] = [...toolCalls.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([, tc]) => ({
-      id: tc.id,
-      type: 'function' as const,
-      function: { name: tc.name, arguments: tc.arguments },
-    }))
-
-  const message: OpenRouterMessage = {
-    role: 'assistant',
-    content: content.length > 0 ? content : null,
-    ...(orderedToolCalls.length > 0 ? { tool_calls: orderedToolCalls } : {}),
-  }
-
-  return { message, finishReason }
 }
