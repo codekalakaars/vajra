@@ -516,8 +516,11 @@ export class ProjectManager {
         conv.proposedPlan = result.plan
         this.setStatus(projectId, 'confirming')
         this.events.push('projects.planProposed', projectId, { plan: result.plan })
+      } else {
+        // Response was streamed — signal completion so frontend flushes and resets status
+        this.events.push('projects.completed', projectId, {})
+        this.events.push('projects.statusChanged', projectId, { status: 'talking' })
       }
-      // If result.type === 'response', the text was already streamed to the user
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       this.setStatus(projectId, 'failed', Date.now())
