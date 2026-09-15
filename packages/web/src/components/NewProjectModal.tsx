@@ -5,6 +5,22 @@ import { navigate } from '../hooks/useRouter'
 import { X, Folder, File, FileText, FileCode, FileJson, FileSpreadsheet, FileImage, Globe, Lock, Settings, Loader2 } from 'lucide-react'
 
 const MODELS = [
+  { group: 'Zen Free', options: [
+    { value: 'zen/mimo-v2.5-free', label: 'MiMo V2.5' },
+    { value: 'zen/deepseek-v4-flash-free', label: 'DeepSeek V4 Flash' },
+    { value: 'zen/nemotron-3-ultra-free', label: 'Nemotron 3 Ultra' },
+    { value: 'zen/nemotron-3.5-lightning-free', label: 'Nemotron 3.5 Lightning' },
+    { value: 'zen/nemotron-3-super-free', label: 'Nemotron 3 Super' },
+    { value: 'zen/ling-3.0-flash-fin-free', label: 'Ling 3.0 Flash' },
+  ]},
+  { group: 'Zen Paid', options: [
+    { value: 'zen/gpt-5.5', label: 'GPT 5.5' },
+    { value: 'zen/gpt-5.4-mini', label: 'GPT 5.4 Mini' },
+    { value: 'zen/gpt-5.4', label: 'GPT 5.4' },
+    { value: 'zen/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+    { value: 'zen/kimi-k3', label: 'Kimi K3' },
+    { value: 'zen/mimo-v2.5', label: 'MiMo V2.5 (Paid)' },
+  ]},
   { group: 'Auto (Recommended)', options: [{ value: 'openrouter/free', label: 'Auto-route free models' }] },
   { group: 'Strong (1M context)', options: [
     { value: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'Nemotron 3 Ultra 550B' },
@@ -86,7 +102,7 @@ interface NewProjectModalProps {
 
 export function NewProjectModal({ client, open, onClose }: NewProjectModalProps) {
   const [projectDir, setProjectDir] = useState('')
-  const [model, setModel] = useState('openrouter/free')
+  const [model, setModel] = useState('zen/mimo-v2.5-free')
   const [permFilter, setPermFilter] = useState('')
   const [permFiles, setPermFiles] = useState<FileEntry[]>([])
   const [permMap, setPermMap] = useState<Record<string, boolean>>({})
@@ -255,7 +271,7 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
   // Reset state when opening
   useEffect(() => {
     if (open) {
-      setProjectDir(''); setModel('openrouter/free'); setPermFilter(''); setPermFiles([]); setPermMap({})
+      setProjectDir(''); setModel('zen/mimo-v2.5-free'); setPermFilter(''); setPermFiles([]); setPermMap({})
       setPermLoading(false); setPermError(null); setPermLoaded(false); setExpandedDirs(new Set()); setCreating(false)
       setSuggestions([]); setShowSuggestions(false); setSelectedSuggestionIdx(-1)
     }
