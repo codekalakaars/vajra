@@ -6,26 +6,26 @@ const C = { bg: '#0a0a0a', raised: '#1a1a1a', overlay: '#222222', border: '#2a2a
 const MODELS = [
   { group: 'Auto', options: [{ value: 'openrouter/free', label: 'Auto-route free models' }] },
   { group: 'Strong', options: [
+    { value: 'thinkingmachines/inkling:free', label: 'Inkling 975B (1M ctx)' },
     { value: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'Nemotron 3 Ultra 550B' },
     { value: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'Nemotron 3 Super 120B' },
-    { value: 'minimax/minimax-m3:free', label: 'MiniMax M3' },
-    { value: 'thinkingmachines/inkling:free', label: 'Inkling' },
+  ]},
+  { group: 'General', options: [
+    { value: 'thinkingmachines/inkling-small:free', label: 'Inkling Small 276B' },
+    { value: 'dots-studio/dots-3-note-preview:free', label: 'Dots3-Note 280B' },
+    { value: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B' },
+    { value: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B' },
+    { value: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', label: 'Nemotron 3 Nano 30B' },
   ]},
   { group: 'Fast', options: [
     { value: 'nvidia/nemotron-3.5-lightning:free', label: 'Nemotron 3.5 Lightning' },
-    { value: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', label: 'Nemotron 3 Nano 30B' },
-    { value: 'inclusionai/ling-3.0-flash-fin:free', label: 'Ling 3.0 Flash' },
+    { value: 'inclusionai/ling-3.0-flash-vl:free', label: 'Ling 3.0 Flash VL' },
   ]},
   { group: 'Coding', options: [
+    { value: 'nex-agi/nex-n2.5-pro:free', label: 'Nex-N2.5-Pro' },
     { value: 'poolside/laguna-s-2.1:free', label: 'Laguna S 2.1' },
     { value: 'poolside/laguna-xs-2.1:free', label: 'Laguna XS 2.1' },
     { value: 'cohere/north-mini-code:free', label: 'North Mini Code' },
-  ]},
-  { group: 'General', options: [
-    { value: 'z-ai/glm-5.2:free', label: 'GLM 5.2' },
-    { value: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B' },
-    { value: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B' },
-    { value: 'minimax/minimax-m2.7:free', label: 'MiniMax M2.7' },
   ]},
 ]
 
