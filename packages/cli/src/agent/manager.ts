@@ -3,12 +3,113 @@ import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
 import { getManagerToolSpecs, parseToolCall } from './tools.js'
 import { scanProject } from '../native.js'
 import { buildNestedTree } from './tree.js'
-import { buildSummaryIndex, formatSummaryIndex, searchSummary, type SummaryEntry } from './summary.js'
+import { buildSummaryIndex, formatSummaryIndexHierarchical, searchSummary, type SummaryEntry } from './summary.js'
 
 const FREE_TOOLS = new Set(['search_files'])
 
 export interface LaunchHandle {
   callTool(tool: string, args: unknown): Promise<unknown>
+}
+
+// Approximate tokens per character (conservative estimate)
+const CHARS_PER_TOKEN = 4
+
+// Maximum context sizes by model (in tokens)
+const MODEL_LIMITS: Record<string, number> = {
+  'nvidia/nemotron-3-ultra-550b-a55b:free': 1000000,
+  'nvidia/nemotron-3-super-120b-a12b:free': 262144,
+  'nvidia/nemotron-3.5-lightning:free': 1000000,
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': 256000,
+  'dots-studio/dots-3-note-preview:free': 512000,
+  'google/gemma-4-31b-it:free': 262144,
+  'google/gemma-4-26b-a4b-it:free': 262144,
+  'nex-agi/nex-n2.5-pro:free': 262144,
+  'poolside/laguna-s-2.1:free': 262144,
+  'poolside/laguna-xs-2.1:free': 262144,
+  'cohere/north-mini-code:free': 256000,
+  'inclusionai/ling-3.0-flash-vl:free': 262144,
+  default: 128000,
+}
+
+function getModelLimit(model: string): number {
+  if (MODEL_LIMITS[model]) return MODEL_LIMITS[model]
+  for (const [key, limit] of Object.entries(MODEL_LIMITS)) {
+    if (model.includes(key)) return limit
+  }
+  return MODEL_LIMITS.default
+}
+
+function estimateTokens(message: OpenRouterMessage): number {
+  let tokens = 0
+  if (message.content) {
+    tokens += Math.ceil(message.content.length / CHARS_PER_TOKEN)
+  }
+  if (message.tool_calls) {
+    for (const toolCall of message.tool_calls) {
+      tokens += Math.ceil(toolCall.function.name.length / CHARS_PER_TOKEN)
+      tokens += Math.ceil(toolCall.function.arguments.length / CHARS_PER_TOKEN)
+    }
+  }
+  tokens += 4 // Overhead per message
+  return tokens
+}
+
+function compressMessages(messages: OpenRouterMessage[], model: string, reserveTokens: number = 2000): OpenRouterMessage[] {
+  const maxTokens = getModelLimit(model) - reserveTokens
+  const totalTokens = messages.reduce((sum, msg) => sum + estimateTokens(msg), 0)
+
+  // If under limit, return as-is
+  if (totalTokens <= maxTokens) return messages
+
+  const compressed: OpenRouterMessage[] = []
+  let currentTokens = 0
+
+  // Find system prompt (usually first message)
+  const systemIdx = messages.findIndex(m => m.role === 'system')
+  if (systemIdx >= 0) {
+    compressed.push(messages[systemIdx])
+    currentTokens += estimateTokens(messages[systemIdx])
+  }
+
+  // Keep last 6 messages for recent context
+  const recentCount = 6
+  const recentStart = Math.max(0, messages.length - recentCount)
+  const recentMessages = messages.slice(recentStart)
+
+  // Add recent messages
+  for (const msg of recentMessages) {
+    if (compressed.includes(msg)) continue
+    const msgTokens = estimateTokens(msg)
+    if (currentTokens + msgTokens <= maxTokens) {
+      compressed.push(msg)
+      currentTokens += msgTokens
+    }
+  }
+
+  // If still over limit, compress older tool results
+  if (currentTokens > maxTokens) {
+    for (let i = 0; i < compressed.length; i++) {
+      const msg = compressed[i]
+      if (msg.role === 'tool' && msg.content && msg.content.length > 500) {
+        const truncated = msg.content.slice(0, 500) + '\n... (truncated)'
+        const savedTokens = estimateTokens(msg) - estimateTokens({ ...msg, content: truncated })
+        compressed[i] = { ...msg, content: truncated }
+        currentTokens -= savedTokens
+        if (currentTokens <= maxTokens) break
+      }
+    }
+  }
+
+  // Add summary message if we compressed
+  if (compressed.length < messages.length) {
+    const skippedCount = messages.length - compressed.length
+    compressed.splice(1, 0, {
+      role: 'user',
+      content: `[System: ${skippedCount} earlier messages were compressed to fit context window]`,
+    })
+  }
+
+  return compressed
 }
 
 function buildManagerConversationPrompt(
@@ -40,7 +141,7 @@ function buildManagerConversationPrompt(
     'When calling propose_plan, each task MUST include:',
     '- title: Short title',
     '- description: What needs to be done and why',
-    '- instructions: EXACT step-by-step instructions',
+    '- instructions: EXACT step-by-step instructions (e.g. "Add try-catch around line 42 in src/api.ts")',
     '- readFile: Files the worker needs to read for context',
     '- writeFile: Files the worker will create or modify',
     '- deleteFile: Files to delete',
@@ -48,15 +149,32 @@ function buildManagerConversationPrompt(
     '- validation: Commands to run after completion (must exit 0 on success)',
     '- dependsOn: Task IDs this depends on',
     '- type: create, modify, delete, or refactor',
+    '- complexity: low, medium, or high (affects task sizing)',
+    '- rollback: Commands to undo changes if validation fails (optional)',
+    '- alternativeApproaches: Different ways to solve this task (optional)',
     '',
     'CRITICAL: Instructions should be so specific that a worker with no context can execute them.',
+    'Bad: "Add error handling to the API"',
+    'Good: "In src/api/users.ts, wrap the db.query() call at line 42 in try-catch. In the catch block, return { status: 500, error: e.message }. Import HttpError from src/utils/errors.ts if not already imported."',
+    '',
+    'Tasks should be independent where possible; specify dependencies explicitly.',
+    'Aim for 2-8 tasks; keep related work together.',
+    '',
+    'Task Sizing Guidelines:',
+    '- Low complexity: Single file, simple changes (1-2 hours)',
+    '- Medium complexity: Multiple files, moderate changes (2-4 hours)',
+    '- High complexity: Architecture changes, many files (4+ hours)',
+    '',
+    'Error Recovery:',
+    '- rollback: Commands to undo changes if validation fails',
+    '- alternativeApproaches: Different ways to solve this task',
     '',
     'Project directory: ' + projectDir,
     '',
     'Project structure:',
     tree,
     '',
-    'File summaries:',
+    'File summaries (path [lines, imports, exports]: exported symbols):',
     summary,
   ].join('\n')
 }
@@ -166,7 +284,7 @@ export async function managerConversationTurn(
       tree = '(unable to read project tree)'
     }
 
-    const summaryText = formatSummaryIndex(summaryIndex)
+    const summaryText = formatSummaryIndexHierarchical(summaryIndex)
     messages.push({
       role: 'system',
       content: buildManagerConversationPrompt(projectDir, tree, summaryText),
@@ -180,8 +298,11 @@ export async function managerConversationTurn(
   const MAX_TOOL_CALLS = 30
 
   while (toolCallCount < MAX_TOOL_CALLS) {
+    // Compress messages to fit within context window
+    const compressedMessages = compressMessages(messages, model)
+
     const result = await streamChatCompletion(
-      { apiKey, model, messages, tools: toolSpecs },
+      { apiKey, model, messages: compressedMessages, tools: toolSpecs },
       text => onTextDelta?.(text),
       thinking => onThinkingDelta?.(thinking),
     )
