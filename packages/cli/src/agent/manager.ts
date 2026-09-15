@@ -118,7 +118,7 @@ function compressMessages(messages: OpenRouterMessage[], model: string, reserveT
   if (compressed.length < messages.length) {
     const skippedCount = messages.length - compressed.length
     compressed.splice(1, 0, {
-      role: 'user',
+      role: 'system',
       content: `[System: ${skippedCount} earlier messages were compressed to fit context window]`,
     })
   }

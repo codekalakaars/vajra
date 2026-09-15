@@ -1,25 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import type { PlannedTask as ProtocolPlannedTask } from '@codekalakaars/vajra-protocol'
 
 export type TaskStatus = 'pending' | 'assigned' | 'running' | 'done' | 'failed' | 'skipped'
-
-export interface PlannedTask {
-  id: string
-  title: string
-  description: string
-  instructions: string[]
-  readFile: string[]
-  writeFile: string[]
-  deleteFile: string[]
-  createDir: string[]
-  validation: string[]
-  dependsOn: string[]
-  type: 'create' | 'modify' | 'delete' | 'refactor'
-  allowedTools?: string[]
-  timeout?: number
-  maxRetries?: number
-  rollback?: string[]
-  skipIf?: string[]
-}
 
 export interface TaskState {
   id: string
@@ -68,7 +50,7 @@ export class TaskQueue {
 
   constructor(private sessionId: string) {}
 
-  addTask(task: PlannedTask, filePermissions?: string, toolPermissions?: string): TaskState {
+  addTask(task: ProtocolPlannedTask, filePermissions?: string, toolPermissions?: string): TaskState {
     const now = Date.now()
 
     const state: TaskState = {
@@ -90,7 +72,7 @@ export class TaskQueue {
       filePermissions: filePermissions ?? null,
       toolPermissions: toolPermissions ?? null,
       retries: 0,
-      maxRetries: task.maxRetries ?? 2,
+      maxRetries: task.retries ?? 2,
       timeout: task.timeout ?? 120,
       rollback: task.rollback ?? [],
       skipIf: task.skipIf ?? [],
