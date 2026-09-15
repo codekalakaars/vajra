@@ -196,7 +196,7 @@ function buildManagerConversationPrompt(
 
 function parseProposePlanArgs(raw: unknown): ManagerPlan {
   const args = raw as {
-    tasks: Array<{
+    tasks?: Array<{
       title: string
       description: string
       instructions: string[]
@@ -220,7 +220,7 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
     summary: string
   }
 
-  const tasks: PlannedTask[] = args.tasks.map((t, i) => ({
+  const tasks: PlannedTask[] = (args.tasks ?? []).map((t, i) => ({
     id: `task-${i + 1}`,
     title: t.title,
     description: t.description,
@@ -415,6 +415,14 @@ export async function managerConversationTurn(
         }
 
         const plan = parseProposePlanArgs(parsed)
+        if (plan.tasks.length === 0) {
+          messages.push({
+            role: 'tool',
+            content: 'Error: Plan has no tasks. Please propose a plan with at least one task.',
+            tool_call_id: toolCall.id,
+          })
+          continue
+        }
         plan.tasks = detectAndRemoveCircularDeps(plan.tasks)
         plan.tasks = addFileLevelDependencies(plan.tasks)
         messages.push({
