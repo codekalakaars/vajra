@@ -41,6 +41,14 @@ const MODELS = [
     { value: 'zen/big-pickle', label: 'Big Pickle' },
     { value: 'zen/mimo-v2.5', label: 'MiMo V2.5' },
   ]},
+  { group: 'Go', options: [
+    { value: 'go/mimo-v2.5', label: 'MiMo V2.5' },
+    { value: 'go/mimo-v2.5-pro', label: 'MiMo V2.5 Pro' },
+    { value: 'go/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+    { value: 'go/kimi-k3', label: 'Kimi K3' },
+    { value: 'go/minimax-m3', label: 'MiniMax M3' },
+    { value: 'go/glm-5.3', label: 'GLM 5.3' },
+  ]},
 ]
 
 function getLabel(value: string): string {

@@ -40,15 +40,18 @@ export interface ChatCompletionResult {
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 const ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
+const ZEN_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
 const MAX_RETRIES = 5
 const INITIAL_RETRY_DELAY_MS = 1000
 
 function resolveBaseURL(model: string): string {
+  if (model.startsWith('go/')) return ZEN_GO_BASE_URL
   if (model.startsWith('zen/')) return ZEN_BASE_URL
   return OPENROUTER_BASE_URL
 }
 
 function stripProviderPrefix(model: string): string {
+  if (model.startsWith('go/')) return model.slice('go/'.length)
   if (model.startsWith('zen/')) return model.slice('zen/'.length)
   if (model.startsWith('openrouter/')) {
     const after = model.slice('openrouter/'.length)
@@ -59,7 +62,16 @@ function stripProviderPrefix(model: string): string {
 }
 
 function createClient(apiKey: string, baseURL: string): OpenAI {
-  return new OpenAI({ baseURL, apiKey, maxRetries: 0 })
+  const headers: Record<string, string> = {}
+  if (baseURL === ZEN_GO_BASE_URL) {
+    headers['x-opencode-session'] = 'vajra-cli-' + Math.random().toString(36).slice(2, 10)
+  }
+  return new OpenAI({
+    baseURL,
+    apiKey,
+    maxRetries: 0,
+    ...(Object.keys(headers).length > 0 ? { defaultHeaders: headers } : {}),
+  })
 }
 
 function sleep(ms: number): Promise<void> {
