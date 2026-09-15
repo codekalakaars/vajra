@@ -369,7 +369,13 @@ export class ProjectManager {
       this.events.push('projects.statusChanged', projectId, { status: 'talking' })
     }
 
-    if (status === 'talking' || status === 'failed') {
+    // Allow recovery from stopped status — reset to talking
+    if (status === 'stopped') {
+      this.setStatus(projectId, 'talking')
+      this.events.push('projects.statusChanged', projectId, { status: 'talking' })
+    }
+
+    if (status === 'talking' || status === 'failed' || status === 'stopped') {
       await this.sendConversationMessage(projectId, content, apiKey, provider)
       return
     }
