@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node esbuild.config.mjs --prod",
-    "dev": "node esbuild.config.mjs --watch",
+    "dev": "node esbuild.config.mjs --watch & node serve.mjs",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

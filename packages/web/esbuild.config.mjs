@@ -47,12 +47,6 @@ const ctx = await context({
 if (isWatch) {
   await ctx.watch()
   console.log('Watching for changes...')
-
-  const { host, port } = await ctx.serve({
-    servedir: outdir,
-    port: 8080,
-  })
-  console.log(`Dev server running at http://${host}:${port}`)
 } else {
   await ctx.rebuild()
   await ctx.dispose()
