@@ -36,15 +36,19 @@
 
 ::selection { background: #404040; color: #e5e5e5; }
 
-/* Remove blue highlight on hover/focus for all elements */
-*:hover { outline: none; }
-*:focus { outline: none; }
-*:focus-visible { outline: none; }
-
-/* Remove default blue selection highlight */
-input, textarea, select, button, a, label {
+/* Remove tap highlight on buttons and links only */
+button, a {
   -webkit-tap-highlight-color: transparent;
-  -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  user-select: none;
+}
+
+/* Allow text selection in inputs and textareas */
+input, textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Subtle focus ring for accessibility */
+input:focus, textarea:focus, select:focus, button:focus-visible {
+  outline: 2px solid #525252;
+  outline-offset: 1px;
 }

@@ -86,7 +86,7 @@ interface NewProjectModalProps {
 
 export function NewProjectModal({ client, open, onClose }: NewProjectModalProps) {
   const [projectDir, setProjectDir] = useState('')
-  const [model, setModel] = useState('openrouter/nvidia/nemotron-3-ultra-550b-a55b:free')
+  const [model, setModel] = useState('openrouter/free')
   const [permFilter, setPermFilter] = useState('')
   const [permFiles, setPermFiles] = useState<FileEntry[]>([])
   const [permMap, setPermMap] = useState<Record<string, boolean>>({})
@@ -181,15 +181,8 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
   }
 
   const handleSuggestionKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      if (showSuggestions && filteredSuggestions.length > 0 && selectedSuggestionIdx >= 0) {
-        e.preventDefault()
-        handleSuggestionClick(filteredSuggestions[selectedSuggestionIdx])
-      } else if (projectDir.trim()) {
-        e.preventDefault()
-        setShowSuggestions(false)
-        loadPermissions(projectDir)
-      }
+    if (e.key === 'Escape') {
+      setShowSuggestions(false)
       return
     }
     if (!showSuggestions || filteredSuggestions.length === 0) return
@@ -199,11 +192,14 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setSelectedSuggestionIdx(prev => Math.max(prev - 1, -1))
-    } else if (e.key === 'Enter' && selectedSuggestionIdx >= 0) {
+    } else if (e.key === 'Enter') {
       e.preventDefault()
-      handleSuggestionClick(suggestions[selectedSuggestionIdx])
-    } else if (e.key === 'Escape') {
-      setShowSuggestions(false)
+      if (selectedSuggestionIdx >= 0) {
+        handleSuggestionClick(filteredSuggestions[selectedSuggestionIdx])
+      } else if (projectDir.trim()) {
+        setShowSuggestions(false)
+        loadPermissions(projectDir)
+      }
     }
   }
 
@@ -392,7 +388,7 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
               )}
             </div>
 
-            {permError && <div className="p-3 rounded text-sm" style={{ background: C.muted, border: `1px solid ${C.border}`, color: C.placeholder }}>{permError}</div>}
+            {permError && <div className="p-3 rounded text-sm" style={{ background: '#2a1a1a', border: '1px solid #5a2a2a', color: '#e5e5e5' }}>{permError}</div>}
           </div>
 
           {/* File permissions - same style as model */}

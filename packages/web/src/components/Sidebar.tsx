@@ -9,7 +9,7 @@ export function Sidebar({ client, onNewProject }: { client: VajraClient; onNewPr
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true')
   const toggleCollapsed = () => setCollapsed((c) => { localStorage.setItem('sidebar-collapsed', String(!c)); return !c })
   const [projects, setProjects] = useState<Project[]>([])
-  const [currentPath, setCurrentPath] = useState(window.location.hash)
+  const [currentPath, setCurrentPath] = useState(window.location.pathname)
 
   const refresh = useCallback(async () => {
     try { const list = await client.call('projects.list', {}) as Project[]; setProjects(list) } catch {}
@@ -18,13 +18,15 @@ export function Sidebar({ client, onNewProject }: { client: VajraClient; onNewPr
   useEffect(() => {
     refresh()
     const interval = setInterval(refresh, 5000)
-    window.addEventListener('hashchange', () => { setCurrentPath(window.location.hash); refresh() })
+    const onPopState = () => { setCurrentPath(window.location.pathname); refresh() }
+    window.addEventListener('popstate', onPopState)
     const unsubs = [client.on('projects.completed', () => refresh()), client.on('projects.failed', () => refresh()), client.on('projects.deleted', () => refresh())]
-    return () => { clearInterval(interval); for (const u of unsubs) u() }
+    return () => { clearInterval(interval); window.removeEventListener('popstate', onPopState); for (const u of unsubs) u() }
   }, [client, refresh])
 
   const handleDelete = async (e: React.MouseEvent, projectId: string) => {
     e.stopPropagation()
+    if (!confirm('Are you sure you want to delete this project?')) return
     try { await client.call('projects.delete', { projectId }); refresh() } catch {}
   }
 
@@ -39,7 +41,7 @@ export function Sidebar({ client, onNewProject }: { client: VajraClient; onNewPr
         </button>
         <div className="mt-4 flex flex-col gap-2">
           {projects.map((s) => {
-            const isActive = currentPath === `#/project/${s.id}`
+            const isActive = currentPath === `/project/${s.id}`
             return (
               <div key={s.id} onClick={() => navigate(`/project/${s.id}`)} title={`${s.projectDir.split('/').pop()} — ${s.task}`}
                 className="w-8 h-8 rounded flex items-center justify-center cursor-pointer transition-colors"
@@ -73,7 +75,7 @@ export function Sidebar({ client, onNewProject }: { client: VajraClient; onNewPr
         {projects.length === 0 ? (
           <div className="p-4 text-sm" style={{ color: '#525252' }}>No projects yet</div>
         ) : projects.map((s) => {
-          const isActive = currentPath === `#/project/${s.id}`
+          const isActive = currentPath === `/project/${s.id}`
           return (
             <div key={s.id} onClick={() => navigate(`/project/${s.id}`)}
               className="group px-3 py-3 cursor-pointer transition-colors"
