@@ -271,6 +271,20 @@ export class ProjectManager {
         fileLocks: new FileLockManager(),
         provider: provider!,
       })
+
+      // If status is confirming, extract the plan from the last assistant message
+      if (row.status === 'confirming') {
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role !== 'assistant' || !messages[i].content) continue
+          try {
+            const obj = JSON.parse(messages[i].content!)
+            if (obj && Array.isArray(obj.tasks) && obj.tasks.length > 0 && obj.tasks[0].id && obj.tasks[0].title && obj.tasks[0].instructions) {
+              this.conversations.get(projectId)!.proposedPlan = obj
+              break
+            }
+          } catch {}
+        }
+      }
     }
 
     return {
