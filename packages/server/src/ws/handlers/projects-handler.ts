@@ -12,7 +12,7 @@ function getProjectId(params: unknown): string {
 
 export function registerProjectHandlers(router: RpcRouter<ServerContext>): void {
   router.register('projects.create', async (params: SessionCreateParams, ctx) => {
-    const defaultModel = process.env.VAJRA_MODEL || 'openrouter/free'
+    const defaultModel = process.env.VAJRA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free'
     const model = params.model?.trim() || defaultModel
 
     const { provider, resolvedModel } = createProvider(model, ctx.apiKeys)

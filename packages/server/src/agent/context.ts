@@ -10,7 +10,6 @@ const CHARS_PER_TOKEN = 4
 
 // Maximum context sizes by model (in tokens)
 const MODEL_LIMITS: Record<string, number> = {
-  'openrouter/free': 200000,
   'thinkingmachines/inkling:free': 1048576,
   'thinkingmachines/inkling-small:free': 1048576,
   'nvidia/nemotron-3-ultra-550b-a55b:free': 1000000,
