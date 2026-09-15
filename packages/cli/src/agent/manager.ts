@@ -41,6 +41,7 @@ const MODEL_LIMITS: Record<string, number> = {
   'deepseek-v4-pro': 128000,
   'kimi-k3': 128000,
   'big-pickle': 128000,
+  'mimo-v2.5': 128000,
   default: 128000,
 }
 

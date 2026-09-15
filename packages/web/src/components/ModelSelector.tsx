@@ -39,6 +39,7 @@ const MODELS = [
     { value: 'zen/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
     { value: 'zen/kimi-k3', label: 'Kimi K3' },
     { value: 'zen/big-pickle', label: 'Big Pickle' },
+    { value: 'zen/mimo-v2.5', label: 'MiMo V2.5' },
   ]},
 ]
 
