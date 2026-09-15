@@ -28,6 +28,19 @@ const MODEL_LIMITS: Record<string, number> = {
   'poolside/laguna-xs-2.1:free': 262144,
   'cohere/north-mini-code:free': 256000,
   'inclusionai/ling-3.0-flash-vl:free': 262144,
+  // Zen models
+  'deepseek-v4-flash-free': 128000,
+  'mimo-v2.5-free': 128000,
+  'nemotron-3-ultra-free': 1000000,
+  'nemotron-3.5-lightning-free': 1000000,
+  'nemotron-3-super-free': 262144,
+  'ling-3.0-flash-fin-free': 128000,
+  'gpt-5.5': 256000,
+  'gpt-5.4': 256000,
+  'gpt-5.4-mini': 128000,
+  'deepseek-v4-pro': 128000,
+  'kimi-k3': 128000,
+  'big-pickle': 128000,
   default: 128000,
 }
 

@@ -30,14 +30,14 @@ program
   .command('run')
   .description('Start an interactive session with the manager agent')
   .argument('[task]', 'Initial task description (optional)')
-  .option('-k, --api-key <key>', 'OpenRouter API key')
+  .option('-k, --api-key <key>', 'API key (OpenRouter or OpenCode Zen)')
   .option('-m, --model <model>', 'LLM model to use', process.env.VAJRA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free')
   .option('-v, --verbose', 'Show thinking/reasoning output')
   .option('-d, --dir <directory>', 'Project directory', process.cwd())
   .action(async (task, options) => {
     await runCommand({
       task,
-      apiKey: options.apiKey || process.env.OPENROUTER_API_KEY,
+      apiKey: options.apiKey || process.env.OPENROUTER_API_KEY || process.env.OPENCODE_API_KEY,
       model: options.model,
       verbose: options.verbose,
       projectDir: options.dir,
@@ -96,6 +96,7 @@ program
     const configKeys = [
       'OPENROUTER_API_KEY',
       'ANTHROPIC_API_KEY',
+      'OPENCODE_API_KEY',
       'DEFAULT_MODEL',
     ]
 

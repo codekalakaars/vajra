@@ -9,10 +9,12 @@
 import type { ChatProvider } from './types.js'
 import { OpenRouterProvider } from './openrouter.js'
 import { AnthropicProvider } from './anthropic.js'
+import { ZenProvider } from './zen.js'
 
 const providers = new Map<string, () => ChatProvider>([
   ['openrouter', () => new OpenRouterProvider()],
   ['anthropic', () => new AnthropicProvider()],
+  ['zen', () => new ZenProvider()],
 ])
 
 // Known models per provider (lowercase). Used for validation.
@@ -25,6 +27,23 @@ const knownModels = new Map<string, Set<string>>([
     'claude-3-haiku-20240307',
   ])],
   ['openrouter', new Set()], // OpenRouter proxies many models; skip validation
+  ['zen', new Set([
+    // Free models
+    'deepseek-v4-flash-free', 'mimo-v2.5-free', 'nemotron-3-ultra-free',
+    'nemotron-3.5-lightning-free', 'nemotron-3-super-free', 'ling-3.0-flash-fin-free',
+    'muse-spark-1.3-contributor-free',
+    // Paid models
+    'gpt-5.5', 'gpt-5.5-pro', 'gpt-5.4', 'gpt-5.4-pro', 'gpt-5.4-mini', 'gpt-5.4-nano',
+    'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2', 'gpt-5.2-codex',
+    'gpt-5.1', 'gpt-5.1-codex', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini',
+    'gpt-5', 'gpt-5-codex', 'gpt-5-nano',
+    'claude-opus-5', 'claude-opus-4.8', 'claude-opus-4.7', 'claude-opus-4.6', 'claude-opus-4.5',
+    'claude-sonnet-5', 'claude-sonnet-4.6', 'claude-sonnet-4.5', 'claude-haiku-4.5',
+    'deepseek-v4-pro', 'deepseek-v4-flash',
+    'kimi-k2.5', 'kimi-k2.6', 'kimi-k2.7-code', 'kimi-k3',
+    'big-pickle', 'glm-5.2', 'glm-5.1', 'glm-5',
+    'minimax-m3', 'minimax-m2.7', 'minimax-m2.5',
+  ])],
 ])
 
 /**
@@ -46,6 +65,9 @@ export function parseModelString(model: string): { provider: string; model: stri
   }
   if (model.startsWith('anthropic/')) {
     return { provider: 'anthropic', model: model.slice('anthropic/'.length) }
+  }
+  if (model.startsWith('zen/')) {
+    return { provider: 'zen', model: model.slice('zen/'.length) }
   }
   // No known prefix — default to openrouter (handles bare model names and
   // OpenRouter-style model IDs like "nvidia/nemotron-3-ultra-550b-a55b:free")
