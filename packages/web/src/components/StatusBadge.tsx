@@ -10,13 +10,26 @@ const STATUS_STYLES: Record<string, string> = {
   stopped: 'border-zinc-900',
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  starting: 'Starting',
+  talking: 'Thinking',
+  confirming: 'Reviewing Plan',
+  planning: 'Planning',
+  executing: 'Executing',
+  running: 'Running',
+  done: 'Complete',
+  failed: 'Error',
+  stopped: 'Stopped',
+}
+
 export function StatusBadge({ status }: { status: string }) {
+  const label = STATUS_LABELS[status] || status
   return (
     <span
       className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${STATUS_STYLES[status] || STATUS_STYLES.stopped}`}
       style={{ background: '#1a1a1a', color: '#737373' }}
     >
-      {status}
+      {label}
     </span>
   )
 }

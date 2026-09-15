@@ -39,11 +39,27 @@ export interface ChatCompletionResult {
 }
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+const ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
 const MAX_RETRIES = 5
 const INITIAL_RETRY_DELAY_MS = 1000
 
-function createClient(apiKey: string): OpenAI {
-  return new OpenAI({ baseURL: OPENROUTER_BASE_URL, apiKey, maxRetries: 0 })
+function resolveBaseURL(model: string): string {
+  if (model.startsWith('zen/')) return ZEN_BASE_URL
+  return OPENROUTER_BASE_URL
+}
+
+function stripProviderPrefix(model: string): string {
+  if (model.startsWith('zen/')) return model.slice('zen/'.length)
+  if (model.startsWith('openrouter/')) {
+    const after = model.slice('openrouter/'.length)
+    if (after === 'free' || after === 'auto' || after === 'auto-beta') return model
+    return after
+  }
+  return model
+}
+
+function createClient(apiKey: string, baseURL: string): OpenAI {
+  return new OpenAI({ baseURL, apiKey, maxRetries: 0 })
 }
 
 function sleep(ms: number): Promise<void> {
@@ -157,9 +173,11 @@ function toResult(completion: ChatCompletion): ChatCompletionResult {
 export async function chatCompletion(
   request: ChatCompletionRequest,
 ): Promise<ChatCompletionResult> {
-  const client = createClient(request.apiKey)
+  const baseURL = resolveBaseURL(request.model)
+  const resolvedModel = stripProviderPrefix(request.model)
+  const client = createClient(request.apiKey, baseURL)
   const params = {
-    model: request.model,
+    model: resolvedModel,
     messages: toSdkMessages(request.messages),
     ...(request.tools ? { tools: toSdkTools(request.tools) } : {}),
     ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
@@ -185,9 +203,11 @@ export async function streamChatCompletion(
   onTextDelta: (text: string) => void,
   onThinkingDelta?: (text: string) => void,
 ): Promise<ChatCompletionResult> {
-  const client = createClient(request.apiKey)
+  const baseURL = resolveBaseURL(request.model)
+  const resolvedModel = stripProviderPrefix(request.model)
+  const client = createClient(request.apiKey, baseURL)
   const params = {
-    model: request.model,
+    model: resolvedModel,
     messages: toSdkMessages(request.messages),
     ...(request.tools ? { tools: toSdkTools(request.tools) } : {}),
     ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),

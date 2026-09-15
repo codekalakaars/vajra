@@ -8,7 +8,7 @@ import type { ProjectLauncher } from './project/manager.js'
 import { forkProjectLauncher } from './project/launcher.js'
 
 dotenv.config()
-if (!process.env.OPENROUTER_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+if (!process.env.OPENROUTER_API_KEY && !process.env.ANTHROPIC_API_KEY && !process.env.OPENCODE_API_KEY) {
   const repoRootEnv = resolve(dirname(fileURLToPath(import.meta.url)), '../../..', '.env')
   dotenv.config({ path: repoRootEnv })
 }
@@ -60,8 +60,9 @@ if (isMain) {
   const apiKeys: Record<string, string> = {}
   if (process.env.OPENROUTER_API_KEY) apiKeys.openrouter = process.env.OPENROUTER_API_KEY
   if (process.env.ANTHROPIC_API_KEY) apiKeys.anthropic = process.env.ANTHROPIC_API_KEY
+  if (process.env.OPENCODE_API_KEY) apiKeys.zen = process.env.OPENCODE_API_KEY
   if (Object.keys(apiKeys).length === 0) {
-    console.error('API key required: set OPENROUTER_API_KEY or ANTHROPIC_API_KEY in .env or environment')
+    console.error('API key required: set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or OPENCODE_API_KEY in .env or environment')
     console.error('  See .env.example at the repo root')
     process.exit(1)
   }

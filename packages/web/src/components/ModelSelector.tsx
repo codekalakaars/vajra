@@ -24,6 +24,22 @@ const MODELS = [
     { value: 'poolside/laguna-xs-2.1:free', label: 'Laguna XS 2.1' },
     { value: 'cohere/north-mini-code:free', label: 'North Mini Code' },
   ]},
+  { group: 'Zen Free', options: [
+    { value: 'zen/deepseek-v4-flash-free', label: 'DeepSeek V4 Flash' },
+    { value: 'zen/mimo-v2.5-free', label: 'MiMo V2.5' },
+    { value: 'zen/nemotron-3-ultra-free', label: 'Nemotron 3 Ultra' },
+    { value: 'zen/nemotron-3.5-lightning-free', label: 'Nemotron 3.5 Lightning' },
+    { value: 'zen/nemotron-3-super-free', label: 'Nemotron 3 Super' },
+    { value: 'zen/ling-3.0-flash-fin-free', label: 'Ling 3.0 Flash' },
+  ]},
+  { group: 'Zen Paid', options: [
+    { value: 'zen/gpt-5.5', label: 'GPT 5.5' },
+    { value: 'zen/gpt-5.4-mini', label: 'GPT 5.4 Mini' },
+    { value: 'zen/gpt-5.4', label: 'GPT 5.4' },
+    { value: 'zen/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+    { value: 'zen/kimi-k3', label: 'Kimi K3' },
+    { value: 'zen/big-pickle', label: 'Big Pickle' },
+  ]},
 ]
 
 function getLabel(value: string): string {
