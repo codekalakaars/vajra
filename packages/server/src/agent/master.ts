@@ -153,6 +153,12 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   // Use provided change history or create a new one
   const changeHistory = input.changeHistory ?? new ChangeHistory()
 
+  // Clean up stale data from previous runs (agents, tasks, dependencies)
+  db.prepare(`DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
+  db.prepare(`DELETE FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)`).run(projectId)
+  db.prepare(`DELETE FROM tasks WHERE session_id = ?`).run(projectId)
+  db.prepare(`DELETE FROM agents WHERE session_id = ?`).run(projectId)
+
   // Create master agent
   const masterAgent = registry.createAgent(projectId, 'master', 'Orchestrate task execution')
   registry.updateStatus(masterAgent.id, 'running')
