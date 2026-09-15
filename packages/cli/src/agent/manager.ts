@@ -192,6 +192,10 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
       validation: string[]
       dependsOn: string[]
       type: string
+      complexity?: string
+      validationStrategy?: string
+      alternativeApproaches?: string[]
+      estimatedDuration?: string
       allowedTools?: string[]
       timeout?: number
       retries?: number
@@ -213,6 +217,10 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
     validation: t.validation ?? [],
     dependsOn: t.dependsOn ?? [],
     type: (['create', 'modify', 'delete', 'refactor'].includes(t.type) ? t.type : 'modify') as PlannedTask['type'],
+    complexity: (['low', 'medium', 'high', 'critical'].includes(t.complexity ?? '') ? t.complexity : 'medium') as PlannedTask['complexity'],
+    validationStrategy: (['hierarchical', 'targeted', 'full', 'skip'].includes(t.validationStrategy ?? '') ? t.validationStrategy : 'hierarchical') as PlannedTask['validationStrategy'],
+    alternativeApproaches: t.alternativeApproaches ?? [],
+    estimatedDuration: t.estimatedDuration ? parseInt(t.estimatedDuration, 10) : undefined,
     allowedTools: t.allowedTools,
     timeout: t.timeout,
     maxRetries: t.retries,
@@ -247,6 +255,68 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
     independentGroups,
     estimatedWorkers: Math.max(1, ...independentGroups.map(g => g.length)),
   }
+}
+
+function detectAndRemoveCircularDeps(tasks: PlannedTask[]): PlannedTask[] {
+  const taskMap = new Map(tasks.map(t => [t.id, t]))
+  const visited = new Set<string>()
+  const recursionStack = new Set<string>()
+  const circularDeps = new Set<string>()
+
+  function dfs(taskId: string): boolean {
+    if (recursionStack.has(taskId)) {
+      circularDeps.add(taskId)
+      return true
+    }
+    if (visited.has(taskId)) return false
+
+    visited.add(taskId)
+    recursionStack.add(taskId)
+
+    const task = taskMap.get(taskId)
+    if (task) {
+      for (const dep of task.dependsOn) {
+        if (dfs(dep)) {
+          circularDeps.add(taskId)
+        }
+      }
+    }
+
+    recursionStack.delete(taskId)
+    return circularDeps.has(taskId)
+  }
+
+  for (const task of tasks) {
+    dfs(task.id)
+  }
+
+  if (circularDeps.size > 0) {
+    console.warn(`Removing circular dependencies from tasks: ${[...circularDeps].join(', ')}`)
+    for (const task of tasks) {
+      if (circularDeps.has(task.id)) {
+        task.dependsOn = []
+      } else {
+        task.dependsOn = task.dependsOn.filter(dep => !circularDeps.has(dep))
+      }
+    }
+  }
+
+  return tasks
+}
+
+function addFileLevelDependencies(tasks: PlannedTask[]): PlannedTask[] {
+  for (const task of tasks) {
+    for (const other of tasks) {
+      if (task.id === other.id) continue
+      const writesToReadFiles = other.writeFile.some(file =>
+        task.readFile.includes(file) || task.writeFile.includes(file)
+      )
+      if (writesToReadFiles && !task.dependsOn.includes(other.id)) {
+        task.dependsOn.push(other.id)
+      }
+    }
+  }
+  return tasks
 }
 
 export interface ManagerTurnInput {
@@ -330,6 +400,13 @@ export async function managerConversationTurn(
         }
 
         const plan = parseProposePlanArgs(parsed)
+        plan.tasks = detectAndRemoveCircularDeps(plan.tasks)
+        plan.tasks = addFileLevelDependencies(plan.tasks)
+        messages.push({
+          role: 'tool',
+          content: 'Plan proposed. Awaiting user review.',
+          tool_call_id: toolCall.id,
+        })
         return { type: 'plan', plan }
       }
 
