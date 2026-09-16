@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
+import type { VajraClient } from '../client'
 
 interface Template {
   name: string
@@ -10,6 +11,7 @@ interface VideoCreatorProps {
   open: boolean
   onClose: () => void
   projectDir: string
+  client: VajraClient
 }
 
 const EXAMPLES: Template[] = [
@@ -32,9 +34,8 @@ const BLOCKS: Template[] = [
   { name: 'yt-lower-third', type: 'block', description: 'YouTube lower third' },
 ]
 
-export function VideoCreator({ open, onClose, projectDir }: VideoCreatorProps) {
+export function VideoCreator({ open, onClose, projectDir, client }: VideoCreatorProps) {
   const [tab, setTab] = useState<'templates' | 'blocks'>('templates')
-  const [selected, setSelected] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -44,16 +45,11 @@ export function VideoCreator({ open, onClose, projectDir }: VideoCreatorProps) {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/video/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectDir, template: templateName }),
-      })
-      const data = await res.json()
-      if (data.success) {
+      const result = await client.call('video.init', { projectDir: `/tmp/video-${templateName}`, template: templateName })
+      if ((result as { success: boolean }).success) {
         onClose()
       } else {
-        setError(data.error || 'Failed to initialize video')
+        setError((result as { error?: string }).error || 'Failed to initialize video')
       }
     } catch (e) {
       setError('Failed to connect to server')
@@ -66,16 +62,11 @@ export function VideoCreator({ open, onClose, projectDir }: VideoCreatorProps) {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch('/api/video/add-block', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectDir, block: blockName }),
-      })
-      const data = await res.json()
-      if (data.success) {
+      const result = await client.call('video.addBlock', { projectDir, block: blockName })
+      if ((result as { success: boolean }).success) {
         onClose()
       } else {
-        setError(data.error || 'Failed to add block')
+        setError((result as { error?: string }).error || 'Failed to add block')
       }
     } catch (e) {
       setError('Failed to connect to server')
@@ -136,7 +127,7 @@ export function VideoCreator({ open, onClose, projectDir }: VideoCreatorProps) {
                   disabled={loading}
                   className="w-full p-3 rounded text-left flex items-center justify-between"
                   style={{
-                    background: selected === t.name ? '#222' : '#1a1a1a',
+                    background: '#1a1a1a',
                     border: '1px solid #2a2a2a',
                   }}
                 >
@@ -161,7 +152,7 @@ export function VideoCreator({ open, onClose, projectDir }: VideoCreatorProps) {
                   disabled={loading}
                   className="w-full p-3 rounded text-left flex items-center justify-between"
                   style={{
-                    background: selected === t.name ? '#222' : '#1a1a1a',
+                    background: '#1a1a1a',
                     border: '1px solid #2a2a2a',
                   }}
                 >

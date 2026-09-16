@@ -37,7 +37,7 @@ export function App() {
         </div>
       </div>
       <NewProjectModal client={client} open={showNewProject} onClose={handleCloseModal} />
-      <VideoCreator open={showVideoCreator} onClose={handleCloseVideoCreator} projectDir="" />
+      <VideoCreator open={showVideoCreator} onClose={handleCloseVideoCreator} projectDir="" client={client} />
     </div>
   )
 }

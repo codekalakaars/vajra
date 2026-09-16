@@ -19,6 +19,11 @@ export type RpcMethodMap = {
   'projects.confirmPlan': { params: { projectId: string; tasks?: Array<Record<string, unknown>> }; result: { ok: true } }
   'projects.rejectPlan': { params: { projectId: string }; result: { ok: true } }
   'projects.setModel': { params: { projectId: string; model: string }; result: { ok: true } }
+  'video.init': { params: { projectDir: string; template: string; resolution?: string; tailwind?: boolean }; result: { success: boolean; error?: string } }
+  'video.addBlock': { params: { projectDir: string; block: string }; result: { success: boolean; error?: string } }
+  'video.render': { params: { projectDir: string; output?: string; quality?: string; format?: string; fps?: string; strict?: boolean }; result: { success: boolean; error?: string; output?: string } }
+  'video.preview': { params: { projectDir: string; port?: string }; result: { success: boolean; error?: string; port?: string } }
+  'video.list': { params: { type?: string }; result: { success: boolean; error?: string; items?: Array<{ name: string; type: string }> } }
 }
 
 export type MethodName = keyof RpcMethodMap
