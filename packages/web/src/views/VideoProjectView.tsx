@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { File, Folder, Play, Download, RefreshCw, Code, Eye, ChevronRight, ChevronDown, Loader2 } from 'lucide-react'
+import { File, Folder, Play, Download, RefreshCw, Code, Eye, ChevronRight, ChevronDown, Loader2, Square, ExternalLink } from 'lucide-react'
 import type { VajraClient } from '../client'
 
 interface FileEntry {
@@ -23,13 +23,20 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
   const [rendering, setRendering] = useState(false)
   const [renderOutput, setRenderOutput] = useState<string | null>(null)
   const [renderProgress, setRenderProgress] = useState<string>('')
-  const [activeTab, setActiveTab] = useState<'code' | 'preview'>('code')
+  const [activeTab, setActiveTab] = useState<'code' | 'preview' | 'live'>('code')
   const [previewHtml, setPreviewHtml] = useState<string | null>(null)
+  const [previewRunning, setPreviewRunning] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const previewFrameRef = useRef<HTMLIFrameElement>(null)
 
   useEffect(() => {
     loadFiles()
+    checkPreviewStatus()
+    return () => {
+      // Cleanup: stop preview on unmount
+      client.call('video.stopPreview', { projectDir })
+    }
   }, [projectDir])
 
   useEffect(() => {
@@ -43,6 +50,41 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
       setPreviewHtml(fileContent)
     }
   }, [activeTab, selectedFile, fileContent])
+
+  const checkPreviewStatus = async () => {
+    try {
+      const result = await client.call('video.getPreviewStatus', { projectDir })
+      const status = result as { running?: boolean; url?: string }
+      setPreviewRunning(status.running || false)
+      setPreviewUrl(status.url || null)
+    } catch (e) {
+      console.error('Failed to check preview status:', e)
+    }
+  }
+
+  const startPreview = async () => {
+    try {
+      const result = await client.call('video.startPreview', { projectDir })
+      const res = result as { success: boolean; url?: string; port?: string }
+      if (res.success) {
+        setPreviewRunning(true)
+        setPreviewUrl(res.url || `http://localhost:${res.port || '3002'}`)
+        setActiveTab('live')
+      }
+    } catch (e) {
+      console.error('Failed to start preview:', e)
+    }
+  }
+
+  const stopPreview = async () => {
+    try {
+      await client.call('video.stopPreview', { projectDir })
+      setPreviewRunning(false)
+      setPreviewUrl(null)
+    } catch (e) {
+      console.error('Failed to stop preview:', e)
+    }
+  }
 
   const loadFiles = async () => {
     try {
@@ -180,8 +222,34 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
             >
               <Eye size={14} /> Preview
             </button>
+            <button
+              onClick={() => {
+                if (previewRunning) {
+                  setActiveTab('live')
+                } else {
+                  startPreview()
+                }
+              }}
+              className="px-3 py-1.5 text-sm rounded flex items-center gap-1"
+              style={{
+                background: activeTab === 'live' ? '#222' : 'transparent',
+                color: activeTab === 'live' ? '#e5e5e5' : '#737373',
+              }}
+            >
+              {previewRunning ? <Square size={14} /> : <Play size={14} />}
+              Live
+            </button>
           </div>
           <div className="ml-auto flex gap-2">
+            {previewRunning && (
+              <button
+                onClick={stopPreview}
+                className="px-3 py-1.5 text-sm rounded flex items-center gap-1"
+                style={{ background: '#5a2a2a', color: '#ff6b6b' }}
+              >
+                <Square size={14} /> Stop Preview
+              </button>
+            )}
             <button
               onClick={saveFile}
               disabled={!selectedFile}
@@ -212,7 +280,7 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
 
         {/* Content */}
         <div className="flex-1 overflow-hidden">
-          {activeTab === 'code' ? (
+          {activeTab === 'code' && (
             <div className="h-full flex flex-col">
               {selectedFile ? (
                 <>
@@ -234,7 +302,9 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
                 </div>
               )}
             </div>
-          ) : (
+          )}
+
+          {activeTab === 'preview' && (
             <div className="h-full flex flex-col">
               {selectedFile?.endsWith('.html') ? (
                 <iframe
@@ -251,6 +321,46 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
                   ) : (
                     'Select an HTML file to preview'
                   )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'live' && (
+            <div className="h-full flex flex-col">
+              {previewRunning && previewUrl ? (
+                <>
+                  <div className="px-4 py-2 flex items-center gap-2 text-xs" style={{ borderBottom: '1px solid #2a2a2a', color: '#737373' }}>
+                    <span>Live Preview</span>
+                    <span style={{ color: '#525252' }}>|</span>
+                    <span>{previewUrl}</span>
+                    <a
+                      href={previewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-auto flex items-center gap-1 hover:opacity-80"
+                      style={{ color: '#2563eb' }}
+                    >
+                      <ExternalLink size={12} /> Open in browser
+                    </a>
+                  </div>
+                  <iframe
+                    src={previewUrl}
+                    className="flex-1 border-0"
+                    style={{ background: '#000' }}
+                    title="Live Preview"
+                  />
+                </>
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center gap-4" style={{ color: '#525252' }}>
+                  <p>Live preview not running</p>
+                  <button
+                    onClick={startPreview}
+                    className="px-4 py-2 rounded text-sm flex items-center gap-2"
+                    style={{ background: '#2563eb', color: '#fff' }}
+                  >
+                    <Play size={14} /> Start Preview Server
+                  </button>
                 </div>
               )}
             </div>
