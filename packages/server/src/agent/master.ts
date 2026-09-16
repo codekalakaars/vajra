@@ -179,8 +179,12 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   const speculativeTasks = new Map<string, { taskId: string; dependsOn: string[] }>()
   const SPECULATIVE_CONFIDENCE_THRESHOLD = 0.8
 
+  // Adaptive concurrency based on system resources
+  const adaptiveMax = pool?.stats().adaptiveMax ?? 4
+  const maxConcurrentWorkers = Math.min(adaptiveMax, plan.independentGroups[0]?.length ?? 4)
+
   // Pre-warm: Start forking workers for independent tasks immediately
-  const prewarmCount = Math.min(plan.independentGroups[0]?.length ?? 0, 4)
+  const prewarmCount = Math.min(maxConcurrentWorkers, 4)
   const prewarmedHandles = new Map<string, LaunchHandle>()
   
   if (prewarmCount > 0) {
@@ -188,7 +192,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       projectId,
       agentId: masterAgent.id,
       taskId: 'master',
-      detail: `Pre-warming ${prewarmCount} workers...`,
+      detail: `Pre-warming ${prewarmCount} workers (max concurrent: ${maxConcurrentWorkers})...`,
     })
 
     const prewarmTasks = plan.tasks
@@ -310,7 +314,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     }
 
     // Speculative execution: start tasks with high-confidence dependencies
-    if (assignable.length === 0 && activeWorkers.size < (pool?.stats().adaptiveMax ?? 4)) {
+    if (assignable.length === 0 && activeWorkers.size < maxConcurrentWorkers) {
       const pendingTasks = queue.getReadyTasks().filter(t => 
         t.dependsOn.length > 0 && 
         !speculativeTasks.has(t.id) &&

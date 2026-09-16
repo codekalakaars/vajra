@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { File, Folder, Play, Download, RefreshCw, Code, Eye, ChevronRight, ChevronDown } from 'lucide-react'
+import { File, Folder, Play, Download, RefreshCw, Code, Eye, ChevronRight, ChevronDown, Loader2 } from 'lucide-react'
 import type { VajraClient } from '../client'
 
 interface FileEntry {
@@ -22,8 +22,11 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set([projectDir]))
   const [rendering, setRendering] = useState(false)
   const [renderOutput, setRenderOutput] = useState<string | null>(null)
+  const [renderProgress, setRenderProgress] = useState<string>('')
   const [activeTab, setActiveTab] = useState<'code' | 'preview'>('code')
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
   const editorRef = useRef<HTMLTextAreaElement>(null)
+  const previewFrameRef = useRef<HTMLIFrameElement>(null)
 
   useEffect(() => {
     loadFiles()
@@ -35,11 +38,16 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
     }
   }, [selectedFile])
 
+  useEffect(() => {
+    if (activeTab === 'preview' && selectedFile?.endsWith('.html')) {
+      setPreviewHtml(fileContent)
+    }
+  }, [activeTab, selectedFile, fileContent])
+
   const loadFiles = async () => {
     try {
       const result = await client.call('project.scan', { projectDir })
       const entries = result as Array<{ name: string; path: string; isDir: boolean }>
-      // Ensure paths are absolute
       setFiles(entries.map(e => ({
         ...e,
         path: e.path.startsWith('/') ? e.path : `${projectDir}/${e.name}`,
@@ -52,7 +60,7 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
   const loadFileContent = async (filePath: string) => {
     try {
       const result = await client.call('video.readFile', { path: filePath })
-      setFileContent((result as { content: string }).content)
+      setFileContent((result as { content: string }).content || '')
     } catch (e) {
       console.error('Failed to load file:', e)
     }
@@ -82,11 +90,15 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
   const handleRender = async () => {
     setRendering(true)
     setRenderOutput(null)
+    setRenderProgress('Starting render...')
     try {
       const result = await client.call('video.render', { projectDir, quality: 'standard', format: 'mp4' })
-      setRenderOutput((result as { output?: string }).output || 'Render complete')
+      const output = (result as { output?: string; error?: string }).output || (result as { error?: string }).error || 'Render complete'
+      setRenderOutput(output)
+      setRenderProgress('')
     } catch (e) {
       setRenderOutput('Render failed: ' + String(e))
+      setRenderProgress('')
     } finally {
       setRendering(false)
     }
@@ -111,6 +123,9 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
                 toggleDir(entry.path)
               } else {
                 setSelectedFile(entry.path)
+                if (entry.name.endsWith('.html')) {
+                  setActiveTab('code')
+                }
               }
             }}
           >
@@ -181,11 +196,19 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
               className="px-3 py-1.5 text-sm rounded flex items-center gap-1"
               style={{ background: '#2563eb', color: '#fff' }}
             >
-              {rendering ? <RefreshCw size={14} className="animate-spin" /> : <Play size={14} />}
+              {rendering ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
               {rendering ? 'Rendering...' : 'Render'}
             </button>
           </div>
         </div>
+
+        {/* Render Progress */}
+        {renderProgress && (
+          <div className="px-4 py-2 flex items-center gap-2" style={{ borderBottom: '1px solid #2a2a2a', background: '#0d0d0d' }}>
+            <Loader2 size={14} className="animate-spin" style={{ color: '#2563eb' }} />
+            <span className="text-sm" style={{ color: '#737373' }}>{renderProgress}</span>
+          </div>
+        )}
 
         {/* Content */}
         <div className="flex-1 overflow-hidden">
@@ -213,15 +236,23 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
             </div>
           ) : (
             <div className="h-full flex flex-col">
-              <div className="flex-1 p-4 overflow-auto" style={{ background: '#0a0a0a' }}>
-                {renderOutput ? (
-                  <pre className="text-sm whitespace-pre-wrap" style={{ color: '#a3a3a3' }}>{renderOutput}</pre>
-                ) : (
-                  <div className="h-full flex items-center justify-center" style={{ color: '#525252' }}>
-                    Click Render to generate video
-                  </div>
-                )}
-              </div>
+              {selectedFile?.endsWith('.html') ? (
+                <iframe
+                  ref={previewFrameRef}
+                  srcDoc={previewHtml || fileContent}
+                  className="flex-1 border-0"
+                  style={{ background: '#000' }}
+                  title="Preview"
+                />
+              ) : (
+                <div className="h-full flex items-center justify-center" style={{ color: '#525252' }}>
+                  {renderOutput ? (
+                    <pre className="text-sm whitespace-pre-wrap p-4" style={{ color: '#a3a3a3' }}>{renderOutput}</pre>
+                  ) : (
+                    'Select an HTML file to preview'
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
