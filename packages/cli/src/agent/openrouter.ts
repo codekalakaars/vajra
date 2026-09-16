@@ -63,7 +63,7 @@ function stripProviderPrefix(model: string): string {
 
 function createClient(apiKey: string, baseURL: string): OpenAI {
   const headers: Record<string, string> = {}
-  if (baseURL === ZEN_GO_BASE_URL) {
+  if (baseURL === ZEN_GO_BASE_URL || baseURL === ZEN_BASE_URL) {
     headers['x-opencode-session'] = 'vajra-cli-' + Math.random().toString(36).slice(2, 10)
   }
   return new OpenAI({
