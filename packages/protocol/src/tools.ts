@@ -304,7 +304,7 @@ export type ToolName = keyof typeof toolDefinitions
 export const roleTools: Record<string, ToolName[]> = {
   manager: ['read_file', 'list_files', 'search_files', 'propose_plan'],
   master: ['read_file', 'list_files', 'search_files', 'run_command'],
-  worker: ['read_file', 'list_files', 'search_files', 'write_file', 'edit_file'],
+  worker: ['read_file', 'list_files', 'search_files', 'write_file', 'edit_file', 'run_command'],
 }
 
 export function toOpenAiToolSpecs(tools?: ToolName[]) {

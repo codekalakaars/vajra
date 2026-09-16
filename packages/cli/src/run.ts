@@ -121,6 +121,7 @@ async function executeTask(
     '- Read each readFile first to understand the current code',
     '- Make precise edits using edit_file (not write_file for existing files)',
     '- Use write_file only for new files',
+    '- Use run_command to execute shell commands (npm install, npm test, git, etc.)',
     '- After completing all instructions, respond with a brief summary',
   ].filter(Boolean).join('\n')
 
@@ -223,9 +224,27 @@ export async function runCommand(options: RunOptions): Promise<void> {
         case 'list_files':
           return JSON.stringify(listFiles(a.path as string))
         case 'run_command': {
+          const command = (a.command as string).trim()
+          const cmdParts = command.split(/\s+/)
+          const cmdName = cmdParts[0]?.split('/').pop() ?? ''
+
+          const ALLOWED_PREFIXES = [
+            'npm', 'npx', 'node', 'yarn', 'pnpm',
+            'git', 'python', 'python3', 'pip', 'pip3',
+            'cargo', 'rustc', 'go', 'make', 'cmake',
+            'tsc', 'eslint', 'prettier', 'jest', 'mocha',
+            'curl', 'wget', 'cat', 'ls', 'find', 'grep',
+            'mkdir', 'cp', 'mv', 'rm', 'touch', 'chmod',
+            'docker', 'docker-compose',
+          ]
+
+          if (!ALLOWED_PREFIXES.includes(cmdName)) {
+            return `Error: Command '${cmdName}' is not allowed. Allowed: ${ALLOWED_PREFIXES.join(', ')}`
+          }
+
           const { execSync } = await import('node:child_process')
           try {
-            return execSync(a.command as string, { encoding: 'utf-8', timeout: (a.timeout as number) || 30000 })
+            return execSync(command, { encoding: 'utf-8', timeout: (a.timeout as number) || 30000, cwd: a.cwd as string | undefined })
           } catch (e: unknown) {
             const err = e as { stdout?: string; stderr?: string; message?: string }
             return err.stdout || err.stderr || err.message || 'Command failed'
