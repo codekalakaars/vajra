@@ -1,8 +1,11 @@
 import type { RpcRouter } from '../rpc.js'
 import type { ServerContext } from '../server.js'
-import { execSync } from 'child_process'
-import { join } from 'path'
+import { execFileSync } from 'child_process'
+import { join, resolve, relative } from 'path'
 import { rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+
+// Track preview server processes
+const previewServers = new Map<string, ChildProcess>()
 
 interface VideoInitParams {
   projectDir: string
@@ -36,15 +39,36 @@ interface VideoListParams {
 
 interface VideoReadFileParams {
   path: string
+  projectDir: string
 }
 
 interface VideoWriteFileParams {
   path: string
   content: string
+  projectDir: string
+}
+
+interface VideoStartPreviewParams {
+  projectDir: string
+  port?: string
 }
 
 const REGISTRY_BASE =
   'https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry'
+
+/**
+ * Validate that a file path is within the allowed directory.
+ * Prevents path traversal attacks (e.g., ../../etc/passwd).
+ * Returns the resolved absolute path if valid, or throws if invalid.
+ */
+function validatePath(filePath: string, allowedDir: string): string {
+  const resolved = resolve(allowedDir, filePath)
+  const rel = relative(allowedDir, resolved)
+  if (rel.startsWith('..') || rel === '') {
+    throw new Error(`Path "${filePath}" is outside the allowed directory "${allowedDir}"`)
+  }
+  return resolved
+}
 
 export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
   router.register('video.init', (params: VideoInitParams) => {
@@ -161,16 +185,15 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
   })
 
   router.register('video.readFile', (params: VideoReadFileParams) => {
-    const { path: filePath } = params
+    const { path: filePath, projectDir } = params
 
-    console.log('[video.readFile] called with:', { filePath })
-
-    if (!filePath) {
-      return { success: false, error: 'path is required' }
+    if (!filePath || !projectDir) {
+      return { success: false, error: 'path and projectDir are required' }
     }
 
     try {
-      const content = readFileSync(filePath, 'utf-8')
+      const safePath = validatePath(filePath, projectDir)
+      const content = readFileSync(safePath, 'utf-8')
       return { success: true, content }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to read file' }
@@ -178,22 +201,82 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
   })
 
   router.register('video.writeFile', (params: VideoWriteFileParams) => {
-    const { path: filePath, content } = params
+    const { path: filePath, content, projectDir } = params
 
-    if (!filePath || content === undefined) {
-      return { success: false, error: 'path and content are required' }
+    if (!filePath || content === undefined || !projectDir) {
+      return { success: false, error: 'path, content, and projectDir are required' }
     }
 
     try {
+      const safePath = validatePath(filePath, projectDir)
       // Ensure directory exists
-      const dir = join(filePath, '..')
+      const dir = join(safePath, '..')
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true })
       }
-      writeFileSync(filePath, content, 'utf-8')
+      writeFileSync(safePath, content, 'utf-8')
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to write file' }
+    }
+  })
+
+  router.register('video.startPreview', (params: VideoStartPreviewParams) => {
+    const { projectDir, port = '3002' } = params
+
+    if (!projectDir) {
+      return { success: false, error: 'projectDir is required' }
+    }
+
+    // Stop existing preview if running
+    const existing = previewServers.get(projectDir)
+    if (existing) {
+      existing.kill()
+      previewServers.delete(projectDir)
+    }
+
+    try {
+      const proc = spawn('npx', ['hyperframes', 'preview', projectDir, '--port', port], {
+        stdio: 'pipe',
+        detached: true,
+      })
+
+      previewServers.set(projectDir, proc)
+
+      proc.on('error', (err) => {
+        console.error(`Preview server error for ${projectDir}:`, err)
+        previewServers.delete(projectDir)
+      })
+
+      proc.on('exit', () => {
+        previewServers.delete(projectDir)
+      })
+
+      return { success: true, port, url: `http://localhost:${port}` }
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to start preview' }
+    }
+  })
+
+  router.register('video.stopPreview', (params: { projectDir: string }) => {
+    const { projectDir } = params
+    const proc = previewServers.get(projectDir)
+    if (proc) {
+      proc.kill()
+      previewServers.delete(projectDir)
+      return { success: true }
+    }
+    return { success: true, message: 'No preview running' }
+  })
+
+  router.register('video.getPreviewStatus', (params: { projectDir: string }) => {
+    const { projectDir } = params
+    const proc = previewServers.get(projectDir)
+    return {
+      success: true,
+      running: !!proc,
+      port: '3002',
+      url: proc ? `http://localhost:3002` : null,
     }
   })
 }
