@@ -24,6 +24,8 @@ export type RpcMethodMap = {
   'video.render': { params: { projectDir: string; output?: string; quality?: string; format?: string; fps?: string; strict?: boolean }; result: { success: boolean; error?: string; output?: string } }
   'video.preview': { params: { projectDir: string; port?: string }; result: { success: boolean; error?: string; port?: string } }
   'video.list': { params: { type?: string }; result: { success: boolean; error?: string; items?: Array<{ name: string; type: string }> } }
+  'video.readFile': { params: { path: string }; result: { success: boolean; error?: string; content?: string } }
+  'video.writeFile': { params: { path: string; content: string }; result: { success: boolean; error?: string } }
 }
 
 export type MethodName = keyof RpcMethodMap

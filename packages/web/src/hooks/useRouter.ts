@@ -12,6 +12,10 @@ export function useRouter(): Route {
     if (projectMatch) {
       return { path: '/project/:id', params: { id: projectMatch[1] } }
     }
+    const videoMatch = pathname.match(/^\/video\/(.+)$/)
+    if (videoMatch) {
+      return { path: '/video/:dir', params: { dir: decodeURIComponent(videoMatch[1]) } }
+    }
     if (pathname === '/') {
       return { path: '/', params: {} }
     }

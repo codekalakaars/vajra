@@ -1,6 +1,7 @@
 import { useRouter } from './hooks/useRouter'
 import { ChatView } from './views/ChatView'
 import { ProjectDetailView } from './views/ProjectDetailView'
+import { VideoProjectView } from './views/VideoProjectView'
 import { Sidebar } from './components/Sidebar'
 import { NewProjectModal } from './components/NewProjectModal'
 import { VideoCreator } from './components/VideoCreator'
@@ -33,6 +34,13 @@ export function App() {
           <div className="flex-1 overflow-hidden">
             {route.path === '/' && <ChatView connected={connected} />}
             {route.path === '/project/:id' && <ProjectDetailView projectId={route.params.id} connected={connected} />}
+            {route.path === '/video/:dir' && (
+              <VideoProjectView
+                projectDir={decodeURIComponent(route.params.dir)}
+                client={client}
+                onClose={() => window.history.back()}
+              />
+            )}
           </div>
         </div>
       </div>

@@ -2,7 +2,7 @@ import type { RpcRouter } from '../rpc.js'
 import type { ServerContext } from '../server.js'
 import { execSync } from 'child_process'
 import { join } from 'path'
-import { rmSync, existsSync } from 'fs'
+import { rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 
 interface VideoInitParams {
   projectDir: string
@@ -32,6 +32,15 @@ interface VideoPreviewParams {
 
 interface VideoListParams {
   type?: string
+}
+
+interface VideoReadFileParams {
+  path: string
+}
+
+interface VideoWriteFileParams {
+  path: string
+  content: string
 }
 
 const REGISTRY_BASE =
@@ -148,6 +157,43 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
       }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to fetch registry' }
+    }
+  })
+
+  router.register('video.readFile', (params: VideoReadFileParams) => {
+    const { path: filePath } = params
+
+    console.log('[video.readFile] called with:', { filePath })
+
+    if (!filePath) {
+      return { success: false, error: 'path is required' }
+    }
+
+    try {
+      const content = readFileSync(filePath, 'utf-8')
+      return { success: true, content }
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to read file' }
+    }
+  })
+
+  router.register('video.writeFile', (params: VideoWriteFileParams) => {
+    const { path: filePath, content } = params
+
+    if (!filePath || content === undefined) {
+      return { success: false, error: 'path and content are required' }
+    }
+
+    try {
+      // Ensure directory exists
+      const dir = join(filePath, '..')
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true })
+      }
+      writeFileSync(filePath, content, 'utf-8')
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to write file' }
     }
   })
 }
