@@ -41,11 +41,10 @@ function isOverloadedError(err: unknown): boolean {
   return err instanceof Error && 'status' in err && (err as { status: number }).status === 529
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function toAnthropicMessages(messages: ChatMessage[]): { system: string; messages: any[] } {
+// Use Anthropic SDK types directly to avoid type mismatches
+function toAnthropicMessages(messages: ChatMessage[]): { system: string; messages: Anthropic.MessageParam[] } {
   let system = ''
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const out: any[] = []
+  const out: Anthropic.MessageParam[] = []
 
   for (const m of messages) {
     if (m.role === 'system') {
@@ -60,13 +59,12 @@ function toAnthropicMessages(messages: ChatMessage[]): { system: string; message
 
     if (m.role === 'assistant') {
       if (m.toolCalls && m.toolCalls.length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const blocks: any[] = []
+        const blocks: Anthropic.ContentBlockParam[] = []
         if (m.content) {
           blocks.push({ type: 'text', text: m.content })
         }
         for (const tc of m.toolCalls) {
-          let input: unknown
+          let input: Record<string, unknown>
           try {
             input = JSON.parse(tc.arguments)
           } catch {
@@ -87,8 +85,8 @@ function toAnthropicMessages(messages: ChatMessage[]): { system: string; message
     }
 
     if (m.role === 'tool') {
-      const toolResultBlock = {
-        type: 'tool_result' as const,
+      const toolResultBlock: Anthropic.ToolResultBlockParam = {
+        type: 'tool_result',
         tool_use_id: m.toolCallId ?? '',
         content: m.content ?? '',
       }

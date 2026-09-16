@@ -3,14 +3,12 @@ import type { ServerContext } from '../server.js'
 import type { SessionCreateParams, SessionAttachParams, SessionStopParams, SessionDeleteParams, SessionSendMessageParams, SessionConfirmPlanParams, SessionRejectPlanParams } from '@codekalakaars/vajra-protocol'
 import { createProvider } from '../../agent/providers/index.js'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyParams = Record<string, any>
 function getProjectId(params: unknown): string {
-  const p = params as AnyParams
-  return p.projectId ?? p.sessionId
+  const p = params as Record<string, unknown>
+  return (p.projectId ?? p.sessionId) as string
 }
 
-export function registerProjectHandlers(router: RpcRouter<ServerContext>): void {
+export function registerSessionHandlers(router: RpcRouter<ServerContext>): void {
   router.register('projects.create', async (params: SessionCreateParams, ctx) => {
     const defaultModel = process.env.VAJRA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free'
     const model = params.model?.trim() || defaultModel
@@ -45,13 +43,11 @@ export function registerProjectHandlers(router: RpcRouter<ServerContext>): void 
     return { ok: true as const }
   })
 
-  router.register('projects.sendMessage', (params: SessionSendMessageParams, ctx) => {
+  router.register('projects.sendMessage', async (params: SessionSendMessageParams, ctx) => {
     const apiKey = Object.values(ctx.apiKeys)[0]
     if (!apiKey) throw new Error('Server not configured with API keys')
     const projectId = getProjectId(params)
-    ctx.projects.sendMessage(projectId, params.content, apiKey).catch((err) => {
-      console.error(`Agent loop failed for project ${projectId}:`, err)
-    })
+    await ctx.projects.sendMessage(projectId, params.content, apiKey)
     return { ok: true as const }
   })
 

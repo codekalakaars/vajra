@@ -6,7 +6,7 @@ import type { LaunchJob, LaunchHandle, SandboxReport, ProjectLauncher } from './
 const here = dirname(fileURLToPath(import.meta.url))
 const workerPath = join(here, '..', '..', 'worker', 'sandboxed-worker.mjs')
 
-const WORKER_ENV_ALLOWLIST = ['PATH', 'SystemRoot', 'TEMP', 'TMP', 'HOME', 'USERPROFILE'] as const
+const WORKER_ENV_ALLOWLIST = ['PATH', 'SystemRoot', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'NODE_ENV'] as const
 
 function buildWorkerEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
@@ -24,6 +24,7 @@ interface PendingCall {
 
 class WorkerHandle implements LaunchHandle {
   private pending = new Map<string, PendingCall>()
+  private dead = false
 
   constructor(private child: ChildProcess) {
     child.on('message', (message: unknown) => {
@@ -40,9 +41,30 @@ class WorkerHandle implements LaunchHandle {
         pending.reject(new Error(msg.error))
       }
     })
+
+    // Reject all pending calls if the worker process exits or crashes
+    child.on('exit', (code) => {
+      this.dead = true
+      const error = new Error(`Worker exited with code ${code}`)
+      for (const pending of this.pending.values()) {
+        pending.reject(error)
+      }
+      this.pending.clear()
+    })
+
+    child.on('error', (err) => {
+      this.dead = true
+      for (const pending of this.pending.values()) {
+        pending.reject(err)
+      }
+      this.pending.clear()
+    })
   }
 
   callTool(tool: string, args: unknown): Promise<unknown> {
+    if (this.dead) {
+      return Promise.reject(new Error('Worker process is no longer running'))
+    }
     const callId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
     return new Promise((resolve, reject) => {
       this.pending.set(callId, { resolve, reject })

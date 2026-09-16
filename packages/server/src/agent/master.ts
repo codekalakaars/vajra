@@ -25,6 +25,10 @@ import { access } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { compressMessages } from './context.js'
 import { buildSummaryIndex, compressSummaryByRelevance } from './summary.js'
+import { DEFAULT_MAX_RETRIES, DEFAULT_VALIDATION_TIMEOUT, SPECULATIVE_CONFIDENCE_THRESHOLD, DEFAULT_WORKER_TOOL_CALLS, MAX_DEP_CONTEXT_SIZE } from './constants.js'
+import { componentLogger } from '../logger.js'
+
+const log = componentLogger('master')
 
 export interface MasterInput {
   projectId: string
@@ -65,9 +69,6 @@ export interface MasterResult {
   failedTasks: number
   totalToolCalls: number
 }
-
-const DEFAULT_MAX_RETRIES = 2
-const DEFAULT_VALIDATION_TIMEOUT = 60000
 
 /**
  * Evaluate skipIf conditions for a task.
@@ -177,7 +178,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
   // Speculative execution tracking
   const speculativeTasks = new Map<string, { taskId: string; dependsOn: string[] }>()
-  const SPECULATIVE_CONFIDENCE_THRESHOLD = 0.8
 
   // Adaptive concurrency based on system resources
   const adaptiveMax = pool?.stats().adaptiveMax ?? 4
@@ -400,7 +400,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         // Start task execution in background
         executeTask(agent.id, task, handle, apiKey, model, provider, events, db, queue, registry, projectId, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, resourceLimits, pool)
           .catch((e) => {
-            console.error(`Worker ${agent.id} failed:`, e)
+            log.error({ agentId: agent.id, error: e }, 'Worker failed')
           })
       } catch (e) {
         // Failed to launch worker
@@ -513,10 +513,9 @@ function gatherDependencyContext(task: TaskState, queue: TaskQueue, db: SqliteDb
 
   const contextParts: string[] = []
   let totalSize = 0
-  const MAX_CONTEXT_SIZE = 4000 // Limit total dependency context
 
   for (const depId of task.dependsOn) {
-    if (totalSize >= MAX_CONTEXT_SIZE) break
+    if (totalSize >= MAX_DEP_CONTEXT_SIZE) break
 
     const depTask = queue.getTask(depId)
     if (!depTask) continue
@@ -580,7 +579,7 @@ async function executeTask(
   resourceLimits?: ResourceLimits,
   pool?: WorkerPool,
 ): Promise<void> {
-  const MAX_WORKER_TOOL_CALLS = resourceLimits?.maxToolCalls ?? 50
+  const MAX_WORKER_TOOL_CALLS = resourceLimits?.maxToolCalls ?? DEFAULT_WORKER_TOOL_CALLS
   let toolCallCount = 0
 
   try {
@@ -637,6 +636,10 @@ async function executeTask(
     while (toolCallCount < MAX_WORKER_TOOL_CALLS) {
       // Compress messages to fit within context window
       const compressedMessages = compressMessages(messages, model)
+      // Prevent unbounded memory growth by trimming original array
+      if (compressedMessages.length < messages.length) {
+        messages.splice(0, messages.length, ...compressedMessages)
+      }
 
       const result = await provider.streamChat(
         { apiKey, model, messages: compressedMessages, tools: workerToolSpecs },
@@ -862,7 +865,11 @@ function computeToolPermissions(task: PlannedTask | TaskState): string[] {
   
   // Use toolPermissions if provided (TaskState has this as JSON string)
   if ('toolPermissions' in task && task.toolPermissions) {
-    return JSON.parse(task.toolPermissions)
+    try {
+      return JSON.parse(task.toolPermissions)
+    } catch {
+      // Corrupted JSON, fall through to defaults
+    }
   }
 
   // Default: read + write + edit for create/modify, read + delete for delete

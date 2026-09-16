@@ -13,8 +13,9 @@ import { scanProject } from '../native.js'
 import { buildNestedTree } from './tree.js'
 import { buildSummaryIndex, formatSummaryIndex, type SummaryEntry } from './summary.js'
 import { compressMessages } from './context.js'
+import { searchSummary, appendMessage, nextSeq } from './utils.js'
+import { MAX_AGENT_TOOL_CALLS, MAX_SEARCH_RESULTS } from './constants.js'
 
-const MAX_TOOL_CALLS = 150
 const FREE_TOOLS = new Set(['search_files'])
 
 export interface AgentLoopInput {
@@ -70,51 +71,6 @@ function buildSystemPrompt(
   ].join('\n')
 }
 
-function searchSummary(summary: SummaryEntry[], query: string): string {
-  const terms = query.toLowerCase().split(/[\s,;]+/).filter(t => t.length > 0)
-  if (terms.length === 0) return 'No search terms provided.'
-
-  const matches = summary.filter(entry => {
-    const text = `${entry.path} ${entry.symbols.join(' ')}`.toLowerCase()
-    return terms.every(t => text.includes(t))
-  })
-
-  if (matches.length === 0) return 'No matching files found.'
-
-  return matches
-    .slice(0, 15)
-    .map(entry => {
-      const symbols = entry.symbols.length > 0 ? entry.symbols.join(', ') : '(no symbols)'
-      const meta = `${entry.lineCount}L`
-      const imports = entry.importCount > 0 ? `, ${entry.importCount} imports` : ''
-      const exports = entry.exportCount > 0 ? `, ${entry.exportCount} exports` : ''
-      return `${entry.path} [${meta}${imports}${exports}]\n  Symbols: ${symbols}\n  Preview: ${entry.preview}`
-    })
-    .join('\n\n')
-}
-
-function appendMessage(
-  db: SqliteDb,
-  projectId: string,
-  seq: number,
-  role: string,
-  content: string | null,
-  toolCalls?: string,
-  toolCallId?: string,
-  toolName?: string,
-): void {
-  db.prepare(
-    `INSERT INTO messages (session_id, seq, role, content, tool_name, tool_call_id, tool_args, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(projectId, seq, role, content, toolName ?? null, toolCallId ?? null, toolCalls ?? null, Date.now())
-}
-
-function nextSeq(db: SqliteDb, projectId: string): number {
-  const row = db.prepare(`SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM messages WHERE session_id = ?`)
-    .get(projectId) as { next_seq: number }
-  return row.next_seq
-}
-
 /**
  * Agent loop — tool-use orchestration.
  * Builds a system prompt with nested file tree and summary index, gives the
@@ -129,14 +85,14 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
   try {
     const entries = scanProject(project.projectDir)
     tree = buildNestedTree(entries)
-    summaryIndex = buildSummaryIndex(project.projectDir, entries)
+      summaryIndex = await buildSummaryIndex(project.projectDir, entries)
   } catch {
     tree = '(unable to read project tree)'
     summaryIndex = []
   }
 
   const summaryText = formatSummaryIndex(summaryIndex)
-  const systemPrompt = buildSystemPrompt(project.projectDir, project.task, tree, summaryText, MAX_TOOL_CALLS)
+  const systemPrompt = buildSystemPrompt(project.projectDir, project.task, tree, summaryText, MAX_AGENT_TOOL_CALLS)
 
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
@@ -152,9 +108,13 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
   let toolCallCount = 0
 
   // Tool-use loop
-  while (toolCallCount < MAX_TOOL_CALLS) {
+  while (toolCallCount < MAX_AGENT_TOOL_CALLS) {
     // Compress messages to fit within context window
     const compressedMessages = compressMessages(messages, project.model)
+    // Prevent unbounded memory growth by trimming original array
+    if (compressedMessages.length < messages.length) {
+      messages.splice(0, messages.length, ...compressedMessages)
+    }
 
     const result = await provider.streamChat(
       {
@@ -188,7 +148,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
       const isFree = FREE_TOOLS.has(toolCall.name)
       if (!isFree) {
         toolCallCount++
-        if (toolCallCount > MAX_TOOL_CALLS) break
+        if (toolCallCount > MAX_AGENT_TOOL_CALLS) break
       }
 
       const parsed = parseToolCall(toolCall)
@@ -246,7 +206,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
   }
 
   // Exceeded max tool calls
-  const finalContent = `Exceeded maximum tool calls (${MAX_TOOL_CALLS}). Stopping.`
+  const finalContent = `Exceeded maximum tool calls (${MAX_AGENT_TOOL_CALLS}). Stopping.`
   events.push('projects.assistantDelta', project.id, { text: finalContent })
   return { summary: finalContent, toolCallCount }
 }

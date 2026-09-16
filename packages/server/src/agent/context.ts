@@ -76,9 +76,9 @@ export function getModelLimit(model: string): number {
     return MODEL_LIMITS[model]
   }
 
-  // Check for partial match
+  // Check for partial match (avoid matching 'default' key with substring)
   for (const [key, limit] of Object.entries(MODEL_LIMITS)) {
-    if (model.includes(key)) {
+    if (key !== 'default' && (model === key || model.endsWith('/' + key) || model.includes(key + ':'))) {
       return limit
     }
   }
@@ -164,7 +164,7 @@ export function compressMessages(
 /**
  * Compress a single long message.
  */
-export function compressMessage(message: ChatMessage, maxLength: number = 2000): ChatMessage {
+function compressMessage(message: ChatMessage, maxLength: number = 2000): ChatMessage {
   if (!message.content || message.content.length <= maxLength) {
     return message
   }

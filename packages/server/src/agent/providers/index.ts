@@ -10,6 +10,9 @@ import type { ChatProvider } from './types.js'
 import { OpenRouterProvider } from './openrouter.js'
 import { AnthropicProvider } from './anthropic.js'
 import { ZenProvider } from './zen.js'
+import { componentLogger } from '../../logger.js'
+
+const log = componentLogger('providers')
 
 const ZEN_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
 
@@ -125,7 +128,7 @@ export function createProvider(model: string, apiKeys: Record<string, string>): 
   // Validate model (warn but don't fail — OpenRouter proxies many models)
   const validationError = validateModel(providerName, resolvedModel)
   if (validationError) {
-    console.warn(`[providers] ${validationError}`)
+    log.warn({ provider: providerName, model: resolvedModel }, validationError)
   }
   return { provider: factory(), resolvedModel }
 }

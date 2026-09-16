@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ProjectFileEntry } from '@codekalakaars/vajra-protocol'
+import { MAX_SUMMARY_TOTAL_SIZE } from './constants.js'
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'target', '.next', 'dist', 'build', '__pycache__'])
 const SKIP_EXTENSIONS = new Set([
@@ -64,18 +65,17 @@ function shouldSkipFile(entry: ProjectFileEntry): boolean {
   return false
 }
 
-export function buildSummaryIndex(projectDir: string, entries: ProjectFileEntry[]): SummaryEntry[] {
+export async function buildSummaryIndex(projectDir: string, entries: ProjectFileEntry[]): Promise<SummaryEntry[]> {
   const summary: SummaryEntry[] = []
   let totalSize = 0
-  const MAX_TOTAL = 16000
 
   for (const entry of entries) {
     if (shouldSkipFile(entry)) continue
-    if (totalSize >= MAX_TOTAL) break
+    if (totalSize >= MAX_SUMMARY_TOTAL_SIZE) break
 
     try {
       const fullPath = join(projectDir, entry.path)
-      const content = readFileSync(fullPath, 'utf-8')
+      const content = await readFile(fullPath, 'utf-8')
 
       const symbols = extractSymbols(content)
       const preview = getPreview(content)
