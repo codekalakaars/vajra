@@ -6,6 +6,7 @@ import { ProjectManager, notImplementedLauncher, type ProjectLauncher } from '..
 import { RpcRouter } from './rpc.js'
 import { registerProjectHandlers } from './handlers/projects.js'
 import { registerProjectHandlers as registerSessionHandlers } from './handlers/projects-handler.js'
+import { registerVideoHandlers } from './handlers/video.js'
 
 class ClientConnection {
   private subscriptions = new Set<string>()
@@ -68,6 +69,7 @@ export function createAppServer(httpServer: HttpServer, options: CreateAppServer
   const router = new RpcRouter<ServerContext>()
   registerProjectHandlers(router)
   registerSessionHandlers(router)
+  registerVideoHandlers(router)
 
   const wss = new WebSocketServer({ server: httpServer })
 
