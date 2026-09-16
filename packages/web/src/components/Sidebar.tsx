@@ -5,7 +5,7 @@ import { PanelLeftClose, PanelLeft } from 'lucide-react'
 
 interface Project { id: string; projectDir: string; task: string; model: string; status: string; createdAt: number }
 
-export function Sidebar({ client, onNewProject }: { client: VajraClient; onNewProject: () => void }) {
+export function Sidebar({ client, onNewProject, onOpenVideoCreator }: { client: VajraClient; onNewProject: () => void; onOpenVideoCreator?: () => void }) {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true')
   const toggleCollapsed = () => setCollapsed((c) => { localStorage.setItem('sidebar-collapsed', String(!c)); return !c })
   const [projects, setProjects] = useState<Project[]>([])
@@ -65,10 +65,15 @@ export function Sidebar({ client, onNewProject }: { client: VajraClient; onNewPr
         </button>
       </div>
 
-      <div className="p-3" style={{ borderBottom: '1px solid #2a2a2a' }}>
-        <button onClick={onNewProject} className="w-full px-3 py-1.5 rounded text-sm transition-colors cursor-pointer" style={{ background: '#222222', color: '#e5e5e5' }}>
+      <div className="p-3 flex gap-2" style={{ borderBottom: '1px solid #2a2a2a' }}>
+        <button onClick={onNewProject} className="flex-1 px-3 py-1.5 rounded text-sm transition-colors cursor-pointer" style={{ background: '#222222', color: '#e5e5e5' }}>
           New Project
         </button>
+        {onOpenVideoCreator && (
+          <button onClick={onOpenVideoCreator} className="px-3 py-1.5 rounded text-sm transition-colors cursor-pointer" style={{ background: '#222222', color: '#e5e5e5' }}>
+            Video
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto">
