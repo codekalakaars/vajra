@@ -161,7 +161,7 @@ function buildManagerConversationPrompt(
     '- writeFile: Files the worker will create or modify',
     '- deleteFile: Files to delete',
     '- createDir: Directories to create',
-    '- validation: Commands to run after completion (must exit 0 on success)',
+    '- validation: Commands to run after completion (must exit 0 on success). IMPORTANT: Do NOT use commands that require a running server (npm test, curl localhost, etc.) unless the task explicitly starts the server. Use syntax checks (node --check, tsc --noEmit) or static analysis (eslint) instead.',
     '- dependsOn: Task IDs this depends on',
     '- type: create, modify, delete, or refactor',
     '- complexity: low, medium, or high (affects task sizing)',

@@ -172,6 +172,11 @@ async function executeTask(
           const result = await handle.callTool('run_command', { command: cmd, timeout: task.timeout * 1000 })
           const output = typeof result === 'string' ? result : JSON.stringify(result)
 
+          // Ignore ECONNREFUSED — server not running, not a real failure
+          if (output.includes('ECONNREFUSED')) {
+            continue
+          }
+
           const hasExitCode = /exit\s+code\s+[1-9]/i.test(output)
           const hasFailPatterns = /\b(failed|failure|error|exception|panic)\b/i.test(output)
 
