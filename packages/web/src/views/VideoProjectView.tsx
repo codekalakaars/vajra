@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { File, Folder, Play, Download, RefreshCw, Code, Eye, ChevronRight, ChevronDown, Loader2, Square, ExternalLink } from 'lucide-react'
+import { File, Folder, Play, Download, RefreshCw, Code, Eye, ChevronRight, ChevronDown, Loader2, Square, ExternalLink, Variable, Plus, Trash2 } from 'lucide-react'
 import type { VajraClient } from '../client'
 
 interface FileEntry {
@@ -23,16 +23,20 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
   const [rendering, setRendering] = useState(false)
   const [renderOutput, setRenderOutput] = useState<string | null>(null)
   const [renderProgress, setRenderProgress] = useState<string>('')
-  const [activeTab, setActiveTab] = useState<'code' | 'preview' | 'live'>('code')
+  const [activeTab, setActiveTab] = useState<'code' | 'preview' | 'live' | 'variables'>('code')
   const [previewHtml, setPreviewHtml] = useState<string | null>(null)
   const [previewRunning, setPreviewRunning] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [variables, setVariables] = useState<Record<string, string>>({})
+  const [newVarKey, setNewVarKey] = useState('')
+  const [newVarValue, setNewVarValue] = useState('')
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const previewFrameRef = useRef<HTMLIFrameElement>(null)
 
   useEffect(() => {
     loadFiles()
     checkPreviewStatus()
+    loadVariables()
     return () => {
       // Cleanup: stop preview on unmount
       client.call('video.stopPreview', { projectDir })
@@ -50,6 +54,50 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
       setPreviewHtml(fileContent)
     }
   }, [activeTab, selectedFile, fileContent])
+
+  const loadVariables = async () => {
+    try {
+      const result = await client.call('video.getVariables', { projectDir })
+      const res = result as { variables?: Record<string, string> }
+      setVariables(res.variables || {})
+    } catch (e) {
+      console.error('Failed to load variables:', e)
+    }
+  }
+
+  const addVariable = async () => {
+    if (!newVarKey.trim()) return
+    try {
+      await client.call('video.setVariable', { projectDir, key: newVarKey, value: newVarValue })
+      setVariables(prev => ({ ...prev, [newVarKey]: newVarValue }))
+      setNewVarKey('')
+      setNewVarValue('')
+    } catch (e) {
+      console.error('Failed to add variable:', e)
+    }
+  }
+
+  const updateVariable = async (key: string, value: string) => {
+    try {
+      await client.call('video.setVariable', { projectDir, key, value })
+      setVariables(prev => ({ ...prev, [key]: value }))
+    } catch (e) {
+      console.error('Failed to update variable:', e)
+    }
+  }
+
+  const deleteVariable = async (key: string) => {
+    try {
+      await client.call('video.deleteVariable', { projectDir, key })
+      setVariables(prev => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+    } catch (e) {
+      console.error('Failed to delete variable:', e)
+    }
+  }
 
   const checkPreviewStatus = async () => {
     try {
@@ -239,6 +287,16 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
               {previewRunning ? <Square size={14} /> : <Play size={14} />}
               Live
             </button>
+            <button
+              onClick={() => setActiveTab('variables')}
+              className="px-3 py-1.5 text-sm rounded flex items-center gap-1"
+              style={{
+                background: activeTab === 'variables' ? '#222' : 'transparent',
+                color: activeTab === 'variables' ? '#e5e5e5' : '#737373',
+              }}
+            >
+              <Variable size={14} /> Variables
+            </button>
           </div>
           <div className="ml-auto flex gap-2">
             {previewRunning && (
@@ -363,6 +421,73 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
                   </button>
                 </div>
               )}
+            </div>
+          )}
+
+          {activeTab === 'variables' && (
+            <div className="h-full flex flex-col p-4 overflow-auto">
+              <div className="mb-4">
+                <h3 className="text-sm font-medium mb-2">Composition Variables</h3>
+                <p className="text-xs" style={{ color: '#737373' }}>
+                  Define variables that can be used in your HyperFrames composition.
+                </p>
+              </div>
+
+              {/* Add new variable */}
+              <div className="flex gap-2 mb-4">
+                <input
+                  type="text"
+                  value={newVarKey}
+                  onChange={e => setNewVarKey(e.target.value)}
+                  placeholder="Variable name"
+                  className="flex-1 px-3 py-2 rounded text-sm"
+                  style={{ background: '#222', border: '1px solid #2a2a2a', color: '#e5e5e5' }}
+                />
+                <input
+                  type="text"
+                  value={newVarValue}
+                  onChange={e => setNewVarValue(e.target.value)}
+                  placeholder="Value"
+                  className="flex-1 px-3 py-2 rounded text-sm"
+                  style={{ background: '#222', border: '1px solid #2a2a2a', color: '#e5e5e5' }}
+                />
+                <button
+                  onClick={addVariable}
+                  disabled={!newVarKey.trim()}
+                  className="px-3 py-2 rounded text-sm flex items-center gap-1"
+                  style={{ background: '#2563eb', color: '#fff' }}
+                >
+                  <Plus size={14} /> Add
+                </button>
+              </div>
+
+              {/* Variable list */}
+              <div className="space-y-2">
+                {Object.entries(variables).map(([key, value]) => (
+                  <div key={key} className="flex items-center gap-2 p-2 rounded" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+                    <span className="text-sm font-mono" style={{ color: '#a3a3a3', minWidth: '120px' }}>{key}</span>
+                    <input
+                      type="text"
+                      value={value}
+                      onChange={e => updateVariable(key, e.target.value)}
+                      className="flex-1 px-2 py-1 rounded text-sm"
+                      style={{ background: '#222', border: '1px solid #2a2a2a', color: '#e5e5e5' }}
+                    />
+                    <button
+                      onClick={() => deleteVariable(key)}
+                      className="p-1 rounded hover:opacity-80"
+                      style={{ color: '#ff6b6b' }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+                {Object.keys(variables).length === 0 && (
+                  <div className="text-center py-8" style={{ color: '#525252' }}>
+                    No variables defined
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
