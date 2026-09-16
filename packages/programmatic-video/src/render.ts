@@ -116,6 +116,14 @@ export function render(
     args.push("--docker");
   }
 
+  if (options.format) {
+    args.push("--format", options.format);
+  }
+
+  if (options.fps) {
+    args.push("--fps", String(options.fps));
+  }
+
   try {
     const output = execSync(args.join(" "), {
       cwd: projectDir,
