@@ -127,7 +127,7 @@ async function executeTask(
   fileLocks: FileLockManager,
   projectDir: string,
 ): Promise<boolean> {
-  const MAX_WORKER_TOOL_CALLS = 50
+  const MAX_WORKER_TOOL_CALLS = 100
   let toolCallCount = 0
 
   const instructionLines = task.instructions.map((inst, i) => `${i + 1}. ${inst}`).join('\n')
