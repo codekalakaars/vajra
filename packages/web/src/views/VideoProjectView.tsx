@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { File, Folder, Play, Download, RefreshCw, Code, Eye, ChevronRight, ChevronDown, Loader2, Square, ExternalLink, Variable, Plus, Trash2, Keyboard } from 'lucide-react'
+import { File, Folder, Play, Download, RefreshCw, Code, Eye, ChevronRight, ChevronDown, Loader2, Square, ExternalLink, Variable, Plus, Trash2, Keyboard, Search } from 'lucide-react'
 import type { VajraClient } from '../client'
 
 interface FileEntry {
@@ -31,6 +31,10 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
   const [newVarKey, setNewVarKey] = useState('')
   const [newVarValue, setNewVarValue] = useState('')
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [showCommandPalette, setShowCommandPalette] = useState(false)
+  const [commandQuery, setCommandQuery] = useState('')
+  const [commandIndex, setCommandIndex] = useState(0)
+  const commandInputRef = useRef<HTMLInputElement>(null)
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const previewFrameRef = useRef<HTMLIFrameElement>(null)
 
@@ -90,14 +94,23 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
       }
       // Escape: Close file
       if (e.key === 'Escape') {
-        setSelectedFile(null)
-        setActiveTab('code')
+        if (showCommandPalette) {
+          setShowCommandPalette(false)
+        } else {
+          setSelectedFile(null)
+          setActiveTab('code')
+        }
+      }
+      // ⌘K or Ctrl+K: Command palette
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setShowCommandPalette(prev => !prev)
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedFile, fileContent, previewRunning])
+  }, [selectedFile, fileContent, previewRunning, showCommandPalette])
 
   const loadVariables = async () => {
     try {
@@ -243,7 +256,7 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
       const isExpanded = expandedDirs.has(entry.path)
       const isSelected = selectedFile === entry.path
 
-      return (
+  return (
         <div key={entry.path}>
           <div
             className="flex items-center gap-1 py-1 px-2 cursor-pointer text-sm"
@@ -276,8 +289,68 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
     })
   }
 
+  const filteredCommands = files.filter(f => !f.isDir).map(f => ({
+    id: `open-${f.path}`, label: `Open ${f.name}`, description: f.path, action: () => setSelectedFile(f.path),
+  }))
+
+  const handleCommandSelect = (cmd: typeof filteredCommands[0]) => {
+    cmd.action()
+    setShowCommandPalette(false)
+    setCommandQuery('')
+  }
+
+  const handleCommandKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setCommandIndex(i => Math.min(i + 1, filteredCommands.length - 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setCommandIndex(i => Math.max(i - 1, 0)) }
+    else if (e.key === 'Enter') { e.preventDefault(); if (filteredCommands[commandIndex]) handleCommandSelect(filteredCommands[commandIndex]) }
+    else if (e.key === 'Escape') { setShowCommandPalette(false); setCommandQuery('') }
+  }
+
   return (
     <div className="flex h-full">
+      {/* Command Palette */}
+      {showCommandPalette && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh]" style={{ background: 'rgba(0,0,0,0.5)' }}>
+          <div className="w-[500px] rounded-lg overflow-hidden" style={{ background: '#1a1a1a', border: '1px solid #2a2a2a' }}>
+            <div className="flex items-center gap-3 px-4 py-3" style={{ borderBottom: '1px solid #2a2a2a' }}>
+              <Search size={16} style={{ color: '#737373' }} />
+              <input
+                ref={commandInputRef}
+                type="text"
+                value={commandQuery}
+                onChange={e => { setCommandQuery(e.target.value); setCommandIndex(0) }}
+                onKeyDown={handleCommandKeyDown}
+                placeholder="Type a command..."
+                className="flex-1 bg-transparent text-sm focus:outline-none"
+                style={{ color: '#e5e5e5' }}
+                autoFocus
+              />
+              <kbd className="px-1.5 py-0.5 text-xs rounded" style={{ background: '#222', color: '#737373' }}>esc</kbd>
+            </div>
+            <div className="max-h-[300px] overflow-y-auto">
+              {filteredCommands.length === 0 ? (
+                <div className="px-4 py-8 text-center text-sm" style={{ color: '#525252' }}>No commands found</div>
+              ) : (
+                filteredCommands.map((cmd, i) => (
+                  <div
+                    key={cmd.id}
+                    className="flex items-center gap-3 px-4 py-2 cursor-pointer"
+                    style={{ background: i === commandIndex ? '#222' : 'transparent' }}
+                    onClick={() => handleCommandSelect(cmd)}
+                    onMouseEnter={() => setCommandIndex(i)}
+                  >
+                    <span style={{ color: '#737373' }}><File size={16} /></span>
+                    <div className="flex-1">
+                      <div className="text-sm" style={{ color: '#e5e5e5' }}>{cmd.label}</div>
+                      <div className="text-xs" style={{ color: '#737373' }}>{cmd.description}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {/* File Explorer */}
       <div className="w-64 flex flex-col" style={{ borderRight: '1px solid #2a2a2a', background: '#111' }}>
         <div className="p-3 flex items-center justify-between" style={{ borderBottom: '1px solid #2a2a2a' }}>
