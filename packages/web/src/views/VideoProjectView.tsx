@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { File, Folder, Play, Download, RefreshCw, Code, Eye, ChevronRight, ChevronDown, Loader2, Square, ExternalLink, Variable, Plus, Trash2 } from 'lucide-react'
+import { File, Folder, Play, Download, RefreshCw, Code, Eye, ChevronRight, ChevronDown, Loader2, Square, ExternalLink, Variable, Plus, Trash2, Keyboard } from 'lucide-react'
 import type { VajraClient } from '../client'
 
 interface FileEntry {
@@ -30,6 +30,7 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
   const [variables, setVariables] = useState<Record<string, string>>({})
   const [newVarKey, setNewVarKey] = useState('')
   const [newVarValue, setNewVarValue] = useState('')
+  const [showShortcuts, setShowShortcuts] = useState(false)
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const previewFrameRef = useRef<HTMLIFrameElement>(null)
 
@@ -54,6 +55,49 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
       setPreviewHtml(fileContent)
     }
   }, [activeTab, selectedFile, fileContent])
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // ⌘S or Ctrl+S: Save
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault()
+        saveFile()
+      }
+      // ⌘R or Ctrl+R: Render
+      if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+        e.preventDefault()
+        handleRender()
+      }
+      // ⌘P or Ctrl+P: Toggle preview
+      if ((e.metaKey || e.ctrlKey) && e.key === 'p') {
+        e.preventDefault()
+        setActiveTab(prev => prev === 'preview' ? 'code' : 'preview')
+      }
+      // ⌘L or Ctrl+L: Toggle live preview
+      if ((e.metaKey || e.ctrlKey) && e.key === 'l') {
+        e.preventDefault()
+        if (previewRunning) {
+          setActiveTab('live')
+        } else {
+          startPreview()
+        }
+      }
+      // ⌘E or Ctrl+E: Toggle variables
+      if ((e.metaKey || e.ctrlKey) && e.key === 'e') {
+        e.preventDefault()
+        setActiveTab(prev => prev === 'variables' ? 'code' : 'variables')
+      }
+      // Escape: Close file
+      if (e.key === 'Escape') {
+        setSelectedFile(null)
+        setActiveTab('code')
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selectedFile, fileContent, previewRunning])
 
   const loadVariables = async () => {
     try {
@@ -299,6 +343,14 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
             </button>
           </div>
           <div className="ml-auto flex gap-2">
+            <button
+              onClick={() => setShowShortcuts(!showShortcuts)}
+              className="px-2 py-1.5 text-sm rounded flex items-center gap-1"
+              style={{ background: showShortcuts ? '#222' : 'transparent', color: '#737373' }}
+              title="Keyboard shortcuts"
+            >
+              <Keyboard size={14} />
+            </button>
             {previewRunning && (
               <button
                 onClick={stopPreview}
@@ -333,6 +385,24 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
           <div className="px-4 py-2 flex items-center gap-2" style={{ borderBottom: '1px solid #2a2a2a', background: '#0d0d0d' }}>
             <Loader2 size={14} className="animate-spin" style={{ color: '#2563eb' }} />
             <span className="text-sm" style={{ color: '#737373' }}>{renderProgress}</span>
+          </div>
+        )}
+
+        {/* Keyboard Shortcuts Help */}
+        {showShortcuts && (
+          <div className="px-4 py-3" style={{ borderBottom: '1px solid #2a2a2a', background: '#111' }}>
+            <div className="flex items-center gap-2 mb-2">
+              <Keyboard size={14} style={{ color: '#737373' }} />
+              <span className="text-sm font-medium">Keyboard Shortcuts</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs" style={{ color: '#a3a3a3' }}>
+              <div><kbd className="px-1 py-0.5 rounded" style={{ background: '#222' }}>⌘S</kbd> Save file</div>
+              <div><kbd className="px-1 py-0.5 rounded" style={{ background: '#222' }}>⌘R</kbd> Render video</div>
+              <div><kbd className="px-1 py-0.5 rounded" style={{ background: '#222' }}>⌘P</kbd> Toggle preview</div>
+              <div><kbd className="px-1 py-0.5 rounded" style={{ background: '#222' }}>⌘L</kbd> Toggle live</div>
+              <div><kbd className="px-1 py-0.5 rounded" style={{ background: '#222' }}>⌘E</kbd> Toggle variables</div>
+              <div><kbd className="px-1 py-0.5 rounded" style={{ background: '#222' }}>Esc</kbd> Close file</div>
+            </div>
           </div>
         )}
 
