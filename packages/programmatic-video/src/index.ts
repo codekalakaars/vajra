@@ -29,6 +29,7 @@ export type {
   CompositionConfig,
   SceneConfig,
   VariableDeclaration,
+  MediaElement,
   ChildElement,
   TextElement,
   ShapeElement,
@@ -42,4 +43,6 @@ export type {
   Ease,
   Align,
   RenderOptions,
+  StoryboardFrame,
+  RegistryBlock,
 } from "./types";

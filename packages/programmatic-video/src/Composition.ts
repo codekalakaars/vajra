@@ -1,10 +1,20 @@
-import type { CompositionConfig, SceneConfig } from "./types";
+import type {
+  CompositionConfig,
+  SceneConfig,
+  MediaElement,
+  RegistryBlock,
+} from "./types";
 import { Scene } from "./scenes/Scene";
 
 /**
  * Composition - the main orchestrator for a HyperFrames video.
  *
  * Generates valid HyperFrames HTML from a declarative configuration.
+ * Follows HyperFrames conventions:
+ * - Sub-compositions via <template> transport
+ * - Media as direct root children
+ * - Shared background pattern for full-screen motion
+ * - Proper data-* attributes
  */
 export class Composition {
   readonly id: string;
@@ -14,7 +24,11 @@ export class Composition {
   private duration: number;
   private background: string;
   private fontFamily?: string;
+  private variables: { id: string; type: string; label: string; default: string | number | boolean }[];
+  private media: MediaElement[];
+  private sharedBackground: boolean;
   private scenes: Scene[] = [];
+  private blocks: RegistryBlock[] = [];
 
   constructor(config: CompositionConfig) {
     this.id = config.id;
@@ -24,6 +38,14 @@ export class Composition {
     this.duration = config.duration ?? 0;
     this.background = config.background ?? "#000000";
     this.fontFamily = config.fontFamily;
+    this.variables = (config.variables ?? []).map((v) => ({
+      id: v.id,
+      type: v.type,
+      label: v.label,
+      default: v.default,
+    }));
+    this.media = config.media ?? [];
+    this.sharedBackground = config.sharedBackground ?? false;
   }
 
   /** Add a scene to the composition */
@@ -33,12 +55,16 @@ export class Composition {
     return scene;
   }
 
+  /** Add a registry block to the composition */
+  addBlock(block: RegistryBlock): void {
+    this.blocks.push(block);
+  }
+
   /** Calculate and return the layout (start times for each scene) */
   private layout(): void {
     let currentTime = 0;
     for (const scene of this.scenes) {
       if (scene.getStart() === 0 && this.scenes.indexOf(scene) > 0) {
-        // Auto-layout: start after previous scene
         scene.setStart(currentTime);
       }
       currentTime = scene.getStart() + scene.duration;
@@ -52,7 +78,13 @@ export class Composition {
     }
   }
 
-  /** Generate the complete HTML file */
+  /** Generate data-composition-variables JSON */
+  private generateVariablesJSON(): string {
+    if (this.variables.length === 0) return "";
+    return JSON.stringify(this.variables);
+  }
+
+  /** Generate the complete HTML file (index.html) */
   toHTML(): string {
     this.layout();
 
@@ -73,6 +105,14 @@ export class Composition {
       `  <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>`,
     );
 
+    // Variables on <html>
+    const varsJSON = this.generateVariablesJSON();
+    if (varsJSON) {
+      lines.push(`</head>`);
+      lines.push(`<html data-composition-variables='${varsJSON}'>`);
+      lines.push(`<head>`);
+    }
+
     // CSS
     lines.push(`  <style>`);
     lines.push(`    body {`);
@@ -89,16 +129,28 @@ export class Composition {
     lines.push(`      height: ${this.height}px;`);
     lines.push(`      overflow: hidden;`);
     lines.push(`    }`);
-    lines.push(`    .clip {`);
-    lines.push(`      position: absolute;`);
-    lines.push(`      inset: 0;`);
-    lines.push(`      display: grid;`);
-    lines.push(`      place-items: center;`);
-    lines.push(`    }`);
-    lines.push(`    .scene {`);
-    lines.push(`      position: absolute;`);
-    lines.push(`      inset: 0;`);
-    lines.push(`    }`);
+
+    // Full-screen background pattern
+    if (this.sharedBackground) {
+      lines.push(`    #bg {`);
+      lines.push(`      position: absolute;`);
+      lines.push(`      inset: 0;`);
+      lines.push(`      background: ${this.background};`);
+      lines.push(`    }`);
+      lines.push(`    .scene {`);
+      lines.push(`      position: absolute;`);
+      lines.push(`      inset: 0;`);
+      lines.push(`    }`);
+    } else {
+      lines.push(`    .clip {`);
+      lines.push(`      position: absolute;`);
+      lines.push(`      inset: 0;`);
+      lines.push(`    }`);
+      lines.push(`    .scene {`);
+      lines.push(`      position: absolute;`);
+      lines.push(`      inset: 0;`);
+      lines.push(`    }`);
+    }
 
     // Scene CSS
     for (const scene of this.scenes) {
@@ -110,24 +162,88 @@ export class Composition {
 
     // Body
     lines.push(`<body>`);
-    lines.push(
-      `  <div id="root" data-composition-id="${this.id}" data-width="${this.width}" data-height="${this.height}" data-duration="${this.duration}">`,
-    );
+
+    // Root div
+    if (varsJSON) {
+      lines.push(
+        `  <div id="root" data-composition-id="${this.id}" data-width="${this.width}" data-height="${this.height}" data-duration="${this.duration}">`,
+      );
+    } else {
+      lines.push(
+        `  <div id="root" data-composition-id="${this.id}" data-width="${this.width}" data-height="${this.height}" data-duration="${this.duration}">`,
+      );
+    }
+
+    // Shared background (full-screen motion pattern)
+    if (this.sharedBackground) {
+      lines.push(`    <div id="bg"></div>`);
+    }
 
     // Scenes as sub-composition hosts
     for (const scene of this.scenes) {
+      const classes = this.sharedBackground ? "scene" : "clip";
       lines.push(
-        `    <section id="${scene.id}" class="clip" data-composition-id="${scene.id}" data-composition-src="compositions/${scene.id}.html" data-start="${scene.getStart()}" data-duration="${scene.duration}" data-track-index="${scene.track}"></section>`,
+        `    <section id="${scene.id}" class="${classes}" data-composition-id="${scene.id}" data-composition-src="compositions/${scene.id}.html" data-start="${scene.getStart()}" data-duration="${scene.duration}" data-track-index="${scene.track}"></section>`,
       );
+    }
+
+    // Registry blocks
+    for (const block of this.blocks) {
+      lines.push(
+        `    <div id="block-${block.name}" data-composition-id="${block.compositionId}" data-composition-src="compositions/${block.src}" data-start="0" data-duration="${block.duration}" data-track-index="${block.track ?? 1}" data-width="${block.width ?? this.width}" data-height="${block.height ?? this.height}"></div>`,
+      );
+    }
+
+    // Media elements - DIRECT root children (HyperFrames requirement)
+    for (const m of this.media) {
+      if (m.type === "video") {
+        const attrs = [
+          `id="${m.id}"`,
+          `class="clip"`,
+          `src="${m.src}"`,
+          `data-start="${m.start}"`,
+          `data-duration="${m.duration}"`,
+          `data-track-index="${m.track ?? 0}"`,
+          `muted`,
+          `playsinline`,
+          `crossorigin="anonymous"`,
+        ];
+        if (m.hasAudio) attrs.push(`data-has-audio="true"`);
+        if (m.style) attrs.push(`style="${m.style}"`);
+        lines.push(`    <video ${attrs.join(" ")}></video>`);
+      } else {
+        lines.push(
+          `    <audio id="${m.id}" src="${m.src}" data-start="${m.start}" data-duration="${m.duration}" data-track-index="${m.track ?? 10}" data-volume="${m.volume ?? 1}"></audio>`,
+        );
+      }
     }
 
     lines.push(`  </div>`);
 
-    // Root timeline (near-empty, sub-comps drive themselves)
+    // Root timeline
     lines.push(`  <script>`);
     lines.push(`    window.__timelines = window.__timelines || {};`);
     lines.push(
-      `    window.__timelines["${this.id}"] = gsap.timeline({ paused: true });`,
+      `    const tl = gsap.timeline({ paused: true });`,
+    );
+
+    // Shared background animations
+    if (this.sharedBackground) {
+      lines.push(
+        `    tl.set("#bg", { backgroundColor: "${this.background}" }, 0);`,
+      );
+    }
+
+    // Media animations from main timeline (for scene-specific media)
+    for (const m of this.media) {
+      if (m.type === "video" && m.style) {
+        // Media animations are driven from the main timeline
+        // The style attribute handles positioning
+      }
+    }
+
+    lines.push(
+      `    window.__timelines["${this.id}"] = tl;`,
     );
     lines.push(`  </script>`);
 
@@ -181,12 +297,43 @@ export class Composition {
     return lines.join("\n");
   }
 
-  /** Generate all scene files as a map of filename -> content */
+  /** Generate STORYBOARD.md */
+  toStoryboard(): string {
+    this.layout();
+
+    const lines: string[] = [];
+
+    // Frontmatter
+    lines.push(`---`);
+    lines.push(`format: ${this.width}x${this.height}`);
+    lines.push(`message: "${this.id}"`);
+    lines.push(`---`);
+    lines.push(``);
+
+    // Frames
+    for (let i = 0; i < this.scenes.length; i++) {
+      const scene = this.scenes[i];
+      const frameNum = i + 1;
+
+      lines.push(`## Frame ${frameNum} — ${scene.id}`);
+      lines.push(``);
+      lines.push(`- scene: ${scene.id}`);
+      lines.push(`- duration: ${scene.duration}s`);
+      lines.push(`- status: built`);
+      lines.push(`- src: compositions/${scene.id}.html`);
+      lines.push(``);
+    }
+
+    return lines.join("\n");
+  }
+
+  /** Generate all files as a map of filename -> content */
   toFiles(): Map<string, string> {
     this.layout();
 
     const files = new Map<string, string>();
     files.set("index.html", this.toHTML());
+    files.set("STORYBOARD.md", this.toStoryboard());
 
     for (const scene of this.scenes) {
       files.set(`compositions/${scene.id}.html`, this.toSceneHTML(scene));

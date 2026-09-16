@@ -54,8 +54,12 @@ export interface CompositionConfig {
   background?: Color;
   /** Font family for the composition */
   fontFamily?: FontFamily;
-  /** CSS variables to expose */
+  /** Variables to expose via data-composition-variables */
   variables?: VariableDeclaration[];
+  /** Media elements (video/audio) - these become direct root children in index.html */
+  media?: MediaElement[];
+  /** Use full-screen motion pattern (shared background + transparent scenes) */
+  sharedBackground?: boolean;
 }
 
 /** Variable declaration for composition */
@@ -71,6 +75,30 @@ export interface VariableDeclaration {
   unit?: string;
   placeholder?: string;
   maxLength?: number;
+}
+
+/** Media element (video/audio) - direct root children */
+export interface MediaElement {
+  type: "video" | "audio";
+  id: string;
+  src: string;
+  /** Start time in seconds (composition time) */
+  start: number;
+  /** Duration in seconds */
+  duration: number;
+  /** Track index (default: 10 for audio, 0 for video) */
+  track?: number;
+  /** Volume (0-1, default: 1) */
+  volume?: number;
+  /** Media start offset in seconds */
+  mediaStart?: number;
+  /** Whether the video has audio */
+  hasAudio?: boolean;
+  /** Additional attributes */
+  muted?: boolean;
+  playsInline?: boolean;
+  /** CSS positioning (for video) */
+  style?: string;
 }
 
 /** Scene configuration */
@@ -176,14 +204,42 @@ export type EffectType =
 export interface RenderOptions {
   /** Output file path */
   output?: string;
-  /** Quality: draft or high */
-  quality?: "draft" | "high";
+  /** Quality: draft, standard, or high */
+  quality?: "draft" | "standard" | "high";
   /** Render variables override */
   variables?: Record<string, string | number | boolean>;
   /** Run strict validation */
   strict?: boolean;
   /** Use Docker for reproducible builds */
   docker?: boolean;
+  /** Output format */
+  format?: "mp4" | "webm" | "mov" | "gif" | "png-sequence";
+  /** Frame rate override */
+  fps?: number;
+}
+
+/** Storyboard frame */
+export interface StoryboardFrame {
+  index: number;
+  title: string;
+  duration: string;
+  transitionIn?: "cut" | "crossfade" | "wipe";
+  scene?: string;
+  voiceover?: string;
+  src?: string;
+  status?: "outline" | "built" | "animated";
+  narrative?: string;
+}
+
+/** Registry block */
+export interface RegistryBlock {
+  name: string;
+  compositionId: string;
+  src: string;
+  duration: number;
+  track?: number;
+  width?: number;
+  height?: number;
 }
 
 /** Project scaffold options */

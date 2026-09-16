@@ -4,7 +4,7 @@ import { Composition } from "../src/Composition";
 import { text, rect, circle, image } from "../src/scenes/elements";
 import { fadeIn, fadeOut, slideIn, scaleIn, typewrite } from "../src/effects";
 import { scaffold } from "../src/render";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 describe("Composition", () => {
@@ -84,6 +84,7 @@ describe("Composition", () => {
 
     assert.ok(files.has("index.html"));
     assert.ok(files.has("compositions/scene-1.html"));
+    assert.ok(files.has("STORYBOARD.md"));
 
     const sceneHTML = files.get("compositions/scene-1.html")!;
     assert.ok(sceneHTML.includes("<template>"));
@@ -120,6 +121,120 @@ describe("Composition", () => {
     assert.ok(sceneHTML.includes("opacity:1"));
     assert.ok(sceneHTML.includes("x:-80"));
     assert.ok(sceneHTML.includes("x:0"));
+  });
+
+  it("should generate media elements as root children", () => {
+    const comp = new Composition({
+      id: "test",
+      width: 1920,
+      height: 1080,
+      media: [
+        {
+          type: "video",
+          id: "bg-video",
+          src: "assets/background.mp4",
+          start: 0,
+          duration: 10,
+          track: 0,
+          style: "position:absolute; left:0; top:0; width:100%; height:100%; object-fit:cover;",
+        },
+        {
+          type: "audio",
+          id: "bgm",
+          src: "assets/music.mp3",
+          start: 0,
+          duration: 10,
+          track: 10,
+          volume: 0.6,
+        },
+      ],
+    });
+
+    comp.addScene({
+      id: "scene-1",
+      duration: 10,
+      children: [text("title", "Video")],
+    });
+
+    const html = comp.toHTML();
+
+    // Media must be direct root children in index.html
+    assert.ok(html.includes('<video id="bg-video"'));
+    assert.ok(html.includes('<audio id="bgm"'));
+    assert.ok(html.includes('src="assets/background.mp4"'));
+    assert.ok(html.includes('src="assets/music.mp3"'));
+    assert.ok(html.includes('data-volume="0.6"'));
+  });
+
+  it("should support shared background pattern", () => {
+    const comp = new Composition({
+      id: "test",
+      width: 1920,
+      height: 1080,
+      background: "#0a0a0a",
+      sharedBackground: true,
+    });
+
+    comp.addScene({
+      id: "scene-1",
+      duration: 5,
+      children: [text("title", "Hello")],
+    });
+
+    const html = comp.toHTML();
+
+    // Should have shared background div
+    assert.ok(html.includes('<div id="bg"></div>'));
+    // Scenes should use .scene class, not .clip
+    assert.ok(html.includes('class="scene"'));
+    assert.ok(!html.includes('class="clip"'));
+  });
+
+  it("should generate variables JSON", () => {
+    const comp = new Composition({
+      id: "test",
+      width: 1920,
+      height: 1080,
+      variables: [
+        { id: "title", type: "string", label: "Title", default: "Hello" },
+        { id: "accent", type: "color", label: "Accent", default: "#ff0000" },
+      ],
+    });
+
+    comp.addScene({
+      id: "scene-1",
+      duration: 5,
+      children: [text("title", "Hello")],
+    });
+
+    const html = comp.toHTML();
+
+    assert.ok(html.includes("data-composition-variables"));
+    assert.ok(html.includes('"title"'));
+    assert.ok(html.includes('"accent"'));
+  });
+
+  it("should generate STORYBOARD.md", () => {
+    const comp = new Composition({
+      id: "test-video",
+      width: 1920,
+      height: 1080,
+    });
+
+    comp.addScene({ id: "intro", duration: 3 });
+    comp.addScene({ id: "body", duration: 5 });
+    comp.addScene({ id: "outro", duration: 2 });
+
+    const files = comp.toFiles();
+    const storyboard = files.get("STORYBOARD.md")!;
+
+    assert.ok(storyboard.includes("format: 1920x1080"));
+    assert.ok(storyboard.includes("## Frame 1 — intro"));
+    assert.ok(storyboard.includes("## Frame 2 — body"));
+    assert.ok(storyboard.includes("## Frame 3 — outro"));
+    assert.ok(storyboard.includes("- duration: 3s"));
+    assert.ok(storyboard.includes("- duration: 5s"));
+    assert.ok(storyboard.includes("- duration: 2s"));
   });
 });
 
@@ -207,5 +322,6 @@ describe("Render pipeline", () => {
     assert.ok(result.files.length > 0);
     assert.ok(existsSync(join(result.dir, "index.html")));
     assert.ok(existsSync(join(result.dir, "compositions", "scene-1.html")));
+    assert.ok(existsSync(join(result.dir, "STORYBOARD.md")));
   });
 });
