@@ -51,6 +51,39 @@ async function evaluateSkipIf(conditions: string[], projectDir: string): Promise
   return false
 }
 
+const SERVER_REQUIRED_PATTERNS = [
+  /\bnpm\s+test\b/,
+  /\bjest\b/,
+  /\bmocha\b/,
+  /\bvitest\b/,
+  /\bcurl\s+.*localhost/,
+  /\bcurl\s+.*127\.0\.0\.1/,
+  /\bwget\s+.*localhost/,
+  /\bwget\s+.*127\.0\.0\.1/,
+  /\bapi[_-]?test/,
+  /\bintegration[_-]?test/,
+]
+
+function needsServer(validationCommands: string[]): boolean {
+  return validationCommands.some(cmd =>
+    SERVER_REQUIRED_PATTERNS.some(pattern => pattern.test(cmd))
+  )
+}
+
+async function findServerEntry(projectDir: string): Promise<string | null> {
+  const candidates = ['src/index.js', 'src/server.js', 'src/app.js', 'index.js', 'server.js', 'app.js']
+  for (const candidate of candidates) {
+    const fullPath = resolve(projectDir, candidate)
+    try {
+      await access(fullPath)
+      return fullPath
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
 function computeTaskPermissions(task: { readFile: string[]; writeFile: string[]; deleteFile: string[] }): Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> {
   const files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> = {}
 
@@ -92,6 +125,7 @@ async function executeTask(
   registry: AgentRegistry,
   sessionId: string,
   fileLocks: FileLockManager,
+  projectDir: string,
 ): Promise<boolean> {
   const MAX_WORKER_TOOL_CALLS = 50
   let toolCallCount = 0
@@ -167,24 +201,41 @@ async function executeTask(
     }
 
     if (task.validation.length > 0) {
-      for (const cmd of task.validation) {
-        try {
-          const result = await handle.callTool('run_command', { command: cmd, timeout: task.timeout * 1000 })
-          const output = typeof result === 'string' ? result : JSON.stringify(result)
+      let serverProcess: ReturnType<typeof import('node:child_process').spawn> | null = null
 
-          // Ignore ECONNREFUSED — server not running, not a real failure
-          if (output.includes('ECONNREFUSED')) {
-            continue
-          }
+      if (needsServer(task.validation)) {
+        const serverEntry = await findServerEntry(projectDir)
+        if (serverEntry) {
+          const { spawn } = await import('node:child_process')
+          serverProcess = spawn('node', [serverEntry], {
+            cwd: projectDir,
+            stdio: 'pipe',
+            detached: true,
+          })
+          // Wait for server to start
+          await new Promise(resolve => setTimeout(resolve, 2000))
+        }
+      }
 
-          const hasExitCode = /exit\s+code\s+[1-9]/i.test(output)
-          const hasFailPatterns = /\b(failed|failure|error|exception|panic)\b/i.test(output)
+      try {
+        for (const cmd of task.validation) {
+          try {
+            const result = await handle.callTool('run_command', { command: cmd, timeout: task.timeout * 1000 })
+            const output = typeof result === 'string' ? result : JSON.stringify(result)
 
-          if (hasExitCode || hasFailPatterns) {
+            const hasExitCode = /exit\s+code\s+[1-9]/i.test(output)
+            const hasFailPatterns = /\b(failed|failure|error|exception|panic)\b/i.test(output)
+
+            if (hasExitCode || hasFailPatterns) {
+              return false
+            }
+          } catch {
             return false
           }
-        } catch {
-          return false
+        }
+      } finally {
+        if (serverProcess) {
+          serverProcess.kill('SIGTERM')
         }
       }
     }
@@ -391,7 +442,7 @@ export async function runCommand(options: RunOptions): Promise<void> {
           const maxRetries = task.maxRetries ?? DEFAULT_MAX_RETRIES
 
           while (retries <= maxRetries) {
-            success = await executeTask(agent.id, task, taskHandle, options.apiKey, options.model, streamer, changeHistory, queue, registry, sessionId, fileLocks)
+            success = await executeTask(agent.id, task, taskHandle, options.apiKey, options.model, streamer, changeHistory, queue, registry, sessionId, fileLocks, options.projectDir)
 
             if (success) break
 
