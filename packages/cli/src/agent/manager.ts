@@ -153,6 +153,7 @@ function buildManagerConversationPrompt(
     '- Only ask clarifying questions if the task is vague or ambiguous',
     '- Only read files you need to understand the task',
     '- Tasks must be HIGHLY PRESCRIPTIVE — the worker should not need to think',
+    '- NEVER put "run tests" or "verify" as the first task — always edit code first, then test',
     '',
     'When calling propose_plan, each task MUST include:',
     '- title: Short title',
