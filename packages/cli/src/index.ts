@@ -32,7 +32,7 @@ program
   .description('Start an interactive session with the manager agent')
   .argument('[task]', 'Initial task description (optional)')
   .option('-k, --api-key <key>', 'API key (OpenRouter or OpenCode Zen)')
-  .option('-m, --model <model>', 'LLM model to use', process.env.VAJRA_MODEL || 'zen/mimo-v2.5-free')
+  .option('-m, --model <model>', 'LLM model to use', process.env.VAJRA_MODEL || 'zen/nemotron-3-ultra-free')
   .option('-v, --verbose', 'Show thinking/reasoning output')
   .option('-d, --dir <directory>', 'Project directory', process.cwd())
   .action(async (task, options) => {
