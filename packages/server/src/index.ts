@@ -6,6 +6,10 @@ import { openDb } from './db/client.js'
 import { createAppServer } from './ws/server.js'
 import type { ProjectLauncher } from './project/manager.js'
 import { forkProjectLauncher } from './project/launcher.js'
+import { componentLogger } from './logger.js'
+import { killAllPreviewServers } from './ws/handlers/video.js'
+
+const log = componentLogger('server')
 
 dotenv.config()
 if (!process.env.OPENROUTER_API_KEY && !process.env.ANTHROPIC_API_KEY && !process.env.OPENCODE_API_KEY) {
@@ -62,11 +66,28 @@ if (isMain) {
   if (process.env.ANTHROPIC_API_KEY) apiKeys.anthropic = process.env.ANTHROPIC_API_KEY
   if (process.env.OPENCODE_API_KEY) apiKeys.zen = process.env.OPENCODE_API_KEY
   if (Object.keys(apiKeys).length === 0) {
-    console.error('API key required: set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or OPENCODE_API_KEY in .env or environment')
-    console.error('  See .env.example at the repo root')
+    log.error('API key required: set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or OPENCODE_API_KEY in .env or environment')
+    log.error('  See .env.example at the repo root')
     process.exit(1)
   }
   startServer({ port, apiKeys, launcher: forkProjectLauncher }).then((server) => {
-    console.log(`vajra server listening on :${server.port}`)
+    log.info({ port }, 'vajra server listening')
+
+    // Graceful shutdown on SIGTERM/SIGINT
+    const shutdown = async (signal: string) => {
+      log.info({ signal }, 'Received shutdown signal, closing server...')
+      try {
+        killAllPreviewServers()
+        await server.close()
+        log.info('Server closed gracefully')
+        process.exit(0)
+      } catch (err) {
+        log.error({ error: err }, 'Error during shutdown')
+        process.exit(1)
+      }
+    }
+
+    process.on('SIGTERM', () => shutdown('SIGTERM'))
+    process.on('SIGINT', () => shutdown('SIGINT'))
   })
 }

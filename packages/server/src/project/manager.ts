@@ -252,6 +252,10 @@ export class ProjectManager {
     // Initialize conversation state if not already present (e.g. after page refresh)
     if (!this.conversations.has(projectId)) {
       const handle = this.handles.get(projectId)
+      if (!handle) {
+        throw new Error(`No worker handle for project '${projectId}'`)
+      }
+
       // Create provider if API keys are available
       let provider: ChatProvider | undefined
       if (apiKeys && Object.keys(apiKeys).length > 0) {
@@ -259,17 +263,27 @@ export class ProjectManager {
         const result = createProvider(row.model, apiKeys)
         provider = result.provider
       }
+      if (!provider) {
+        throw new Error(`No chat provider available for project '${projectId}'`)
+      }
+
       this.conversations.set(projectId, {
         history: messages.map((m) => ({
           role: m.role as 'user' | 'assistant' | 'system',
           content: m.content ?? '',
-          ...(m.tool_name && { toolCalls: [{ id: m.tool_call_id ?? '', name: m.tool_name, arguments: m.tool_args ? JSON.parse(m.tool_args) : {} }] }),
+          ...(m.tool_name && {
+            toolCalls: [{
+              id: m.tool_call_id ?? '',
+              name: m.tool_name,
+              arguments: (() => { try { return m.tool_args ? JSON.parse(m.tool_args) : {} } catch { return {} } })(),
+            }],
+          }),
           ...(m.tool_result && m.tool_call_id && { toolCallId: m.tool_call_id }),
         })),
         summaryIndex: [],
-        handle: handle!,
+        handle,
         fileLocks: new FileLockManager(),
-        provider: provider!,
+        provider,
       })
 
       // If status is confirming, extract the plan from the last assistant message
@@ -355,6 +369,10 @@ export class ProjectManager {
 
     this.conversations.delete(projectId)
     const tx = this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
+      this.db.prepare(`DELETE FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)`).run(projectId)
+      this.db.prepare(`DELETE FROM tasks WHERE session_id = ?`).run(projectId)
+      this.db.prepare(`DELETE FROM agents WHERE session_id = ?`).run(projectId)
       this.db.prepare(`DELETE FROM plan_steps WHERE session_id = ?`).run(projectId)
       this.db.prepare(`DELETE FROM messages WHERE session_id = ?`).run(projectId)
       this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(projectId)
@@ -598,7 +616,7 @@ export class ProjectManager {
       const message = e instanceof Error ? e.message : String(e)
       this.setStatus(projectId, 'failed', Date.now())
       this.events.push('projects.failed', projectId, { message })
-      throw e
+      // Don't re-throw — event already emitted, RPC handler shouldn't double-fail
     }
   }
 

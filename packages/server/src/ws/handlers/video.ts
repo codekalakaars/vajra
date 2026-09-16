@@ -1,15 +1,18 @@
 import type { RpcRouter } from '../rpc.js'
 import type { ServerContext } from '../server.js'
-import { execFileSync, spawn } from 'child_process'
+import { execFile, spawn } from 'child_process'
+import { promisify } from 'util'
 import type { ChildProcess } from 'child_process'
 import { join, resolve, relative } from 'path'
-import { rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { readFile, writeFile, mkdir, access, rm } from 'fs/promises'
 import { componentLogger } from '../../logger.js'
+
+const execFileAsync = promisify(execFile)
 
 const log = componentLogger('video')
 
-// Track preview server processes
-const previewServers = new Map<string, ChildProcess>()
+// Track preview server processes with their ports
+const previewServers = new Map<string, { proc: ChildProcess, port: string }>()
 
 interface VideoInitParams {
   projectDir: string
@@ -84,22 +87,48 @@ function validatePath(filePath: string, allowedDir: string): string {
   return resolved
 }
 
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+const VIDEO_PROJECTS_BASE = process.env.VIDEO_PROJECTS_BASE ?? process.cwd()
+
+/**
+ * Validate that a project directory is within the allowed base directory.
+ * Prevents path traversal via projectDir parameters.
+ */
+function validateProjectDir(projectDir: string): string {
+  const resolved = resolve(projectDir)
+  const rel = relative(VIDEO_PROJECTS_BASE, resolved)
+  if (rel.startsWith('..')) {
+    throw new Error(`Project directory "${projectDir}" is outside the allowed base directory`)
+  }
+  return resolved
+}
+
 export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
-  router.register('video.init', (params: VideoInitParams) => {
+  router.register('video.init', async (params: VideoInitParams) => {
     const { projectDir, template, resolution = 'landscape', tailwind = false } = params
 
     if (!projectDir || !template) {
       return { success: false, error: 'projectDir and template are required' }
     }
 
+    let safeDir: string
+    try {
+      safeDir = validatePath(projectDir, VIDEO_PROJECTS_BASE)
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+
     try {
       // Remove directory if it exists
-      if (existsSync(projectDir)) {
-        rmSync(projectDir, { recursive: true, force: true })
+      try {
+        await access(safeDir)
+        await rm(safeDir, { recursive: true, force: true })
+      } catch {
+        // Directory doesn't exist, which is fine
       }
 
       const args = [
-        'hyperframes', 'init', projectDir,
+        'hyperframes', 'init', safeDir,
         '--example', template,
         '--non-interactive',
         '--resolution', resolution,
@@ -109,39 +138,51 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
         args.push('--tailwind')
       }
 
-      execFileSync('npx', args, { stdio: 'pipe' })
+      await execFileAsync('npx', args)
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to initialize video project' }
     }
   })
 
-  router.register('video.addBlock', (params: VideoAddBlockParams) => {
+  router.register('video.addBlock', async (params: VideoAddBlockParams) => {
     const { projectDir, block } = params
 
     if (!projectDir || !block) {
       return { success: false, error: 'projectDir and block are required' }
     }
 
+    let safeDir: string
     try {
-      execFileSync('npx', ['hyperframes', 'add', block, '--dir', projectDir, '--no-clipboard'], {
-        stdio: 'pipe',
-      })
+      safeDir = validateProjectDir(projectDir)
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+
+    try {
+      await execFileAsync('npx', ['hyperframes', 'add', block, '--dir', safeDir, '--no-clipboard'])
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to add block' }
     }
   })
 
-  router.register('video.render', (params: VideoRenderParams) => {
+  router.register('video.render', async (params: VideoRenderParams) => {
     const { projectDir, output, quality = 'standard', format = 'mp4', fps = '30', strict = false } = params
 
     if (!projectDir) {
       return { success: false, error: 'projectDir is required' }
     }
 
+    let safeDir: string
     try {
-      const args = ['hyperframes', 'render', projectDir]
+      safeDir = validateProjectDir(projectDir)
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+
+    try {
+      const args = ['hyperframes', 'render', safeDir]
 
       if (output) args.push('--output', output)
       if (quality) args.push('--quality', quality)
@@ -149,24 +190,29 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
       if (fps) args.push('--fps', fps)
       if (strict) args.push('--strict')
 
-      const outputBuffer = execFileSync('npx', args, { stdio: 'pipe' })
-      return { success: true, output: outputBuffer.toString() }
+      const { stdout } = await execFileAsync('npx', args)
+      return { success: true, output: stdout }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to render video' }
     }
   })
 
-  router.register('video.preview', (params: VideoPreviewParams) => {
+  router.register('video.preview', async (params: VideoPreviewParams) => {
     const { projectDir, port = '3002' } = params
 
     if (!projectDir) {
       return { success: false, error: 'projectDir is required' }
     }
 
+    let safeDir: string
     try {
-      execFileSync('npx', ['hyperframes', 'preview', projectDir, '--port', port], {
-        stdio: 'pipe',
-      })
+      safeDir = validateProjectDir(projectDir)
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+
+    try {
+      await execFileAsync('npx', ['hyperframes', 'preview', safeDir, '--port', port])
       return { success: true, port }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to start preview' }
@@ -176,6 +222,9 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
   router.register('video.list', async (params: VideoListParams) => {
     try {
       const response = await fetch(`${REGISTRY_BASE}/registry.json`)
+      if (!response.ok) {
+        throw new Error(`Registry fetch failed: ${response.status} ${response.statusText}`)
+      }
       const data = (await response.json()) as { items: Array<{ name: string; type: string }> }
 
       let items = data.items
@@ -196,7 +245,7 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
     }
   })
 
-  router.register('video.readFile', (params: VideoReadFileParams) => {
+  router.register('video.readFile', async (params: VideoReadFileParams) => {
     const { path: filePath, projectDir } = params
 
     if (!filePath || !projectDir) {
@@ -204,15 +253,16 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
     }
 
     try {
-      const safePath = validatePath(filePath, projectDir)
-      const content = readFileSync(safePath, 'utf-8')
+      const safeDir = validateProjectDir(projectDir)
+      const safePath = validatePath(filePath, safeDir)
+      const content = await readFile(safePath, 'utf-8')
       return { success: true, content }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to read file' }
     }
   })
 
-  router.register('video.writeFile', (params: VideoWriteFileParams) => {
+  router.register('video.writeFile', async (params: VideoWriteFileParams) => {
     const { path: filePath, content, projectDir } = params
 
     if (!filePath || content === undefined || !projectDir) {
@@ -220,13 +270,12 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
     }
 
     try {
-      const safePath = validatePath(filePath, projectDir)
+      const safeDir = validateProjectDir(projectDir)
+      const safePath = validatePath(filePath, safeDir)
       // Ensure directory exists
       const dir = join(safePath, '..')
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true })
-      }
-      writeFileSync(safePath, content, 'utf-8')
+      await mkdir(dir, { recursive: true })
+      await writeFile(safePath, content, 'utf-8')
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to write file' }
@@ -240,28 +289,34 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
       return { success: false, error: 'projectDir is required' }
     }
 
+    let safeDir: string
+    try {
+      safeDir = validateProjectDir(projectDir)
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+
     // Stop existing preview if running
-    const existing = previewServers.get(projectDir)
+    const existing = previewServers.get(safeDir)
     if (existing) {
-      existing.kill()
-      previewServers.delete(projectDir)
+      existing.proc.kill()
+      previewServers.delete(safeDir)
     }
 
     try {
-      const proc = spawn('npx', ['hyperframes', 'preview', projectDir, '--port', port], {
+      const proc = spawn('npx', ['hyperframes', 'preview', safeDir, '--port', port], {
         stdio: 'pipe',
-        detached: true,
       })
 
-      previewServers.set(projectDir, proc)
+      previewServers.set(safeDir, { proc, port })
 
       proc.on('error', (err: Error) => {
-        log.error({ projectDir, error: err }, 'Preview server error')
-        previewServers.delete(projectDir)
+        log.error({ projectDir: safeDir, error: err }, 'Preview server error')
+        previewServers.delete(safeDir)
       })
 
       proc.on('exit', () => {
-        previewServers.delete(projectDir)
+        previewServers.delete(safeDir)
       })
 
       return { success: true, port, url: `http://localhost:${port}` }
@@ -272,9 +327,9 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
 
   router.register('video.stopPreview', (params: { projectDir: string }) => {
     const { projectDir } = params
-    const proc = previewServers.get(projectDir)
-    if (proc) {
-      proc.kill()
+    const entry = previewServers.get(projectDir)
+    if (entry) {
+      entry.proc.kill()
       previewServers.delete(projectDir)
       return { success: true }
     }
@@ -283,64 +338,124 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
 
   router.register('video.getPreviewStatus', (params: { projectDir: string }) => {
     const { projectDir } = params
-    const proc = previewServers.get(projectDir)
+    const entry = previewServers.get(projectDir)
     return {
       success: true,
-      running: !!proc,
-      port: '3002',
-      url: proc ? `http://localhost:3002` : null,
+      running: !!entry,
+      port: entry?.port ?? '3002',
+      url: entry ? `http://localhost:${entry.port}` : null,
     }
   })
 
-  router.register('video.getVariables', (params: VideoGetVariablesParams) => {
+  router.register('video.getVariables', async (params: VideoGetVariablesParams) => {
     const { projectDir } = params
-    const varsPath = join(projectDir, 'composition-variables.json')
+    // Validate projectDir is within allowed base
+    let safeDir: string
+    try {
+      safeDir = validateProjectDir(projectDir)
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+    let varsPath: string
+    try {
+      varsPath = validatePath('composition-variables.json', safeDir)
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
 
     try {
-      if (existsSync(varsPath)) {
-        const content = readFileSync(varsPath, 'utf-8')
+      try {
+        await access(varsPath)
+        const content = await readFile(varsPath, 'utf-8')
         const variables = JSON.parse(content)
         return { success: true, variables }
+      } catch {
+        return { success: true, variables: {} }
       }
-      return { success: true, variables: {} }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to read variables' }
     }
   })
 
-  router.register('video.setVariable', (params: VideoSetVariableParams) => {
+  router.register('video.setVariable', async (params: VideoSetVariableParams) => {
     const { projectDir, key, value } = params
-    const varsPath = join(projectDir, 'composition-variables.json')
+    let safeDir: string
+    try {
+      safeDir = validateProjectDir(projectDir)
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+    let varsPath: string
+    try {
+      varsPath = validatePath('composition-variables.json', safeDir)
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+
+    if (FORBIDDEN_KEYS.has(key)) {
+      return { success: false, error: `Key "${key}" is not allowed` }
+    }
 
     try {
       let variables: Record<string, string> = {}
-      if (existsSync(varsPath)) {
-        const content = readFileSync(varsPath, 'utf-8')
+      try {
+        await access(varsPath)
+        const content = await readFile(varsPath, 'utf-8')
         variables = JSON.parse(content)
+      } catch {
+        // File doesn't exist yet, start with empty object
       }
 
       variables[key] = value
-      writeFileSync(varsPath, JSON.stringify(variables, null, 2), 'utf-8')
+      await writeFile(varsPath, JSON.stringify(variables, null, 2), 'utf-8')
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to set variable' }
     }
   })
 
-  router.register('video.deleteVariable', (params: { projectDir: string; key: string }) => {
+  router.register('video.deleteVariable', async (params: { projectDir: string; key: string }) => {
     const { projectDir, key } = params
-    const varsPath = join(projectDir, 'composition-variables.json')
+    let safeDir: string
+    try {
+      safeDir = validateProjectDir(projectDir)
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+    let varsPath: string
+    try {
+      varsPath = validatePath('composition-variables.json', safeDir)
+    } catch (e: any) {
+      return { success: false, error: e.message }
+    }
+
+    if (FORBIDDEN_KEYS.has(key)) {
+      return { success: false, error: `Key "${key}" is not allowed` }
+    }
 
     try {
-      if (existsSync(varsPath)) {
-        const content = readFileSync(varsPath, 'utf-8')
+      try {
+        await access(varsPath)
+        const content = await readFile(varsPath, 'utf-8')
         const variables = JSON.parse(content)
         delete variables[key]
-        writeFileSync(varsPath, JSON.stringify(variables, null, 2), 'utf-8')
+        await writeFile(varsPath, JSON.stringify(variables, null, 2), 'utf-8')
+      } catch {
+        // File doesn't exist, nothing to delete
       }
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to delete variable' }
     }
   })
+}
+
+/**
+ * Kill all preview server processes. Called during server shutdown.
+ */
+export function killAllPreviewServers(): void {
+  for (const [, entry] of previewServers) {
+    entry.proc.kill()
+  }
+  previewServers.clear()
 }

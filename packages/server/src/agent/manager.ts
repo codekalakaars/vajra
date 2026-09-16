@@ -18,6 +18,11 @@ import { scanProject } from '../native.js'
 import { buildNestedTree } from './tree.js'
 import { buildSummaryIndex, formatSummaryIndex, formatSummaryIndexHierarchical, compressSummaryByRelevance, type SummaryEntry } from './summary.js'
 import { compressMessages } from './context.js'
+import { searchSummary, appendMessage, nextSeq } from './utils.js'
+import { MAX_MANAGER_TOOL_CALLS, MAX_TASK_CONTEXT_SIZE, MAX_CONTEXT_LINES } from './constants.js'
+import { componentLogger } from '../logger.js'
+
+const log = componentLogger('manager')
 
 const FREE_TOOLS = new Set(['search_files'])
 
@@ -110,14 +115,13 @@ async function readTaskContext(
   handle: LaunchHandle,
 ): Promise<string> {
   const contextParts: string[] = []
-  const MAX_CONTEXT_SIZE = 8000 // Limit total context size
   let currentSize = 0
 
   // Combine all files that need to be read or written
   const allFiles = [...new Set([...readFile, ...writeFile])]
 
   for (const filePath of allFiles) {
-    if (currentSize >= MAX_CONTEXT_SIZE) break
+    if (currentSize >= MAX_TASK_CONTEXT_SIZE) break
 
     try {
       const result = await handle.callTool('read_file', { path: filePath })
@@ -202,29 +206,6 @@ function extractRelevantLines(content: string, instructions: string[], filePath:
   }
 
   return result.join('\n')
-}
-
-function searchSummary(summary: SummaryEntry[], query: string): string {
-  const terms = query.toLowerCase().split(/[\s,;]+/).filter(t => t.length > 0)
-  if (terms.length === 0) return 'No search terms provided.'
-
-  const matches = summary.filter(entry => {
-    const text = `${entry.path} ${entry.symbols.join(' ')}`.toLowerCase()
-    return terms.every(t => text.includes(t))
-  })
-
-  if (matches.length === 0) return 'No matching files found.'
-
-  return matches
-    .slice(0, 15)
-    .map(entry => {
-      const symbols = entry.symbols.length > 0 ? entry.symbols.join(', ') : '(no symbols)'
-      const meta = `${entry.lineCount}L`
-      const imports = entry.importCount > 0 ? `, ${entry.importCount} imports` : ''
-      const exports = entry.exportCount > 0 ? `, ${entry.exportCount} exports` : ''
-      return `${entry.path} [${meta}${imports}${exports}]\n  Symbols: ${symbols}\n  Preview: ${entry.preview}`
-    })
-    .join('\n\n')
 }
 
 /**
@@ -472,7 +453,7 @@ function detectAndRemoveCircularDeps(tasks: PlannedTask[]): PlannedTask[] {
 
   // Remove circular dependencies
   if (circularDeps.size > 0) {
-    console.warn(`Removing circular dependencies from tasks: ${[...circularDeps].join(', ')}`)
+    log.warn({ tasks: [...circularDeps] }, 'Removing circular dependencies from tasks')
     for (const task of tasks) {
       if (circularDeps.has(task.id)) {
         task.dependsOn = [] // Remove all dependencies for circular tasks
@@ -535,25 +516,6 @@ function optimizeTaskOrder(tasks: PlannedTask[], independentGroups: string[][]):
   return optimized
 }
 
-function appendMessage(
-  db: SqliteDb,
-  projectId: string,
-  seq: number,
-  role: string,
-  content: string | null,
-): void {
-  db.prepare(
-    `INSERT INTO messages (session_id, seq, role, content, created_at)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(projectId, seq, role, content, Date.now())
-}
-
-function nextSeq(db: SqliteDb, projectId: string): number {
-  const row = db.prepare(`SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM messages WHERE session_id = ?`)
-    .get(projectId) as { next_seq: number }
-  return row.next_seq
-}
-
 // ---- Public API ----
 
 export interface ManagerTurnInput {
@@ -599,7 +561,7 @@ export async function managerConversationTurn(
       tree = buildNestedTree(entries)
       // Build summary index if not already provided
       if (summaryIndex.length === 0) {
-        const indexed = buildSummaryIndex(projectDir, entries)
+        const indexed = await buildSummaryIndex(projectDir, entries)
         summaryIndex.push(...indexed)
       }
       
@@ -632,12 +594,15 @@ export async function managerConversationTurn(
   const providerType = provider.name === 'anthropic' ? 'anthropic' : 'openai'
   const toolSpecs = getManagerToolSpecs(providerType)
   let toolCallCount = 0
-  const MAX_TOOL_CALLS = 30
 
   // Tool-use loop (Manager may call read_file/list_files/search_files before proposing)
-  while (toolCallCount < MAX_TOOL_CALLS) {
+  while (toolCallCount < MAX_MANAGER_TOOL_CALLS) {
     // Compress messages to fit within context window
     const compressedMessages = compressMessages(messages, model)
+    // Prevent unbounded memory growth by trimming original array
+    if (compressedMessages.length < messages.length) {
+      messages.splice(0, messages.length, ...compressedMessages)
+    }
 
     const result = await provider.streamChat(
       { apiKey, model, messages: compressedMessages, tools: toolSpecs },
@@ -721,7 +686,7 @@ export async function managerConversationTurn(
       const isFree = FREE_TOOLS.has(toolCall.name)
       if (!isFree) {
         toolCallCount++
-        if (toolCallCount > MAX_TOOL_CALLS) break
+        if (toolCallCount > MAX_MANAGER_TOOL_CALLS) break
       }
 
       const parsed = parseToolCall(toolCall)
