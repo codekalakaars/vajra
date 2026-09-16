@@ -29,6 +29,9 @@ export type RpcMethodMap = {
   'video.startPreview': { params: { projectDir: string; port?: string }; result: { success: boolean; error?: string; port?: string; url?: string } }
   'video.stopPreview': { params: { projectDir: string }; result: { success: boolean; error?: string } }
   'video.getPreviewStatus': { params: { projectDir: string }; result: { success: boolean; running?: boolean; port?: string; url?: string } }
+  'video.getVariables': { params: { projectDir: string }; result: { success: boolean; error?: string; variables?: Record<string, string> } }
+  'video.setVariable': { params: { projectDir: string; key: string; value: string }; result: { success: boolean; error?: string } }
+  'video.deleteVariable': { params: { projectDir: string; key: string }; result: { success: boolean; error?: string } }
 }
 
 export type MethodName = keyof RpcMethodMap

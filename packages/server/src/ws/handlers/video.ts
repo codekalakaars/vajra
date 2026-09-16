@@ -1,8 +1,12 @@
 import type { RpcRouter } from '../rpc.js'
 import type { ServerContext } from '../server.js'
-import { execFileSync } from 'child_process'
+import { execFileSync, spawn } from 'child_process'
+import type { ChildProcess } from 'child_process'
 import { join, resolve, relative } from 'path'
 import { rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { componentLogger } from '../../logger.js'
+
+const log = componentLogger('video')
 
 // Track preview server processes
 const previewServers = new Map<string, ChildProcess>()
@@ -53,6 +57,16 @@ interface VideoStartPreviewParams {
   port?: string
 }
 
+interface VideoGetVariablesParams {
+  projectDir: string
+}
+
+interface VideoSetVariableParams {
+  projectDir: string
+  key: string
+  value: string
+}
+
 const REGISTRY_BASE =
   'https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry'
 
@@ -74,8 +88,6 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
   router.register('video.init', (params: VideoInitParams) => {
     const { projectDir, template, resolution = 'landscape', tailwind = false } = params
 
-    console.log('[video.init] called with:', { projectDir, template, resolution, tailwind })
-
     if (!projectDir || !template) {
       return { success: false, error: 'projectDir and template are required' }
     }
@@ -87,7 +99,7 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
       }
 
       const args = [
-        'npx', 'hyperframes', 'init', projectDir,
+        'hyperframes', 'init', projectDir,
         '--example', template,
         '--non-interactive',
         '--resolution', resolution,
@@ -97,7 +109,7 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
         args.push('--tailwind')
       }
 
-      execSync(args.join(' '), { stdio: 'pipe' })
+      execFileSync('npx', args, { stdio: 'pipe' })
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to initialize video project' }
@@ -112,7 +124,7 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
     }
 
     try {
-      execSync(`npx hyperframes add ${block} --dir ${projectDir} --no-clipboard`, {
+      execFileSync('npx', ['hyperframes', 'add', block, '--dir', projectDir, '--no-clipboard'], {
         stdio: 'pipe',
       })
       return { success: true }
@@ -129,7 +141,7 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
     }
 
     try {
-      const args = ['npx', 'hyperframes', 'render', projectDir]
+      const args = ['hyperframes', 'render', projectDir]
 
       if (output) args.push('--output', output)
       if (quality) args.push('--quality', quality)
@@ -137,7 +149,7 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
       if (fps) args.push('--fps', fps)
       if (strict) args.push('--strict')
 
-      const outputBuffer = execSync(args.join(' '), { stdio: 'pipe' })
+      const outputBuffer = execFileSync('npx', args, { stdio: 'pipe' })
       return { success: true, output: outputBuffer.toString() }
     } catch (error: any) {
       return { success: false, error: error.message || 'Failed to render video' }
@@ -152,7 +164,7 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
     }
 
     try {
-      execSync(`npx hyperframes preview ${projectDir} --port ${port}`, {
+      execFileSync('npx', ['hyperframes', 'preview', projectDir, '--port', port], {
         stdio: 'pipe',
       })
       return { success: true, port }
@@ -243,8 +255,8 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
 
       previewServers.set(projectDir, proc)
 
-      proc.on('error', (err) => {
-        console.error(`Preview server error for ${projectDir}:`, err)
+      proc.on('error', (err: Error) => {
+        log.error({ projectDir, error: err }, 'Preview server error')
         previewServers.delete(projectDir)
       })
 
@@ -277,6 +289,58 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
       running: !!proc,
       port: '3002',
       url: proc ? `http://localhost:3002` : null,
+    }
+  })
+
+  router.register('video.getVariables', (params: VideoGetVariablesParams) => {
+    const { projectDir } = params
+    const varsPath = join(projectDir, 'composition-variables.json')
+
+    try {
+      if (existsSync(varsPath)) {
+        const content = readFileSync(varsPath, 'utf-8')
+        const variables = JSON.parse(content)
+        return { success: true, variables }
+      }
+      return { success: true, variables: {} }
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to read variables' }
+    }
+  })
+
+  router.register('video.setVariable', (params: VideoSetVariableParams) => {
+    const { projectDir, key, value } = params
+    const varsPath = join(projectDir, 'composition-variables.json')
+
+    try {
+      let variables: Record<string, string> = {}
+      if (existsSync(varsPath)) {
+        const content = readFileSync(varsPath, 'utf-8')
+        variables = JSON.parse(content)
+      }
+
+      variables[key] = value
+      writeFileSync(varsPath, JSON.stringify(variables, null, 2), 'utf-8')
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to set variable' }
+    }
+  })
+
+  router.register('video.deleteVariable', (params: { projectDir: string; key: string }) => {
+    const { projectDir, key } = params
+    const varsPath = join(projectDir, 'composition-variables.json')
+
+    try {
+      if (existsSync(varsPath)) {
+        const content = readFileSync(varsPath, 'utf-8')
+        const variables = JSON.parse(content)
+        delete variables[key]
+        writeFileSync(varsPath, JSON.stringify(variables, null, 2), 'utf-8')
+      }
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to delete variable' }
     }
   })
 }
