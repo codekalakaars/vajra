@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { VajraClient } from '../client'
+import { navigate } from '../hooks/useRouter'
 
 interface Template {
   name: string
@@ -44,10 +45,12 @@ export function VideoCreator({ open, onClose, projectDir, client }: VideoCreator
   const handleInitFromTemplate = async (templateName: string) => {
     setLoading(true)
     setError(null)
+    const targetDir = `/tmp/video-${templateName}`
     try {
-      const result = await client.call('video.init', { projectDir: `/tmp/video-${templateName}`, template: templateName })
+      const result = await client.call('video.init', { projectDir: targetDir, template: templateName })
       if ((result as { success: boolean }).success) {
         onClose()
+        navigate(`/video/${encodeURIComponent(targetDir)}`)
       } else {
         setError((result as { error?: string }).error || 'Failed to initialize video')
       }
