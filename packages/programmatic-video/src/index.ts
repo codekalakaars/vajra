@@ -21,6 +21,17 @@ export {
 // Elements
 export { text, rect, circle, ellipse, image, elements } from "./scenes/elements";
 
+// Registry
+export {
+  fetchRegistry,
+  fetchExamples,
+  fetchBlocks,
+  fetchComponents,
+  installBlock,
+  initFromExample,
+  getBlockInfo,
+} from "./registry";
+
 // Render pipeline
 export { scaffold, lint, validate, render, build, pipeline } from "./render";
 
@@ -46,3 +57,9 @@ export type {
   StoryboardFrame,
   RegistryBlock,
 } from "./types";
+
+export type {
+  RegistryItem,
+  BlockInfo,
+  ExampleInfo,
+} from "./registry";

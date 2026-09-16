@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { runCommand } from './run.js'
 import { startTUI } from './tui/index.js'
+import { videoCommand } from './video.js'
 
 // Find root .env file (go up from dist/ to packages/cli, then to repo root)
 const __filename = fileURLToPath(import.meta.url)
@@ -119,6 +120,9 @@ program
     console.log('    vajra config -s KEY VAL   Set a value')
     console.log('')
   })
+
+// Add video command
+program.addCommand(videoCommand)
 
 // If no command provided, launch TUI
 const args = process.argv.slice(2)
