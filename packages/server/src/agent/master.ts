@@ -74,75 +74,75 @@ export interface MasterResult {
  * Evaluate skipIf conditions for a task.
  * Returns true if the task should be skipped.
  *
+ * Conditions are ORed: the first one that holds skips the task.
+ *
  * Supported conditions:
  * - "file exists: <path>" — skip if file exists
  * - "file missing: <path>" — skip if file does not exist
  * - "command passes: <cmd>" — skip if command exits 0 (requires handle)
  * - "command fails: <cmd>" — skip if command exits non-zero (requires handle)
  */
-async function evaluateSkipIf(
+export async function evaluateSkipIf(
   conditions: string[],
   projectDir: string,
   handle?: LaunchHandle,
 ): Promise<boolean> {
   for (const condition of conditions) {
     const trimmed = condition.trim()
+    const lower = trimmed.toLowerCase()
 
-    if (trimmed.toLowerCase().startsWith('file exists:')) {
-      const filePath = trimmed.slice('file exists:'.length).trim()
-      const fullPath = resolve(projectDir, filePath)
-      try {
-        await access(fullPath)
-        continue // File exists, keep checking
-      } catch {
-        return true // File doesn't exist, skip
-      }
+    // Every branch below used to be inverted against its own documentation:
+    // "file exists:" skipped when the file was *missing*, so tasks ran when
+    // they should have been skipped and skipped when they should have run.
+    if (lower.startsWith('file exists:')) {
+      if (await fileExists(projectDir, trimmed.slice('file exists:'.length))) return true
+      continue
     }
 
-    if (trimmed.toLowerCase().startsWith('file missing:')) {
-      const filePath = trimmed.slice('file missing:'.length).trim()
-      const fullPath = resolve(projectDir, filePath)
-      try {
-        await access(fullPath)
-        return false // File exists, don't skip
-      } catch {
-        continue // File doesn't exist, keep checking
-      }
+    if (lower.startsWith('file missing:')) {
+      if (!(await fileExists(projectDir, trimmed.slice('file missing:'.length)))) return true
+      continue
     }
 
     // Command conditions require a handle
     if (!handle) continue
 
-    if (trimmed.toLowerCase().startsWith('command passes:')) {
-      const cmd = trimmed.slice('command passes:'.length).trim()
-      try {
-        const result = await handle.callTool('run_command', { command: cmd, timeout: 30000 })
-        const output = typeof result === 'string' ? result : JSON.stringify(result)
-        if (!output.toLowerCase().includes('exit code') || output.includes('exit code 0')) {
-          continue // Command passes, keep checking
-        }
-        return true // Command fails, skip
-      } catch {
-        return true // Command fails, skip
-      }
+    if (lower.startsWith('command passes:')) {
+      if (await commandSucceeds(handle, trimmed.slice('command passes:'.length))) return true
+      continue
     }
 
-    if (trimmed.toLowerCase().startsWith('command fails:')) {
-      const cmd = trimmed.slice('command fails:'.length).trim()
-      try {
-        const result = await handle.callTool('run_command', { command: cmd, timeout: 30000 })
-        const output = typeof result === 'string' ? result : JSON.stringify(result)
-        if (output.toLowerCase().includes('exit code') && !output.includes('exit code 0')) {
-          continue // Command fails, keep checking
-        }
-        return false // Command passes, don't skip
-      } catch {
-        continue // Command fails, keep checking
-      }
+    if (lower.startsWith('command fails:')) {
+      if (!(await commandSucceeds(handle, trimmed.slice('command fails:'.length)))) return true
+      continue
     }
   }
 
   return false // No conditions triggered skip
+}
+
+async function fileExists(projectDir: string, filePath: string): Promise<boolean> {
+  try {
+    await access(resolve(projectDir, filePath.trim()))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Run a command in the worker and report whether it exited 0.
+ *
+ * The worker throws on a non-zero exit, so resolution is success and there
+ * is nothing to parse out of the output.
+ */
+async function commandSucceeds(handle: LaunchHandle, command: string): Promise<boolean> {
+  try {
+    await handle.callTool('run_command', { command: command.trim(), timeout: 30000 })
+    return true
+  } catch {
+    return false
+  }
 }
 
 export async function masterLoop(input: MasterInput): Promise<MasterResult> {
@@ -695,6 +695,10 @@ async function executeTask(
           detail: `Running validation: ${cmd}`,
         })
 
+        // The exit code is the verdict. Scanning output for words like
+        // "error" failed any suite that printed "0 errors" or named a test
+        // after a failure case, and the worker already throws on a non-zero
+        // exit, so there is nothing to scan for.
         try {
           const taskTimeout = (task.timeout ?? 120) * 1000
           const validationResult = await handle.callTool('run_command', {
@@ -702,20 +706,6 @@ async function executeTask(
             timeout: taskTimeout,
           })
           const output = typeof validationResult === 'string' ? validationResult : JSON.stringify(validationResult)
-          
-          // Check for command failure indicators:
-          // 1. Output contains "exit code" with non-zero code
-          // 2. Output contains common failure patterns
-          // 3. Output starts with "error" (case-insensitive)
-          const hasExitCode = /exit\s+code\s+[1-9]/i.test(output)
-          const hasFailPatterns = /\b(failed|failure|error|exception|panic)\b/i.test(output)
-          const startsWithError = output.trimStart().toLowerCase().startsWith('error')
-          
-          if (hasExitCode || (hasFailPatterns && !startsWithError)) {
-            validationPassed = false
-            queue.recordValidation(task.id, `${cmd}\n${output}`, false)
-            break
-          }
           queue.recordValidation(task.id, `${cmd}\n${output}`, true)
         } catch (e) {
           validationPassed = false
