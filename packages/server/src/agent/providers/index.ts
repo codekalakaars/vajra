@@ -118,8 +118,8 @@ export function createProvider(
       `Available providers: ${[...providers.keys()].join(', ')}`
     )
   }
-  // Route API key: try provider-specific key first, fall back to "openrouter"
-  const apiKey = apiKeys[providerName] ?? apiKeys['openrouter'] ?? ''
+  // Route API key: require provider-specific key. No cross-vendor fallback.
+  const apiKey = apiKeys[providerName] ?? ''
   if (!apiKey) {
     throw new Error(
       `No API key found for provider '${providerName}'. ` +

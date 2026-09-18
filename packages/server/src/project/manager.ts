@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { resolve, relative } from 'node:path'
+import { stat } from 'node:fs/promises'
 import type { SqliteDb } from '../db/client.js'
 import { stmt } from '../db/statements.js'
 import { appendMessage, forgetSeq, nextSeq } from '../agent/utils.js'
@@ -98,6 +100,7 @@ export class ProjectManager {
   private handles = new Map<string, LaunchHandle>()
   private conversations = new Map<string, ConversationState>()
   private pools = new Map<string, WorkerPool>()
+  private abortControllers = new Map<string, AbortController>()
 
   constructor(
     private db: SqliteDb,
@@ -119,6 +122,31 @@ export class ProjectManager {
     input: CreateProjectInput,
     subscribe: (projectId: string) => void,
   ): Promise<{ projectId: string }> {
+    // Validate projectDir: must exist, be a directory, and not escape via symlinks
+    if (!input.projectDir || typeof input.projectDir !== 'string') {
+      throw new Error('projectDir is required')
+    }
+    const resolvedDir = resolve(input.projectDir)
+    try {
+      const info = await stat(resolvedDir)
+      if (!info.isDirectory()) {
+        throw new Error(`projectDir "${input.projectDir}" is not a directory`)
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(`projectDir "${input.projectDir}" does not exist`)
+      }
+      throw err
+    }
+    // Warn if projectDir is outside common base directories (informational, not blocking)
+    const projectBase = process.env.PROJECT_BASE_DIR
+    if (projectBase) {
+      const rel = relative(resolve(projectBase), resolvedDir)
+      if (rel.startsWith('..')) {
+        throw new Error(`projectDir "${input.projectDir}" is outside allowed base directory "${projectBase}"`)
+      }
+    }
+
     const projectId = randomUUID()
     const now = Date.now()
 
@@ -339,6 +367,13 @@ export class ProjectManager {
   }
 
   stop(projectId: string): void {
+    // Abort the master loop if running
+    const abortController = this.abortControllers.get(projectId)
+    if (abortController) {
+      abortController.abort()
+      this.abortControllers.delete(projectId)
+    }
+
     const handle = this.handles.get(projectId)
     if (handle) {
       handle.stop()
@@ -475,6 +510,10 @@ export class ProjectManager {
       const registry = new AgentRegistry(this.db)
       const pool = this.pools.get(projectId)
 
+      // Create AbortController for this master run so stop() can cancel it
+      const abortController = new AbortController()
+      this.abortControllers.set(projectId, abortController)
+
       masterLoop({
         projectId: projectId,
         projectDir: row.project_dir,
@@ -512,17 +551,20 @@ export class ProjectManager {
           )
           return workerHandle
         },
+        signal: abortController.signal,
       }).then((result) => {
         // Workers have changed the tree; the cached scan is stale.
         invalidateProjectContext(row.project_dir)
         this.appendMessage(projectId, result.summary)
         this.setStatus(projectId, 'done', Date.now())
         this.events.push('projects.completed', projectId, {})
+        this.abortControllers.delete(projectId)
       }).catch((e) => {
         invalidateProjectContext(row.project_dir)
         const message = e instanceof Error ? e.message : String(e)
         this.setStatus(projectId, 'failed', Date.now())
         this.events.push('projects.failed', projectId, { message })
+        this.abortControllers.delete(projectId)
       })
   }
 

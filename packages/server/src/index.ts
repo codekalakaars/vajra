@@ -85,7 +85,10 @@ if (isMain) {
   const apiKeys: Record<string, string> = {}
   if (process.env.OPENROUTER_API_KEY) apiKeys.openrouter = process.env.OPENROUTER_API_KEY
   if (process.env.ANTHROPIC_API_KEY) apiKeys.anthropic = process.env.ANTHROPIC_API_KEY
-  if (process.env.OPENCODE_API_KEY) apiKeys.zen = process.env.OPENCODE_API_KEY
+  if (process.env.OPENCODE_API_KEY) {
+    apiKeys.zen = process.env.OPENCODE_API_KEY
+    apiKeys.go = process.env.OPENCODE_API_KEY  // go provider uses same OpenCode API
+  }
   if (Object.keys(apiKeys).length === 0) {
     log.error('API key required: set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or OPENCODE_API_KEY in .env or environment')
     log.error('  See .env.example at the repo root')

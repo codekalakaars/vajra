@@ -11,7 +11,7 @@ import type { SandboxConfig } from './config.js'
 const ROLE_DEFAULTS: Record<string, string[]> = {
   developer: ['read_file', 'list_files'],
   master: ['read_file', 'list_files', 'run_command'],
-  worker: ['read_file', 'list_files', 'write_file', 'edit_file', 'delete_file', 'create_dir', 'copy_file', 'rename_file'],
+  worker: ['read_file', 'list_files', 'write_file', 'edit_file', 'run_command'],
 }
 
 /**
