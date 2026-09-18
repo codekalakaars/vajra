@@ -11,21 +11,29 @@ import type {
   ChatCompletionTool,
 } from 'openai/resources/chat'
 import type { ChatProvider, ChatRequest, ChatResult, ChatMessage, ToolCall, TokenUsage } from './types.js'
+import { REQUEST_TIMEOUT_MS, requestAbort, withIdleTimeout } from './limits.js'
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 const MAX_RETRIES = 5
 const INITIAL_RETRY_DELAY_MS = 1000
 
 function createClient(apiKey: string): OpenAI {
-  return new OpenAI({ baseURL: OPENROUTER_BASE_URL, apiKey, maxRetries: 0 })
+  return new OpenAI({ baseURL: OPENROUTER_BASE_URL, apiKey, maxRetries: 0, timeout: REQUEST_TIMEOUT_MS })
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function isRateLimitError(err: unknown): boolean {
-  return err instanceof Error && 'status' in err && (err as { status: number }).status === 429
+function isRetryableError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const status = (err as { status?: number }).status
+  if (status === 429) return true
+  // A gateway hiccup is as transient as a rate limit, and retrying it beats
+  // failing the whole turn.
+  if (status !== undefined && status >= 500) return true
+  const msg = err.message?.toLowerCase() ?? ''
+  return msg.includes('overloaded') || msg.includes('rate limit') || msg.includes('too many requests')
 }
 
 function extractErrorMessage(err: unknown): string {
@@ -135,13 +143,31 @@ export class OpenRouterProvider implements ChatProvider {
       stream: true,
     }
 
-    let stream: AsyncIterable<ChatCompletionChunk>
+    const { controller, dispose } = requestAbort(request.signal)
+    try {
+      return await this.stream(client, params, controller, onTextDelta, onThinkingDelta)
+    } finally {
+      dispose()
+    }
+  }
+
+  private async stream(
+    client: OpenAI,
+    params: Record<string, unknown>,
+    controller: AbortController,
+    onTextDelta: (text: string) => void,
+    onThinkingDelta?: (text: string) => void,
+  ): Promise<ChatResult> {
+    let raw: AsyncIterable<ChatCompletionChunk>
     for (let attempt = 0; ; attempt++) {
       try {
-        stream = await client.chat.completions.create(params) as AsyncIterable<ChatCompletionChunk>
+        raw = (await client.chat.completions.create(
+          params as never,
+          { signal: controller.signal },
+        )) as unknown as AsyncIterable<ChatCompletionChunk>
         break
       } catch (err) {
-        if (isRateLimitError(err) && attempt < MAX_RETRIES) {
+        if (isRetryableError(err) && attempt < MAX_RETRIES && !controller.signal.aborted) {
           const delay = retryAfterMs(err)
           await sleep(delay)
           continue
@@ -149,6 +175,10 @@ export class OpenRouterProvider implements ChatProvider {
         throw new Error(extractErrorMessage(err))
       }
     }
+
+    // A provider that holds the connection open without sending anything
+    // would otherwise wedge the run forever.
+    const stream = withIdleTimeout(raw, 'OpenRouter', () => controller.abort())
 
     let content = ''
     let finishReason: string | null = null

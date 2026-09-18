@@ -11,6 +11,7 @@ import type {
   ChatCompletionTool,
 } from 'openai/resources/chat'
 import type { ChatProvider, ChatRequest, ChatResult, ChatMessage, ToolCall, TokenUsage } from './types.js'
+import { REQUEST_TIMEOUT_MS, requestAbort, withIdleTimeout } from './limits.js'
 
 const ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
 const ZEN_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
@@ -18,7 +19,7 @@ const MAX_RETRIES = 5
 const INITIAL_RETRY_DELAY_MS = 1000
 
 function createClient(apiKey: string, baseURL: string = ZEN_BASE_URL): OpenAI {
-  return new OpenAI({ baseURL, apiKey, maxRetries: 0 })
+  return new OpenAI({ baseURL, apiKey, maxRetries: 0, timeout: REQUEST_TIMEOUT_MS })
 }
 
 function sleep(ms: number): Promise<void> {
@@ -128,9 +129,31 @@ export class ZenProvider implements ChatProvider {
       stream: true,
     }
 
+    const { controller, dispose } = requestAbort(request.signal)
+    try {
+      return await this.stream(client, params, controller, onTextDelta, onThinkingDelta)
+    } finally {
+      dispose()
+    }
+  }
+
+  private async stream(
+    client: OpenAI,
+    params: Record<string, unknown>,
+    controller: AbortController,
+    onTextDelta: (text: string) => void,
+    onThinkingDelta?: (text: string) => void,
+  ): Promise<ChatResult> {
     for (let attempt = 0; ; attempt++) {
       try {
-        const stream = await client.chat.completions.create(params) as AsyncIterable<ChatCompletionChunk>
+        const raw = (await client.chat.completions.create(
+          params as never,
+          { signal: controller.signal },
+        )) as unknown as AsyncIterable<ChatCompletionChunk>
+
+        // A provider that holds the connection open without sending anything
+        // would otherwise wedge the run forever.
+        const stream = withIdleTimeout(raw, 'Zen', () => controller.abort())
 
         let content = ''
         let finishReason: string | null = null
@@ -207,7 +230,7 @@ export class ZenProvider implements ChatProvider {
 
         return { message, finishReason, usage }
       } catch (err) {
-        if (isRetryableError(err) && attempt < MAX_RETRIES) {
+        if (isRetryableError(err) && attempt < MAX_RETRIES && !controller.signal.aborted) {
           const delay = retryAfterMs(err)
           await sleep(delay)
           continue

@@ -8,6 +8,7 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 import type { ChatProvider, ChatRequest, ChatResult, ChatMessage, ToolCall, ToolSpec, TokenUsage } from './types.js'
+import { REQUEST_TIMEOUT_MS, requestAbort, withIdleTimeout } from './limits.js'
 
 const MAX_RETRIES = 5
 const INITIAL_RETRY_DELAY_MS = 1000
@@ -119,7 +120,7 @@ export class AnthropicProvider implements ChatProvider {
     onTextDelta: (text: string) => void,
     onThinkingDelta?: (text: string) => void,
   ): Promise<ChatResult> {
-    const client = new Anthropic({ apiKey: request.apiKey })
+    const client = new Anthropic({ apiKey: request.apiKey, maxRetries: 0, timeout: REQUEST_TIMEOUT_MS })
     const { system, messages } = toAnthropicMessages(request.messages)
 
     const params: Anthropic.MessageCreateParams = {
@@ -131,14 +132,29 @@ export class AnthropicProvider implements ChatProvider {
       stream: true,
     }
 
+    const { controller, dispose } = requestAbort(request.signal)
+    try {
+      return await this.stream(client, params, controller, onTextDelta, onThinkingDelta)
+    } finally {
+      dispose()
+    }
+  }
+
+  private async stream(
+    client: Anthropic,
+    params: Anthropic.MessageCreateParams,
+    controller: AbortController,
+    onTextDelta: (text: string) => void,
+    onThinkingDelta?: (text: string) => void,
+  ): Promise<ChatResult> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let stream: AsyncIterable<any>
+    let raw: AsyncIterable<any>
     for (let attempt = 0; ; attempt++) {
       try {
-        stream = client.messages.stream(params) as unknown as AsyncIterable<unknown>
+        raw = client.messages.stream(params, { signal: controller.signal }) as unknown as AsyncIterable<unknown>
         break
       } catch (err) {
-        if ((isOverloadedError(err)) && attempt < MAX_RETRIES) {
+        if (isOverloadedError(err) && attempt < MAX_RETRIES && !controller.signal.aborted) {
           const delay = retryAfterMs(err)
           await sleep(delay)
           continue
@@ -146,6 +162,10 @@ export class AnthropicProvider implements ChatProvider {
         throw new Error(extractErrorMessage(err))
       }
     }
+
+    // A provider that holds the connection open without sending anything
+    // would otherwise wedge the run forever.
+    const stream = withIdleTimeout(raw, 'Anthropic', () => controller.abort())
 
     let content = ''
     let stopReason: string | null = null
