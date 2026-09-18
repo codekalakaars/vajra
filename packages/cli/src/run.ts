@@ -1,4 +1,5 @@
 import * as readline from 'node:readline'
+import { existsSync } from 'node:fs'
 import { TerminalStreamer } from './streaming.js'
 import { developerConversationTurn, type LaunchHandle, type DeveloperTurnResult } from './agent/developer.js'
 import { AgentRegistry } from './agent/registry.js'
@@ -278,6 +279,19 @@ export async function runCommand(options: RunOptions): Promise<void> {
     process.exit(1)
   }
 
+  const projectDir = resolve(options.projectDir)
+  if (!existsSync(projectDir)) {
+    streamer.error(`Project directory does not exist: ${projectDir}`)
+    process.exit(1)
+  }
+
+  let interrupted = false
+  const onSigInt = () => {
+    interrupted = true
+    streamer.warning('\nInterrupted. Cleaning up...')
+  }
+  process.on('SIGINT', onSigInt)
+
   streamer.banner()
 
   const sessionId = randomUUID()
@@ -367,9 +381,18 @@ export async function runCommand(options: RunOptions): Promise<void> {
     })
   }
 
-  if (!initialMessage) {
-    streamer.error('No task provided')
-    process.exit(1)
+  while (!initialMessage) {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+    initialMessage = await new Promise<string>(resolve => {
+      rl.question('\x1b[1mPlease enter a task (or type "exit" to quit): \x1b[0m', answer => {
+        rl.close()
+        resolve(answer.trim())
+      })
+    })
+    if (initialMessage.toLowerCase() === 'exit' || initialMessage.toLowerCase() === 'quit') {
+      streamer.info('Goodbye!')
+      process.exit(0)
+    }
   }
 
   streamer.info(`\n🔍 Scanning project in ${options.projectDir}...`)
@@ -379,6 +402,8 @@ export async function runCommand(options: RunOptions): Promise<void> {
   let userMessage = initialMessage
 
   for (let turn = 0; turn < 20; turn++) {
+    if (interrupted) break
+
     result = await developerConversationTurn({
       sessionId,
       projectDir: options.projectDir,
@@ -432,6 +457,7 @@ export async function runCommand(options: RunOptions): Promise<void> {
       const totalCount = result.plan.tasks.length
 
       while (true) {
+        if (interrupted) break
         const status = queue.getStatus()
         if (status.done + status.failed + status.skipped >= status.total) break
 
@@ -451,6 +477,9 @@ export async function runCommand(options: RunOptions): Promise<void> {
           const allTaskFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
           if (!fileLocks.tryAcquire(allTaskFiles, task.id, 'write')) {
             fileLocks.release(task.id)
+            streamer.warning(`  Skipping "${task.title}" - files locked by another task`)
+            queue.skipTask(task.id)
+            completedCount++
             continue
           }
 
@@ -549,4 +578,8 @@ export async function runCommand(options: RunOptions): Promise<void> {
   }
 
   registry.updateStatus(masterAgent.id, 'done')
+  process.removeListener('SIGINT', onSigInt)
+  if (interrupted) {
+    streamer.warning('Session interrupted. Progress has been saved.')
+  }
 }

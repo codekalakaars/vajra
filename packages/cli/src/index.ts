@@ -95,16 +95,35 @@ program
 
     // Default: list all config
     console.log('\n\x1b[1mVajra Configuration\x1b[0m\n')
-    
-    const configKeys = [
+
+    // Read from .env file directly to show all configured keys
+    const knownKeys = [
       'OPENROUTER_API_KEY',
       'ANTHROPIC_API_KEY',
       'OPENCODE_API_KEY',
       'DEFAULT_MODEL',
+      'VAJRA_MODEL',
     ]
 
-    for (const key of configKeys) {
-      const value = process.env[key]
+    const envFromFile: Record<string, string> = {}
+    if (envExists) {
+      const lines = readFileSync(envPath, 'utf-8').split('\n')
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed || trimmed.startsWith('#')) continue
+        const eqIdx = trimmed.indexOf('=')
+        if (eqIdx > 0) {
+          const key = trimmed.slice(0, eqIdx).trim()
+          const value = trimmed.slice(eqIdx + 1).trim()
+          envFromFile[key] = value
+        }
+      }
+    }
+
+    const allKeys = [...new Set([...knownKeys, ...Object.keys(envFromFile)])]
+
+    for (const key of allKeys) {
+      const value = process.env[key] || envFromFile[key]
       if (value) {
         const masked = key.includes('KEY') ? value.slice(0, 8) + '...' + value.slice(-4) : value
         console.log(`  \x1b[36m${key}\x1b[0m = ${masked}`)

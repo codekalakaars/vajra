@@ -12,9 +12,10 @@ function App({ version }: AppProps) {
   const { exit } = useApp()
 
   const menuItems = [
-    { label: 'New Project', action: () => setMessage('New Project selected - coming soon!') },
-    { label: 'List Projects', action: () => setMessage('List Projects selected - coming soon!') },
-    { label: 'Config', action: () => setMessage('Config selected - coming soon!') },
+    { label: 'Run Agent', description: 'Start an interactive session with the developer agent', action: () => { exit(); process.argv = ['node', 'vajra', 'run'] } },
+    { label: 'Video Tools', description: 'Create and manage HyperFrames videos', action: () => { exit(); process.argv = ['node', 'vajra', 'video'] } },
+    { label: 'Config', description: 'View or update configuration', action: () => { exit(); process.argv = ['node', 'vajra', 'config'] } },
+    { label: 'Help', description: 'Show usage information', action: () => { exit(); process.argv = ['node', 'vajra', '--help'] } },
     { label: 'Exit', action: () => exit() },
   ]
 
@@ -54,6 +55,9 @@ function App({ version }: AppProps) {
             <Text color={idx === selectedIdx ? 'cyan' : 'white'}>
               {idx === selectedIdx ? '▸ ' : '  '}{item.label}
             </Text>
+            {idx === selectedIdx && item.description && (
+              <Text color="gray">  {item.description}</Text>
+            )}
           </Box>
         ))}
       </Box>

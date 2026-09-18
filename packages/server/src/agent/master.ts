@@ -50,6 +50,8 @@ export interface MasterInput {
   resourceLimits?: ResourceLimits
   /** Worker pool for reuse (optional). If not provided, workers are destroyed after each task. */
   pool?: WorkerPool
+  /** Signal to cancel the master loop (e.g. when the project is stopped). */
+  signal?: AbortSignal
 }
 
 export interface WorkerJob {
@@ -68,6 +70,7 @@ export interface MasterResult {
   completedTasks: number
   failedTasks: number
   totalToolCalls: number
+  totalUsage?: { promptTokens: number; completionTokens: number; totalTokens: number }
 }
 
 /**
@@ -152,6 +155,14 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
   // Use provided change history or create a new one with projectDir for path resolution
   const changeHistory = input.changeHistory ?? new ChangeHistory(projectDir)
+
+  // Accumulate token usage across all worker calls
+  const totalUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+
+  // Use provided signal or create a new AbortController for this run
+  const abortSignal = input.signal
+  const ownController = input.signal ? null : new AbortController()
+  const signal = abortSignal ?? ownController?.signal
 
   // Clean up stale data from previous runs (agents, tasks, dependencies).
   // One transaction: a failure partway through used to leave the tables
@@ -418,7 +429,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
         // Start task execution in background, and keep the promise so the
         // loop can await a completion instead of polling for one.
-        const running = executeTask(agent.id, task, handle, apiKey, model, provider, events, queue, registry, projectId, db, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, taskSummaries, resourceLimits, pool)
+        const running = executeTask(agent.id, task, handle, apiKey, model, provider, events, queue, registry, projectId, db, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, taskSummaries, resourceLimits, pool, totalUsage, signal)
           .catch((e) => {
             log.error({ agentId: agent.id, error: e }, 'Worker failed')
           })
@@ -452,10 +463,13 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       // Nothing running and nothing startable — the rest is blocked.
       break
     }
+
+    // Check if aborted
+    if (signal?.aborted) break
   }
 
   // Wait for any remaining workers
-  while (inFlight.size > 0) {
+  while (inFlight.size > 0 && !signal?.aborted) {
     await Promise.allSettled(inFlight.values())
   }
 
@@ -532,6 +546,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     completedTasks: completedTasks.length,
     failedTasks: failedTasks.length,
     totalToolCalls,
+    totalUsage: totalUsage.totalTokens > 0 ? totalUsage : undefined,
   }
 }
 
@@ -600,6 +615,8 @@ async function executeTask(
   taskSummaries: Map<string, string>,
   resourceLimits?: ResourceLimits,
   pool?: WorkerPool,
+  usageAccumulator?: { promptTokens: number; completionTokens: number; totalTokens: number },
+  signal?: AbortSignal,
 ): Promise<void> {
   const MAX_WORKER_TOOL_CALLS = resourceLimits?.maxToolCalls ?? DEFAULT_WORKER_TOOL_CALLS
   let toolCallCount = 0
@@ -677,10 +694,17 @@ async function executeTask(
       const compressedMessages = compressMessages(messages, model)
 
       const result = await provider.streamChat(
-        { apiKey, model, messages: compressedMessages, tools: workerToolSpecs },
+        { apiKey, model, messages: compressedMessages, tools: workerToolSpecs, signal },
         (text) => events.push('projects.assistantDelta', projectId, { text }),
         (thinking) => events.push('projects.thinkingDelta', projectId, { text: thinking }),
       )
+
+      // Accumulate token usage
+      if (result.usage && usageAccumulator) {
+        usageAccumulator.promptTokens += result.usage.promptTokens
+        usageAccumulator.completionTokens += result.usage.completionTokens
+        usageAccumulator.totalTokens += result.usage.totalTokens
+      }
 
       if (!result.message.toolCalls || result.message.toolCalls.length === 0) {
         // Task complete — keep the worker's own summary for its dependents.
@@ -942,12 +966,9 @@ function computeToolPermissions(task: PlannedTask | TaskState): string[] {
   if (task.type === 'create' || task.type === 'modify' || task.type === 'refactor') {
     tools.push('write_file', 'edit_file')
   }
-  if (task.type === 'delete') {
-    tools.push('delete_file')
-  }
-  if (task.createDir.length > 0) {
-    tools.push('create_dir')
-  }
+  // Note: delete_file and create_dir tools are not implemented yet.
+  // deleteFile/createDir fields in the plan are used for permission computation
+  // only (granting write access to parent directories).
 
   return tools
 }

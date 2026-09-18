@@ -41,11 +41,11 @@ export class TerminalStreamer {
   }
 
   error(message: string): void {
-    console.log(`\x1b[31m✗ ${message}\x1b[0m`)
+    process.stderr.write(`\x1b[31m✗ ${message}\x1b[0m\n`)
   }
 
   warning(message: string): void {
-    console.log(`\x1b[33m⚠ ${message}\x1b[0m`)
+    process.stderr.write(`\x1b[33m⚠ ${message}\x1b[0m\n`)
   }
 
   progress(current: number, total: number, message: string): void {
