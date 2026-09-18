@@ -109,12 +109,10 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
 
   // Tool-use loop
   while (toolCallCount < MAX_AGENT_TOOL_CALLS) {
-    // Compress messages to fit within context window
+    // Compress for the request only. The full history stays in `messages`:
+    // overwriting it with the compressed view discards context permanently and
+    // makes every later turn compress an already-lossy transcript.
     const compressedMessages = compressMessages(messages, project.model)
-    // Prevent unbounded memory growth by trimming original array
-    if (compressedMessages.length < messages.length) {
-      messages.splice(0, messages.length, ...compressedMessages)
-    }
 
     const result = await provider.streamChat(
       {
@@ -146,10 +144,11 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
     // Process each tool call
     for (const toolCall of result.message.toolCalls) {
       const isFree = FREE_TOOLS.has(toolCall.name)
-      if (!isFree) {
-        toolCallCount++
-        if (toolCallCount > MAX_AGENT_TOOL_CALLS) break
-      }
+      if (!isFree) toolCallCount++
+      // Over budget: answer the call with an error instead of breaking out of
+      // the batch. Every tool call in the assistant message needs a result —
+      // leaving one unanswered makes the next request invalid.
+      const overBudget = !isFree && toolCallCount > MAX_AGENT_TOOL_CALLS
 
       const parsed = parseToolCall(toolCall)
       events.push('projects.toolCall', project.id, {
@@ -160,7 +159,9 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
 
       let resultContent: string
 
-      if (!parsed.ok) {
+      if (overBudget) {
+        resultContent = `Error: tool call budget exhausted (${MAX_AGENT_TOOL_CALLS}). Stop calling tools and answer with what you have.`
+      } else if (!parsed.ok) {
         resultContent = `Error: ${parsed.error}`
       } else if (parsed.call.tool === ('search_files' as ToolName)) {
         // Handle search_files in main process (in-memory index)

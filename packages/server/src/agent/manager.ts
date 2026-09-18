@@ -597,12 +597,10 @@ export async function managerConversationTurn(
 
   // Tool-use loop (Manager may call read_file/list_files/search_files before proposing)
   while (toolCallCount < MAX_MANAGER_TOOL_CALLS) {
-    // Compress messages to fit within context window
+    // Compress for the request only. The full history stays in `messages`:
+    // overwriting it with the compressed view discards context permanently and
+    // makes every later turn compress an already-lossy transcript.
     const compressedMessages = compressMessages(messages, model)
-    // Prevent unbounded memory growth by trimming original array
-    if (compressedMessages.length < messages.length) {
-      messages.splice(0, messages.length, ...compressedMessages)
-    }
 
     const result = await provider.streamChat(
       { apiKey, model, messages: compressedMessages, tools: toolSpecs },
@@ -684,15 +682,18 @@ export async function managerConversationTurn(
 
       // All other tools: dispatch to sandboxed worker
       const isFree = FREE_TOOLS.has(toolCall.name)
-      if (!isFree) {
-        toolCallCount++
-        if (toolCallCount > MAX_MANAGER_TOOL_CALLS) break
-      }
+      if (!isFree) toolCallCount++
+      // Over budget: answer the call with an error instead of breaking out of
+      // the batch. Every tool call in the assistant message needs a result —
+      // leaving one unanswered makes the next request invalid.
+      const overBudget = !isFree && toolCallCount > MAX_MANAGER_TOOL_CALLS
 
       const parsed = parseToolCall(toolCall)
       let resultContent: string
 
-      if (!parsed.ok) {
+      if (overBudget) {
+        resultContent = `Error: tool call budget exhausted (${MAX_MANAGER_TOOL_CALLS}). Stop exploring and either ask the user a question or call propose_plan.`
+      } else if (!parsed.ok) {
         resultContent = `Error: ${parsed.error}`
       } else if (parsed.call.tool === ('search_files' as ToolName)) {
         // Handle search_files in main process (in-memory index)
