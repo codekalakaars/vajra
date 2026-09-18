@@ -8,6 +8,10 @@ import type { ChatMessage } from './providers/types.js'
 // Approximate tokens per character (conservative estimate)
 const CHARS_PER_TOKEN = 4
 
+// Tool results are truncated to this many characters when a kept block still
+// does not fit the budget.
+const TOOL_RESULT_MAX_CHARS = 500
+
 // Maximum context sizes by model (in tokens)
 const MODEL_LIMITS: Record<string, number> = {
   'nvidia/nemotron-3-ultra-550b-a55b:free': 1000000,
@@ -87,13 +91,96 @@ export function getModelLimit(model: string): number {
 }
 
 /**
- * Compress messages to fit within token limit.
+ * A block is the smallest unit of conversation that can be dropped without
+ * corrupting the transcript: either a standalone message, or an assistant
+ * message carrying tool calls together with every tool result that answers
+ * them. Providers reject a `tool` message whose originating `tool_calls`
+ * are absent (and an assistant `tool_calls` with no results), so dropping
+ * messages individually — as this function used to — produces a 400 exactly
+ * when the context is full.
+ */
+interface MessageBlock {
+  messages: ChatMessage[]
+  tokens: number
+}
+
+const COMPRESSION_NOTICE_PREFIX = '[System: '
+
+function isCompressionNotice(message: ChatMessage): boolean {
+  return (
+    message.role === 'user' &&
+    typeof message.content === 'string' &&
+    message.content.startsWith(COMPRESSION_NOTICE_PREFIX) &&
+    message.content.includes('compressed to fit context window')
+  )
+}
+
+function blockTokens(messages: ChatMessage[]): number {
+  return messages.reduce((sum, msg) => sum + estimateTokens(msg), 0)
+}
+
+/**
+ * Group non-system messages into atomically droppable blocks.
+ */
+function groupIntoBlocks(messages: ChatMessage[]): MessageBlock[] {
+  const blocks: MessageBlock[] = []
+  let current: ChatMessage[] | null = null
+
+  for (const message of messages) {
+    if (message.role === 'tool' && current !== null) {
+      // Tool results belong to the assistant turn that requested them.
+      current.push(message)
+      continue
+    }
+
+    if (current !== null) {
+      blocks.push({ messages: current, tokens: blockTokens(current) })
+      current = null
+    }
+
+    if (message.role === 'assistant' && message.toolCalls && message.toolCalls.length > 0) {
+      current = [message]
+      continue
+    }
+
+    blocks.push({ messages: [message], tokens: estimateTokens(message) })
+  }
+
+  if (current !== null) {
+    blocks.push({ messages: current, tokens: blockTokens(current) })
+  }
+
+  return blocks
+}
+
+/**
+ * Truncate a tool result in place, returning the tokens saved.
+ */
+function truncateToolResult(block: MessageBlock, index: number): number {
+  const message = block.messages[index]
+  if (message.role !== 'tool' || !message.content || message.content.length <= TOOL_RESULT_MAX_CHARS) {
+    return 0
+  }
+
+  const truncated = message.content.slice(0, TOOL_RESULT_MAX_CHARS) + '\n... (truncated)'
+  const saved = estimateTokens(message) - estimateTokens({ ...message, content: truncated })
+  block.messages[index] = { ...message, content: truncated }
+  block.tokens -= saved
+  return saved
+}
+
+/**
+ * Compress messages to fit within the model's token limit.
  *
  * Strategy:
- * 1. Always keep system prompt
- * 2. Always keep last N messages (recent context)
- * 3. Summarize older messages
- * 4. Compress tool results
+ * 1. Always keep every system message.
+ * 2. Keep the most recent blocks that fit, newest first, never splitting an
+ *    assistant tool-call turn from its tool results.
+ * 3. If the kept blocks still do not fit, truncate their tool results
+ *    oldest-first.
+ * 4. Note how many blocks were dropped, so the model knows context is missing.
+ *
+ * The returned array is a new array; the caller's history is never mutated.
  */
 export function compressMessages(
   messages: ChatMessage[],
@@ -108,76 +195,55 @@ export function compressMessages(
     return messages
   }
 
-  const compressed: ChatMessage[] = []
-  let currentTokens = 0
+  // Drop notices from earlier compressions rather than stacking a new one on
+  // top of them every turn.
+  const system = messages.filter((m) => m.role === 'system')
+  const rest = messages.filter((m) => m.role !== 'system' && !isCompressionNotice(m))
 
-  // Find system prompt (usually first message)
-  const systemIdx = messages.findIndex(m => m.role === 'system')
-  if (systemIdx >= 0) {
-    compressed.push(messages[systemIdx])
-    currentTokens += estimateTokens(messages[systemIdx])
+  const systemTokens = blockTokens(system)
+  const blocks = groupIntoBlocks(rest)
+
+  // Walk newest-first, keeping whole blocks while they fit. The newest block
+  // is always kept — without it there is nothing for the model to answer —
+  // even if it alone exceeds the budget; step 3 then trims it.
+  const kept: MessageBlock[] = []
+  let currentTokens = systemTokens
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i]
+    if (kept.length > 0 && currentTokens + block.tokens > maxTokens) break
+    kept.unshift(block)
+    currentTokens += block.tokens
   }
 
-  // Keep last 6 messages for recent context
-  const recentCount = 6
-  const recentStart = Math.max(0, messages.length - recentCount)
-  const recentMessages = messages.slice(recentStart)
-
-  // Add recent messages
-  for (const msg of recentMessages) {
-    if (compressed.includes(msg)) continue
-    const msgTokens = estimateTokens(msg)
-    if (currentTokens + msgTokens <= maxTokens) {
-      compressed.push(msg)
-      currentTokens += msgTokens
-    }
+  // A transcript may not open with a tool result: its assistant turn is gone.
+  while (kept.length > 0 && kept[0].messages[0].role === 'tool') {
+    currentTokens -= kept[0].tokens
+    kept.shift()
   }
 
-  // If still over limit, compress older tool results
+  // Still over budget — trim tool results, oldest first.
   if (currentTokens > maxTokens) {
-    for (let i = 0; i < compressed.length; i++) {
-      const msg = compressed[i]
-      if (msg.role === 'tool' && msg.content && msg.content.length > 500) {
-        // Truncate long tool results
-        const truncated = msg.content.slice(0, 500) + '\n... (truncated)'
-        const savedTokens = estimateTokens(msg) - estimateTokens({ ...msg, content: truncated })
-        compressed[i] = { ...msg, content: truncated }
-        currentTokens -= savedTokens
-
-        if (currentTokens <= maxTokens) break
+    outer: for (const block of kept) {
+      for (let i = 0; i < block.messages.length; i++) {
+        currentTokens -= truncateToolResult(block, i)
+        if (currentTokens <= maxTokens) break outer
       }
     }
   }
 
-  // Add summary message if we compressed
-  if (compressed.length < messages.length) {
-    const skippedCount = messages.length - compressed.length
-    compressed.splice(1, 0, {
+  const compressed: ChatMessage[] = [...system]
+
+  const droppedBlocks = blocks.length - kept.length
+  if (droppedBlocks > 0) {
+    compressed.push({
       role: 'user',
-      content: `[System: ${skippedCount} earlier messages were compressed to fit context window]`,
+      content: `${COMPRESSION_NOTICE_PREFIX}${droppedBlocks} earlier exchange${droppedBlocks === 1 ? '' : 's'} were compressed to fit context window]`,
     })
   }
 
+  for (const block of kept) {
+    compressed.push(...block.messages)
+  }
+
   return compressed
-}
-
-/**
- * Compress a single long message.
- */
-function compressMessage(message: ChatMessage, maxLength: number = 2000): ChatMessage {
-  if (!message.content || message.content.length <= maxLength) {
-    return message
-  }
-
-  // For tool results, keep beginning and end
-  if (message.role === 'tool') {
-    const halfLength = Math.floor(maxLength / 2)
-    const truncated = message.content.slice(0, halfLength) +
-      '\n\n... (truncated) ...\n\n' +
-      message.content.slice(-halfLength)
-    return { ...message, content: truncated }
-  }
-
-  // For other messages, just truncate
-  return { ...message, content: message.content.slice(0, maxLength) + '...' }
 }

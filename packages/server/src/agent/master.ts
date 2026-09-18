@@ -634,12 +634,10 @@ async function executeTask(
 
     // Tool-use loop
     while (toolCallCount < MAX_WORKER_TOOL_CALLS) {
-      // Compress messages to fit within context window
+      // Compress for the request only. The full history stays in `messages`:
+      // overwriting it with the compressed view discards context permanently
+      // and makes every later turn compress an already-lossy transcript.
       const compressedMessages = compressMessages(messages, model)
-      // Prevent unbounded memory growth by trimming original array
-      if (compressedMessages.length < messages.length) {
-        messages.splice(0, messages.length, ...compressedMessages)
-      }
 
       const result = await provider.streamChat(
         { apiKey, model, messages: compressedMessages, tools: workerToolSpecs },
@@ -656,14 +654,21 @@ async function executeTask(
 
       for (const toolCall of result.message.toolCalls) {
         toolCallCount++
-        if (toolCallCount > MAX_WORKER_TOOL_CALLS) break
+        // Over budget: answer the call with an error instead of breaking out
+        // of the batch. Every tool call in the assistant message needs a
+        // result — leaving one unanswered makes the next request invalid.
+        const overBudget = toolCallCount > MAX_WORKER_TOOL_CALLS
 
         let resultContent: string
-        try {
-          const result = await handle.callTool(toolCall.name, JSON.parse(toolCall.arguments))
-          resultContent = typeof result === 'string' ? result : JSON.stringify(result)
-        } catch (e) {
-          resultContent = `Error: ${e instanceof Error ? e.message : String(e)}`
+        if (overBudget) {
+          resultContent = `Error: tool call budget exhausted (${MAX_WORKER_TOOL_CALLS}). Stop calling tools and summarize what was done.`
+        } else {
+          try {
+            const result = await handle.callTool(toolCall.name, JSON.parse(toolCall.arguments))
+            resultContent = typeof result === 'string' ? result : JSON.stringify(result)
+          } catch (e) {
+            resultContent = `Error: ${e instanceof Error ? e.message : String(e)}`
+          }
         }
 
         messages.push({
