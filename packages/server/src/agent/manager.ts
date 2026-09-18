@@ -298,7 +298,7 @@ async function analyzeArchitecture(
   return architectureParts.join('\n')
 }
 
-function parseProposePlanArgs(raw: unknown): ManagerPlan {
+export function parseProposePlanArgs(raw: unknown): ManagerPlan {
   const args = raw as {
     tasks: Array<{
       title: string
@@ -343,11 +343,13 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
     task.dependsOn = task.dependsOn.filter((dep) => taskIds.has(dep))
   }
 
-  // Detect and remove circular dependencies
-  tasks = detectAndRemoveCircularDeps(tasks)
-
-  // Add file-level dependencies (tasks that write to files read by other tasks)
+  // Add file-level dependencies (tasks that write to files read by other
+  // tasks), then break any cycle. The order matters: the inferred file-level
+  // edges can themselves close a cycle, so removing cycles first leaves them
+  // in the graph, where they strand every task involved as permanently
+  // un-ready.
   tasks = addFileLevelDependencies(tasks)
+  tasks = detectAndRemoveCircularDeps(tasks)
 
   // Compute independent groups from dependency graph
   const independentGroups: string[][] = []
@@ -413,54 +415,46 @@ function estimateTaskDurations(tasks: PlannedTask[]): PlannedTask[] {
 }
 
 /**
- * Detect and remove circular dependencies using DFS.
- * Returns tasks with circular dependencies removed.
+ * Break dependency cycles with a depth-first search.
+ *
+ * Only the edge that closes a cycle is dropped — the other dependencies of
+ * the tasks involved still encode real ordering and are left alone.
  */
 function detectAndRemoveCircularDeps(tasks: PlannedTask[]): PlannedTask[] {
   const taskMap = new Map(tasks.map(t => [t.id, t]))
   const visited = new Set<string>()
-  const recursionStack = new Set<string>()
-  const circularDeps = new Set<string>()
+  const onStack = new Set<string>()
+  const removed: string[] = []
 
-  function dfs(taskId: string): boolean {
-    if (recursionStack.has(taskId)) {
-      // Found circular dependency
-      circularDeps.add(taskId)
-      return true
-    }
-    if (visited.has(taskId)) return false
-
+  function visit(taskId: string): void {
+    if (visited.has(taskId)) return
     visited.add(taskId)
-    recursionStack.add(taskId)
+    onStack.add(taskId)
 
     const task = taskMap.get(taskId)
     if (task) {
+      const kept: string[] = []
       for (const dep of task.dependsOn) {
-        if (dfs(dep)) {
-          circularDeps.add(taskId)
+        if (onStack.has(dep)) {
+          // Back edge — following it would close a cycle.
+          removed.push(`${taskId} -> ${dep}`)
+          continue
         }
+        visit(dep)
+        kept.push(dep)
       }
+      task.dependsOn = kept
     }
 
-    recursionStack.delete(taskId)
-    return circularDeps.has(taskId)
+    onStack.delete(taskId)
   }
 
-  // Check all tasks for circular dependencies
   for (const task of tasks) {
-    dfs(task.id)
+    visit(task.id)
   }
 
-  // Remove circular dependencies
-  if (circularDeps.size > 0) {
-    log.warn({ tasks: [...circularDeps] }, 'Removing circular dependencies from tasks')
-    for (const task of tasks) {
-      if (circularDeps.has(task.id)) {
-        task.dependsOn = [] // Remove all dependencies for circular tasks
-      } else {
-        task.dependsOn = task.dependsOn.filter(dep => !circularDeps.has(dep))
-      }
-    }
+  if (removed.length > 0) {
+    log.warn({ edges: removed }, 'Removed circular task dependencies')
   }
 
   return tasks
@@ -471,25 +465,29 @@ function detectAndRemoveCircularDeps(tasks: PlannedTask[]): PlannedTask[] {
  * If task A writes to a file that task B reads, B should depend on A.
  */
 function addFileLevelDependencies(tasks: PlannedTask[]): PlannedTask[] {
-  const taskMap = new Map(tasks.map(t => [t.id, t]))
-  
+  const planOrder = new Map(tasks.map((t, i) => [t.id, i]))
+
   for (const task of tasks) {
-    // Find tasks that write to files this task reads
     for (const other of tasks) {
       if (task.id === other.id) continue
-      
-      // Check if other task writes to files this task reads
-      const writesToReadFiles = other.writeFile.some(file => 
-        task.readFile.includes(file) || task.writeFile.includes(file)
-      )
-      
-      if (writesToReadFiles && !task.dependsOn.includes(other.id)) {
-        // Add dependency if not already present
+      if (task.dependsOn.includes(other.id)) continue
+
+      // The other task produces a file this one reads: read after write.
+      const producesInput = other.writeFile.some(file => task.readFile.includes(file))
+
+      // Both write the same file, so they cannot run in parallel. Serialize
+      // them in plan order: adding the edge in both directions — as this
+      // once did — builds a cycle neither task can ever become ready from.
+      const sharesOutput =
+        other.writeFile.some(file => task.writeFile.includes(file)) &&
+        (planOrder.get(other.id) ?? 0) < (planOrder.get(task.id) ?? 0)
+
+      if (producesInput || sharesOutput) {
         task.dependsOn.push(other.id)
       }
     }
   }
-  
+
   return tasks
 }
 
