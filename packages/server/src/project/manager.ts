@@ -4,6 +4,7 @@ import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResu
 import type { FileRule, ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { FileLockManager, resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 import type { ChatProvider, ChatMessage } from '../agent/providers/types.js'
+import { createProvider } from '../agent/providers/index.js'
 import { managerConversationTurn, type ManagerTurnResult } from '../agent/manager.js'
 import { masterLoop } from '../agent/master.js'
 import { AgentRegistry } from '../agent/registry.js'
@@ -259,9 +260,7 @@ export class ProjectManager {
       // Create provider if API keys are available
       let provider: ChatProvider | undefined
       if (apiKeys && Object.keys(apiKeys).length > 0) {
-        const { createProvider } = await import('../agent/providers/index.js')
-        const result = createProvider(row.model, apiKeys)
-        provider = result.provider
+        provider = createProvider(row.model, apiKeys).provider
       }
       if (!provider) {
         throw new Error(`No chat provider available for project '${projectId}'`)
@@ -349,8 +348,14 @@ export class ProjectManager {
     this.setStatus(projectId, 'stopped', Date.now())
   }
 
-  setModel(projectId: string, model: string): void {
-    this.db.prepare(`UPDATE sessions SET model = ? WHERE id = ?`).run(model, projectId)
+  setModel(projectId: string, model: string, apiKeys: Record<string, string>): void {
+    // Switching models can switch providers. Leaving the conversation's
+    // provider in place sent, say, an Anthropic model id to OpenRouter.
+    const { provider, resolvedModel } = createProvider(model, apiKeys)
+    this.db.prepare(`UPDATE sessions SET model = ? WHERE id = ?`).run(resolvedModel, projectId)
+
+    const conv = this.conversations.get(projectId)
+    if (conv) conv.provider = provider
   }
 
   delete(projectId: string): void {
@@ -387,7 +392,7 @@ export class ProjectManager {
    * - `executing`: dispatch to worker (existing behavior)
    * - `confirming`: reject (user must confirm/reject, not send new messages)
    */
-  async sendMessage(projectId: string, content: string, apiKey: string, provider?: ChatProvider): Promise<void> {
+  async sendMessage(projectId: string, content: string, apiKeys: Record<string, string>): Promise<void> {
     const status = this.getStatus(projectId)
     if (!status) throw new Error(`No such project ${projectId}`)
 
@@ -408,13 +413,13 @@ export class ProjectManager {
     }
 
     if (status === 'talking' || status === 'failed' || status === 'stopped') {
-      await this.sendConversationMessage(projectId, content, apiKey, provider)
+      await this.sendConversationMessage(projectId, content, apiKeys)
       return
     }
 
     if (status === 'executing' || status === 'running') {
       // Legacy path: dispatch directly to worker
-      await this.sendWorkerMessage(projectId, content, apiKey, provider)
+      await this.sendWorkerMessage(projectId, content, apiKeys)
       return
     }
 
@@ -425,7 +430,7 @@ export class ProjectManager {
    * Confirm the proposed plan. If `editedTasks` is provided, use the
    * user-edited version instead of the originally proposed plan.
    */
-  async confirmPlan(projectId: string, editedTasks?: PlannedTask[], apiKey?: string): Promise<void> {
+  async confirmPlan(projectId: string, editedTasks?: PlannedTask[], apiKeys?: Record<string, string>): Promise<void> {
     const conv = this.conversations.get(projectId)
     if (!conv || !conv.proposedPlan) {
       throw new Error('No proposed plan to confirm')
@@ -442,10 +447,15 @@ export class ProjectManager {
     this.setStatus(projectId, 'executing')
 
     // Run master loop in background
-    if (apiKey) {
+    if (apiKeys && Object.keys(apiKeys).length > 0) {
       const row = this.db
         .prepare(`SELECT project_dir, model FROM sessions WHERE id = ?`)
         .get(projectId) as { project_dir: string; model: string }
+
+      // Resolve the key from the project's own model, not from whatever key
+      // happens to be first in the map.
+      const { provider, apiKey } = createProvider(row.model, apiKeys)
+      conv.provider = provider
 
       const registry = new AgentRegistry(this.db)
       const pool = this.pools.get(projectId)
@@ -456,7 +466,7 @@ export class ProjectManager {
         plan,
         model: row.model,
         apiKey,
-        provider: conv.provider,
+        provider,
         events: this.events,
         db: this.db,
         registry,
@@ -516,7 +526,7 @@ export class ProjectManager {
   /**
    * Dispatch a message to the Manager conversation loop.
    */
-  private async sendConversationMessage(projectId: string, content: string, apiKey: string, provider?: ChatProvider): Promise<void> {
+  private async sendConversationMessage(projectId: string, content: string, apiKeys: Record<string, string>): Promise<void> {
     const conv = this.conversations.get(projectId)
     if (!conv) throw new Error('No conversation state')
 
@@ -524,7 +534,8 @@ export class ProjectManager {
       .prepare(`SELECT project_dir, model FROM sessions WHERE id = ?`)
       .get(projectId) as { project_dir: string; model: string }
 
-    const activeProvider = provider ?? conv.provider
+    const { provider: activeProvider, apiKey } = createProvider(row.model, apiKeys)
+    conv.provider = activeProvider
 
     this.events.push('projects.statusChanged', projectId, { status: 'talking' })
 
@@ -563,15 +574,17 @@ export class ProjectManager {
   /**
    * Legacy path: dispatch a message directly to the worker agent loop.
    */
-  private async sendWorkerMessage(projectId: string, content: string, apiKey: string, provider?: ChatProvider): Promise<void> {
+  private async sendWorkerMessage(projectId: string, content: string, apiKeys: Record<string, string>): Promise<void> {
     const { agentLoop } = await import('../agent/loop.js')
 
     const conv = this.conversations.get(projectId)
-    const activeProvider = provider ?? conv?.provider
 
     const row = this.db
       .prepare(`SELECT project_dir, model FROM sessions WHERE id = ?`)
       .get(projectId) as { project_dir: string; model: string }
+
+    const { provider: activeProvider, apiKey } = createProvider(row.model, apiKeys)
+    if (conv) conv.provider = activeProvider
 
     const { loadPermissions } = await import('../native.js')
     const permissions = loadPermissions(row.project_dir) ?? {

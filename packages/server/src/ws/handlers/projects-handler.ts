@@ -44,17 +44,15 @@ export function registerSessionHandlers(router: RpcRouter<ServerContext>): void 
   })
 
   router.register('projects.sendMessage', async (params: SessionSendMessageParams, ctx) => {
-    const apiKey = Object.values(ctx.apiKeys)[0]
-    if (!apiKey) throw new Error('Server not configured with API keys')
+    if (Object.keys(ctx.apiKeys).length === 0) throw new Error('Server not configured with API keys')
     const projectId = getProjectId(params)
-    await ctx.projects.sendMessage(projectId, params.content, apiKey)
+    await ctx.projects.sendMessage(projectId, params.content, ctx.apiKeys)
     return { ok: true as const }
   })
 
   router.register('projects.confirmPlan', async (params: SessionConfirmPlanParams, ctx) => {
-    const apiKey = Object.values(ctx.apiKeys)[0]
-    if (!apiKey) throw new Error('Server not configured with API keys')
-    await ctx.projects.confirmPlan(getProjectId(params), params.tasks, apiKey)
+    if (Object.keys(ctx.apiKeys).length === 0) throw new Error('Server not configured with API keys')
+    await ctx.projects.confirmPlan(getProjectId(params), params.tasks, ctx.apiKeys)
     return { ok: true as const }
   })
 
@@ -65,7 +63,7 @@ export function registerSessionHandlers(router: RpcRouter<ServerContext>): void 
 
   router.register('projects.setModel', (params: { projectId: string; model: string }, ctx) => {
     const projectId = getProjectId(params)
-    ctx.projects.setModel(projectId, params.model)
+    ctx.projects.setModel(projectId, params.model, ctx.apiKeys)
     return { ok: true as const }
   })
 }
