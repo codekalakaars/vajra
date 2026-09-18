@@ -19,10 +19,17 @@ if (!process.env.OPENROUTER_API_KEY && !process.env.ANTHROPIC_API_KEY && !proces
 
 export interface StartOptions {
   port?: number
+  /** Interface to bind. Defaults to loopback. */
+  host?: string
   dbPath?: string
   launcher?: ProjectLauncher
   apiKeys?: Record<string, string>
 }
+
+/** Binding anywhere else exposes the RPC surface to the network. */
+const DEFAULT_HOST = '127.0.0.1'
+
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 
 export interface RunningServer {
   port: number
@@ -30,12 +37,26 @@ export interface RunningServer {
 }
 
 export function startServer(options: StartOptions = {}): Promise<RunningServer> {
+  const host = options.host ?? process.env.VAJRA_HOST ?? DEFAULT_HOST
+
+  // Authentication is opt-in, so an unset token on a public interface hands
+  // every RPC method — including the ones that write files and spawn
+  // processes — to anyone who can reach the port.
+  if (!LOOPBACK_HOSTS.has(host) && !process.env.VAJRA_AUTH_TOKEN) {
+    return Promise.reject(
+      new Error(
+        `Refusing to listen on ${host} without VAJRA_AUTH_TOKEN. ` +
+        'Set a token, or bind loopback (unset VAJRA_HOST).',
+      ),
+    )
+  }
+
   const httpServer = createHttpServer()
   const db = openDb(options.dbPath ?? 'vajra.db')
   const { wss } = createAppServer(httpServer, { db, launcher: options.launcher, apiKeys: options.apiKeys })
 
   return new Promise((resolve) => {
-    httpServer.listen(options.port ?? 0, () => {
+    httpServer.listen(options.port ?? 0, host, () => {
       const address = httpServer.address()
       const port = typeof address === 'object' && address !== null ? address.port : 0
 
@@ -71,7 +92,7 @@ if (isMain) {
     process.exit(1)
   }
   startServer({ port, apiKeys, launcher: forkProjectLauncher }).then((server) => {
-    log.info({ port }, 'vajra server listening')
+    log.info({ port, host: process.env.VAJRA_HOST ?? DEFAULT_HOST }, 'vajra server listening')
 
     // Graceful shutdown on SIGTERM/SIGINT
     const shutdown = async (signal: string) => {
@@ -89,5 +110,8 @@ if (isMain) {
 
     process.on('SIGTERM', () => shutdown('SIGTERM'))
     process.on('SIGINT', () => shutdown('SIGINT'))
+  }).catch((err) => {
+    log.error({ error: err instanceof Error ? err.message : err }, 'Failed to start server')
+    process.exit(1)
   })
 }
