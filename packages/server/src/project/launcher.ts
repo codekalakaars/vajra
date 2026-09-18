@@ -17,12 +17,33 @@ function buildWorkerEnv(): NodeJS.ProcessEnv {
   return env
 }
 
+/**
+ * Outer bound on a single tool call. A worker that accepts a call and never
+ * answers used to hang its caller forever: the master loop has no watchdog,
+ * so one wedged call stalled the whole run.
+ */
+const DEFAULT_CALL_TIMEOUT_MS = Number(process.env.VAJRA_TOOL_TIMEOUT_MS) || 300_000
+
+/** Grace added on top of a timeout the caller asked for (e.g. run_command),
+ * so the worker's own deadline is the one that fires first. */
+const CALL_TIMEOUT_GRACE_MS = Number(process.env.VAJRA_TOOL_TIMEOUT_GRACE_MS) || 30_000
+
+function callTimeoutMs(args: unknown): number {
+  const requested = (args as { timeout?: unknown } | null | undefined)?.timeout
+  if (typeof requested === 'number' && Number.isFinite(requested) && requested > 0) {
+    return requested + CALL_TIMEOUT_GRACE_MS
+  }
+  return DEFAULT_CALL_TIMEOUT_MS
+}
+
 interface PendingCall {
   resolve(result: unknown): void
   reject(error: Error): void
+  timer: ReturnType<typeof setTimeout>
 }
 
-class WorkerHandle implements LaunchHandle {
+/** Exported for tests: drives the IPC protocol against a fake child. */
+export class WorkerHandle implements LaunchHandle {
   private pending = new Map<string, PendingCall>()
   private dead = false
 
@@ -31,9 +52,8 @@ class WorkerHandle implements LaunchHandle {
       const msg = message as { type?: string; callId?: string; ok?: boolean; result?: unknown; error?: string }
       if (msg?.type !== 'result' || !msg.callId) return
 
-      const pending = this.pending.get(msg.callId)
+      const pending = this.take(msg.callId)
       if (!pending) return
-      this.pending.delete(msg.callId)
 
       if (msg.ok) {
         pending.resolve(msg.result)
@@ -45,20 +65,30 @@ class WorkerHandle implements LaunchHandle {
     // Reject all pending calls if the worker process exits or crashes
     child.on('exit', (code) => {
       this.dead = true
-      const error = new Error(`Worker exited with code ${code}`)
-      for (const pending of this.pending.values()) {
-        pending.reject(error)
-      }
-      this.pending.clear()
+      this.rejectAll(new Error(`Worker exited with code ${code}`))
     })
 
     child.on('error', (err) => {
       this.dead = true
-      for (const pending of this.pending.values()) {
-        pending.reject(err)
-      }
-      this.pending.clear()
+      this.rejectAll(err)
     })
+  }
+
+  /** Remove a pending call and cancel its timeout. */
+  private take(callId: string): PendingCall | undefined {
+    const pending = this.pending.get(callId)
+    if (!pending) return undefined
+    clearTimeout(pending.timer)
+    this.pending.delete(callId)
+    return pending
+  }
+
+  private rejectAll(error: Error): void {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(error)
+    }
+    this.pending.clear()
   }
 
   callTool(tool: string, args: unknown): Promise<unknown> {
@@ -66,17 +96,32 @@ class WorkerHandle implements LaunchHandle {
       return Promise.reject(new Error('Worker process is no longer running'))
     }
     const callId = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const timeoutMs = callTimeoutMs(args)
+
     return new Promise((resolve, reject) => {
-      this.pending.set(callId, { resolve, reject })
-      this.child.send({ type: 'call', callId, tool, args })
+      const timer = setTimeout(() => {
+        const pending = this.take(callId)
+        if (!pending) return
+        // A worker that blew its deadline cannot be trusted for the next
+        // task, and the pool would otherwise hand it straight back out.
+        this.dead = true
+        this.child.kill()
+        pending.reject(new Error(`Tool '${tool}' timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+
+      this.pending.set(callId, { resolve, reject, timer })
+
+      this.child.send({ type: 'call', callId, tool, args }, (err) => {
+        if (!err) return
+        const pending = this.take(callId)
+        pending?.reject(err)
+      })
     })
   }
 
   stop(): void {
-    for (const pending of this.pending.values()) {
-      pending.reject(new Error('Project stopped'))
-    }
-    this.pending.clear()
+    this.dead = true
+    this.rejectAll(new Error('Project stopped'))
     this.child.kill()
   }
 }
