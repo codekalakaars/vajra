@@ -108,7 +108,10 @@ export function validateModel(providerName: string, modelName: string): string |
  * The API key for the correct provider is selected based on the model prefix.
  * Falls back to "openrouter" key if provider-specific key is not found.
  */
-export function createProvider(model: string, apiKeys: Record<string, string>): { provider: ChatProvider; resolvedModel: string } {
+export function createProvider(
+  model: string,
+  apiKeys: Record<string, string>,
+): { provider: ChatProvider; resolvedModel: string; apiKey: string } {
   const { provider: providerName, model: resolvedModel } = parseModelString(model)
   const factory = providers.get(providerName)
   if (!factory) {
@@ -130,7 +133,10 @@ export function createProvider(model: string, apiKeys: Record<string, string>): 
   if (validationError) {
     log.warn({ provider: providerName, model: resolvedModel }, validationError)
   }
-  return { provider: factory(), resolvedModel }
+  // The key travels with the provider: picking one from the map separately —
+  // as the RPC handlers used to — sends whichever key enumerated first to
+  // whichever provider the project actually uses.
+  return { provider: factory(), resolvedModel, apiKey }
 }
 
 /** Register a custom provider (for plugins or tests). */
