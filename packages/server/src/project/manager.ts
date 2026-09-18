@@ -7,7 +7,7 @@ import type { FileRule, ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { FileLockManager, resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 import type { ChatProvider, ChatMessage } from '../agent/providers/types.js'
 import { createProvider } from '../agent/providers/index.js'
-import { managerConversationTurn, type ManagerTurnResult } from '../agent/manager.js'
+import { managerConversationTurn } from '../agent/manager.js'
 import { masterLoop } from '../agent/master.js'
 import { AgentRegistry } from '../agent/registry.js'
 import { invalidateProjectContext } from '../agent/project-context.js'
@@ -135,7 +135,8 @@ export class ProjectManager {
 
     let permissions: PermissionsConfig
     let allowedTools: string[] | undefined
-    let fileRules: FileRule[] = []
+    let fileRules: FileRule[] | undefined
+    let defaultFilePermissions: FilePermissions | undefined
 
     const sandboxConfig = loadSandboxConfig(input.projectDir)
     if (sandboxConfig) {
@@ -143,7 +144,11 @@ export class ProjectManager {
       const job = buildLaunchJob(sandboxConfig, projectId)
       permissions = job.permissions
       allowedTools = job.allowedTools
-      fileRules = sandboxConfig.fileRules as FileRule[]
+      fileRules = job.fileRules as FileRule[]
+      // Without this the worker evaluates rules against nothing, so a file
+      // matching no rule falls through to whatever it defaults to rather
+      // than to what the config said.
+      defaultFilePermissions = job.defaultFilePermissions
     } else {
       // Fall back to .vajra-perms.json or defaults
       permissions = loadPermissions(input.projectDir) ?? {
@@ -162,6 +167,7 @@ export class ProjectManager {
           allowUnenforced: input.allowUnenforced ?? false,
           allowedTools,
           fileRules,
+          defaultFilePermissions,
         },
         (report) => this.recordSandboxReport(projectId, report),
       )
@@ -251,22 +257,18 @@ export class ProjectManager {
         created_at: number
       }>
 
-    // Initialize conversation state if not already present (e.g. after page refresh)
-    if (!this.conversations.has(projectId)) {
-      const handle = this.handles.get(projectId)
-      if (!handle) {
-        throw new Error(`No worker handle for project '${projectId}'`)
-      }
+    // Initialize conversation state if not already present (e.g. after page
+    // refresh). Attach is a read: a project whose worker is gone — it failed
+    // to launch, it was stopped, the server restarted — must still be
+    // readable, or the UI cannot show the user why it failed. Sending a
+    // message is what needs a live worker.
+    const handle = this.handles.get(projectId)
+    const provider =
+      apiKeys && Object.keys(apiKeys).length > 0
+        ? createProvider(row.model, apiKeys).provider
+        : undefined
 
-      // Create provider if API keys are available
-      let provider: ChatProvider | undefined
-      if (apiKeys && Object.keys(apiKeys).length > 0) {
-        provider = createProvider(row.model, apiKeys).provider
-      }
-      if (!provider) {
-        throw new Error(`No chat provider available for project '${projectId}'`)
-      }
-
+    if (!this.conversations.has(projectId) && handle && provider) {
       this.conversations.set(projectId, {
         history: messages.map((m) => ({
           role: m.role as 'user' | 'assistant' | 'system',

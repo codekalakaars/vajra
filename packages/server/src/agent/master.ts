@@ -13,7 +13,7 @@
 
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../project/manager.js'
-import type { ManagerPlan, PlannedTask, PermissionsConfig, ToolName } from '@codekalakaars/vajra-protocol'
+import type { ManagerPlan, PlannedTask, PermissionsConfig } from '@codekalakaars/vajra-protocol'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { FileLockManager, ChangeHistory, type ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { TaskQueue, type TaskState } from './taskqueue.js'
@@ -24,8 +24,7 @@ import type { WorkerPool } from '../project/pool.js'
 import { access } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { compressMessages } from './context.js'
-import { buildSummaryIndex, compressSummaryByRelevance } from './summary.js'
-import { DEFAULT_MAX_RETRIES, DEFAULT_VALIDATION_TIMEOUT, SPECULATIVE_CONFIDENCE_THRESHOLD, DEFAULT_WORKER_TOOL_CALLS, MAX_DEP_CONTEXT_SIZE } from './constants.js'
+import { DEFAULT_MAX_RETRIES, SPECULATIVE_CONFIDENCE_THRESHOLD, DEFAULT_WORKER_TOOL_CALLS, MAX_DEP_CONTEXT_SIZE } from './constants.js'
 import { componentLogger } from '../logger.js'
 import { stmt } from '../db/statements.js'
 
@@ -415,7 +414,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
         // Start task execution in background, and keep the promise so the
         // loop can await a completion instead of polling for one.
-        const running = executeTask(agent.id, task, handle, apiKey, model, provider, events, db, queue, registry, projectId, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, taskSummaries, resourceLimits, pool)
+        const running = executeTask(agent.id, task, handle, apiKey, model, provider, events, queue, registry, projectId, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, taskSummaries, resourceLimits, pool)
           .catch((e) => {
             log.error({ agentId: agent.id, error: e }, 'Worker failed')
           })
@@ -585,7 +584,6 @@ async function executeTask(
   model: string,
   provider: ChatProvider,
   events: PushEvents,
-  db: SqliteDb,
   queue: TaskQueue,
   registry: AgentRegistry,
   projectId: string,

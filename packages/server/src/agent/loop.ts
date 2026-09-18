@@ -9,11 +9,11 @@ import type { PushEvents, LaunchHandle } from '../project/manager.js'
 import type { PermissionsConfig, ToolName } from '@codekalakaars/vajra-protocol'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { getToolSpecs, parseToolCall } from './tools.js'
-import { formatSummaryIndex, type SummaryEntry } from './summary.js'
+import { formatSummaryIndex } from './summary.js'
 import { projectContext } from './project-context.js'
 import { compressMessages } from './context.js'
 import { searchSummary, appendMessage, nextSeq } from './utils.js'
-import { MAX_AGENT_TOOL_CALLS, MAX_SEARCH_RESULTS } from './constants.js'
+import { MAX_AGENT_TOOL_CALLS } from './constants.js'
 
 const FREE_TOOLS = new Set(['search_files'])
 
@@ -38,7 +38,6 @@ export interface AgentLoopResult {
 }
 
 function buildSystemPrompt(
-  projectDir: string,
   task: string,
   tree: string,
   summary: string,
@@ -82,7 +81,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
   const { tree, summaryIndex } = await projectContext(project.projectDir)
 
   const summaryText = formatSummaryIndex(summaryIndex)
-  const systemPrompt = buildSystemPrompt(project.projectDir, project.task, tree, summaryText, MAX_AGENT_TOOL_CALLS)
+  const systemPrompt = buildSystemPrompt(project.task, tree, summaryText, MAX_AGENT_TOOL_CALLS)
 
   const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },

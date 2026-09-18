@@ -65,7 +65,6 @@ export interface QueueStatus {
 export class TaskQueue {
   private tasks = new Map<string, TaskState>()
   private dependencies = new Map<string, Set<string>>()
-  private fileToTask = new Map<string, string>() // file -> task ID that owns it
 
   constructor(
     private db: SqliteDb,
@@ -93,9 +92,6 @@ export class TaskQueue {
     for (const depId of task.dependsOn) {
       stmt(this.db, `INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)`).run(task.id, depId)
     }
-
-    // All files this task touches (for file ownership tracking)
-    const allFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
 
     const state: TaskState = {
       id: task.id,
@@ -128,11 +124,6 @@ export class TaskQueue {
 
     this.tasks.set(task.id, state)
     this.dependencies.set(task.id, new Set(task.dependsOn))
-
-    // Register file ownership
-    for (const file of allFiles) {
-      this.fileToTask.set(file, task.id)
-    }
 
     return state
   }
@@ -188,13 +179,6 @@ export class TaskQueue {
     stmt(this.db, `UPDATE tasks SET status = 'done', completed_at = ?, validation_passed = ? WHERE id = ?`)
       .run(task.completedAt, validationPassed === true ? 1 : validationPassed === false ? 0 : null, taskId)
 
-    // Release file ownership
-    for (const [file, ownerTaskId] of this.fileToTask) {
-      if (ownerTaskId === taskId) {
-        this.fileToTask.delete(file)
-      }
-    }
-
     // Return newly ready tasks
     return this.getReadyTasks()
   }
@@ -207,13 +191,6 @@ export class TaskQueue {
     task.completedAt = Date.now()
 
     stmt(this.db, `UPDATE tasks SET status = 'failed', completed_at = ? WHERE id = ?`).run(task.completedAt, taskId)
-
-    // Release file ownership
-    for (const [file, ownerTaskId] of this.fileToTask) {
-      if (ownerTaskId === taskId) {
-        this.fileToTask.delete(file)
-      }
-    }
   }
 
   retryTask(taskId: string): void {
@@ -238,181 +215,8 @@ export class TaskQueue {
     stmt(this.db, `UPDATE tasks SET status = 'skipped', completed_at = ? WHERE id = ?`).run(task.completedAt, taskId)
   }
 
-  /**
-   * Check if two tasks conflict (share files that at least one writes).
-   */
-  hasConflict(task1Id: string, task2Id: string): boolean {
-    const task1 = this.tasks.get(task1Id)
-    const task2 = this.tasks.get(task2Id)
-    if (!task1 || !task2) return false
-
-    // Get files each task writes to (writeFile + deleteFile)
-    const task1WriteFiles = [...task1.writeFile, ...task1.deleteFile]
-    const task2WriteFiles = [...task2.writeFile, ...task2.deleteFile]
-
-    // Check if task1 writes to any file task2 reads or writes
-    for (const file of task1WriteFiles) {
-      if (task2.readFile.includes(file) || task2WriteFiles.includes(file)) {
-        return true
-      }
-    }
-
-    // Check if task2 writes to any file task1 reads
-    for (const file of task2WriteFiles) {
-      if (task1.readFile.includes(file)) {
-        return true
-      }
-    }
-
-    return false
-  }
-
-  /**
-   * Get files owned by a currently running task.
-   */
-  getLockedFiles(): Set<string> {
-    const locked = new Set<string>()
-    for (const [file, taskId] of this.fileToTask) {
-      const task = this.tasks.get(taskId)
-      if (task?.status === 'running' || task?.status === 'assigned') {
-        locked.add(file)
-      }
-    }
-    return locked
-  }
-
   getTask(taskId: string): TaskState | undefined {
     return this.tasks.get(taskId)
-  }
-
-  getTaskFiles(taskId: string): string[] {
-    const files: string[] = []
-    for (const [file, owner] of this.fileToTask) {
-      if (owner === taskId) files.push(file)
-    }
-    return files
-  }
-
-  /**
-   * Check if a set of tasks can all run in parallel (no write conflicts between any pair).
-   */
-  canRunInParallel(taskIds: string[]): boolean {
-    for (let i = 0; i < taskIds.length; i++) {
-      for (let j = i + 1; j < taskIds.length; j++) {
-        if (this.hasConflict(taskIds[i], taskIds[j])) {
-          return false
-        }
-      }
-    }
-    return true
-  }
-
-  /**
-   * Group ready tasks into parallel batches (each batch has no internal conflicts).
-   */
-  getParallelBatches(): string[][] {
-    const ready = this.getReadyTasks()
-    const batches: string[][] = []
-    const assigned = new Set<string>()
-
-    for (const task of ready) {
-      if (assigned.has(task.id)) continue
-
-      const batch = [task.id]
-      assigned.add(task.id)
-
-      for (const other of ready) {
-        if (assigned.has(other.id)) continue
-        if (this.canRunInParallel([...batch, other.id])) {
-          batch.push(other.id)
-          assigned.add(other.id)
-        }
-      }
-
-      batches.push(batch)
-    }
-
-    return batches
-  }
-
-  /**
-   * Get file affinity score between two tasks.
-   * Higher score = more shared files = should run together for cache efficiency.
-   */
-  private getFileAffinityScore(task1Id: string, task2Id: string): number {
-    const task1 = this.tasks.get(task1Id)
-    const task2 = this.tasks.get(task2Id)
-    if (!task1 || !task2) return 0
-
-    const task1Files = new Set([...task1.readFile, ...task1.writeFile])
-    const task2Files = new Set([...task2.readFile, ...task2.writeFile])
-
-    let sharedCount = 0
-    for (const file of task1Files) {
-      if (task2Files.has(file)) {
-        sharedCount++
-      }
-    }
-
-    return sharedCount
-  }
-
-  /**
-   * Group ready tasks into smart batches optimized for cache efficiency.
-   * Tasks that share files are grouped together to reduce context switching.
-   * Each batch still has no write conflicts.
-   */
-  getSmartBatches(): string[][] {
-    const ready = this.getReadyTasks()
-    if (ready.length === 0) return []
-
-    const batches: string[][] = []
-    const assigned = new Set<string>()
-
-    // Build affinity graph: task -> [(otherTask, score)]
-    const affinityMap = new Map<string, Array<{ taskId: string; score: number }>>()
-    
-    for (const task of ready) {
-      const affinities: Array<{ taskId: string; score: number }> = []
-      
-      for (const other of ready) {
-        if (task.id === other.id) continue
-        
-        const score = this.getFileAffinityScore(task.id, other.id)
-        if (score > 0) {
-          affinities.push({ taskId: other.id, score })
-        }
-      }
-      
-      // Sort by affinity score (highest first)
-      affinities.sort((a, b) => b.score - a.score)
-      affinityMap.set(task.id, affinities)
-    }
-
-    // Greedy batching: start with highest affinity pairs
-    for (const task of ready) {
-      if (assigned.has(task.id)) continue
-
-      const batch = [task.id]
-      assigned.add(task.id)
-
-      // Try to add tasks with high affinity that don't conflict
-      const affinities = affinityMap.get(task.id) ?? []
-      
-      for (const { taskId: otherId } of affinities) {
-        if (assigned.has(otherId)) continue
-        
-        // Check if adding this task would cause conflicts
-        if (this.canRunInParallel([...batch, otherId])) {
-          batch.push(otherId)
-          assigned.add(otherId)
-        }
-      }
-
-      batches.push(batch)
-    }
-
-    return batches
   }
 
   getStatus(): QueueStatus {
@@ -435,12 +239,5 @@ export class TaskQueue {
     }
 
     stmt(this.db, `UPDATE tasks SET validation_output = ?, validation_passed = ? WHERE id = ?`).run(output, passed ? 1 : 0, taskId)
-  }
-
-  /**
-   * Get all tasks for a project.
-   */
-  getAllTasks(): TaskState[] {
-    return [...this.tasks.values()]
   }
 }

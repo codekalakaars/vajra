@@ -89,21 +89,6 @@ export class AgentRegistry {
     return rows.map((r) => this.rowToState(r))
   }
 
-  getWorkers(projectId: string): AgentState[] {
-    return this.getByProject(projectId).filter((a) => a.role === 'worker')
-  }
-
-  getActiveWorkers(projectId: string): AgentState[] {
-    return this.getByProject(projectId).filter(
-      (a) => a.role === 'worker' && (a.status === 'pending' || a.status === 'running'),
-    )
-  }
-
-  deleteByProject(projectId: string): void {
-    stmt(this.db, `DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
-    stmt(this.db, `DELETE FROM agents WHERE session_id = ?`).run(projectId)
-  }
-
   private rowToState(row: {
     id: string
     session_id: string

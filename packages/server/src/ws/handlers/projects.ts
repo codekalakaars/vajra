@@ -2,7 +2,7 @@ import type { RpcRouter } from '../rpc.js'
 import type { ServerContext } from '../server.js'
 import type { ProjectLoadPermissionsParams, ProjectSavePermissionsParams, ProjectScanParams } from '@codekalakaars/vajra-protocol'
 import { loadPermissions, defaultPermissions, savePermissions, scanProject } from '../../native.js'
-import { readdir, stat } from 'fs/promises'
+import { readdir } from 'fs/promises'
 import { resolve, join, relative } from 'path'
 import { homedir } from 'os'
 
