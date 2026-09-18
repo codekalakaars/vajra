@@ -27,6 +27,7 @@ import { compressMessages } from './context.js'
 import { buildSummaryIndex, compressSummaryByRelevance } from './summary.js'
 import { DEFAULT_MAX_RETRIES, DEFAULT_VALIDATION_TIMEOUT, SPECULATIVE_CONFIDENCE_THRESHOLD, DEFAULT_WORKER_TOOL_CALLS, MAX_DEP_CONTEXT_SIZE } from './constants.js'
 import { componentLogger } from '../logger.js'
+import { stmt } from '../db/statements.js'
 
 const log = componentLogger('master')
 
@@ -154,11 +155,15 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   // Use provided change history or create a new one
   const changeHistory = input.changeHistory ?? new ChangeHistory()
 
-  // Clean up stale data from previous runs (agents, tasks, dependencies)
-  db.prepare(`DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
-  db.prepare(`DELETE FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)`).run(projectId)
-  db.prepare(`DELETE FROM tasks WHERE session_id = ?`).run(projectId)
-  db.prepare(`DELETE FROM agents WHERE session_id = ?`).run(projectId)
+  // Clean up stale data from previous runs (agents, tasks, dependencies).
+  // One transaction: a failure partway through used to leave the tables
+  // referring to rows that no longer existed.
+  db.transaction(() => {
+    stmt(db, `DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
+    stmt(db, `DELETE FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)`).run(projectId)
+    stmt(db, `DELETE FROM tasks WHERE session_id = ?`).run(projectId)
+    stmt(db, `DELETE FROM agents WHERE session_id = ?`).run(projectId)
+  })()
 
   // Create master agent
   const masterAgent = registry.createAgent(projectId, 'master', 'Orchestrate task execution')
@@ -170,8 +175,14 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     queue.addTask(task)
   }
 
-  // Track active workers
+  // Track active workers, and the promise each one is running under. The
+  // loop used to poll this map every 100ms; awaiting the work directly costs
+  // nothing while tasks run and wakes the instant one finishes.
   const activeWorkers = new Map<string, { agent: AgentState; handle: LaunchHandle; taskId: string }>()
+  const inFlight = new Map<string, Promise<void>>()
+
+  /** What each finished task reported, for injection into its dependents. */
+  const taskSummaries = new Map<string, string>()
   const completedTasks: string[] = []
   const failedTasks: string[] = []
   let totalToolCalls = 0
@@ -181,7 +192,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
   // Adaptive concurrency based on system resources
   const adaptiveMax = pool?.stats().adaptiveMax ?? 4
-  const maxConcurrentWorkers = Math.min(adaptiveMax, plan.independentGroups[0]?.length ?? 4)
+  const maxConcurrentWorkers = Math.max(1, Math.min(adaptiveMax, plan.independentGroups[0]?.length ?? 4))
 
   // Pre-warm: Start forking workers for independent tasks immediately
   const prewarmCount = Math.min(maxConcurrentWorkers, 4)
@@ -245,6 +256,12 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     // Atomically check conflicts AND acquire locks for non-conflicting tasks
     const assignable: TaskState[] = []
     for (const task of readyTasks) {
+      // Respect the concurrency limit, which was computed and then ignored —
+      // every assignable task was launched at once no matter how many
+      // workers were already running. Checked before the locks are taken so
+      // a task we are not going to start does not hold them.
+      if (inFlight.size + assignable.length >= maxConcurrentWorkers) break
+
       // Try to acquire locks atomically - this prevents race conditions
       // where two tasks both pass the filter then both acquire locks
       // Use read locks for readFile, write locks for writeFile/deleteFile
@@ -313,7 +330,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     }
 
     // Speculative execution: start tasks with high-confidence dependencies
-    if (assignable.length === 0 && activeWorkers.size < maxConcurrentWorkers) {
+    if (assignable.length === 0 && inFlight.size < maxConcurrentWorkers) {
       const pendingTasks = queue.getReadyTasks().filter(t => 
         t.dependsOn.length > 0 && 
         !speculativeTasks.has(t.id) &&
@@ -396,11 +413,16 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         activeWorkers.set(agent.id, { agent, handle, taskId: task.id })
         queue.startTask(task.id)
 
-        // Start task execution in background
-        executeTask(agent.id, task, handle, apiKey, model, provider, events, db, queue, registry, projectId, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, resourceLimits, pool)
+        // Start task execution in background, and keep the promise so the
+        // loop can await a completion instead of polling for one.
+        const running = executeTask(agent.id, task, handle, apiKey, model, provider, events, db, queue, registry, projectId, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, taskSummaries, resourceLimits, pool)
           .catch((e) => {
             log.error({ agentId: agent.id, error: e }, 'Worker failed')
           })
+          .finally(() => {
+            inFlight.delete(agent.id)
+          })
+        inFlight.set(agent.id, running)
       } catch (e) {
         // Failed to launch worker
         registry.updateStatus(agent.id, 'failed')
@@ -419,18 +441,19 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       }
     }
 
-    // Wait a bit before checking again (or for a worker to complete)
-    if (activeWorkers.size > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 100))
-    } else if (readyTasks.length === 0 && assignable.length === 0) {
-      // No workers and no ready tasks — all remaining tasks are blocked
+    if (inFlight.size > 0) {
+      // Wake as soon as any worker finishes: it may unblock a dependency or
+      // free a file lock.
+      await Promise.race(inFlight.values())
+    } else if (assignable.length === 0) {
+      // Nothing running and nothing startable — the rest is blocked.
       break
     }
   }
 
   // Wait for any remaining workers
-  while (activeWorkers.size > 0) {
-    await new Promise((resolve) => setTimeout(resolve, 100))
+  while (inFlight.size > 0) {
+    await Promise.allSettled(inFlight.values())
   }
 
   // Handle speculative task rollbacks if any dependencies failed
@@ -513,7 +536,11 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
  * Gather context from completed dependency tasks.
  * Returns a formatted string with what each dependency produced.
  */
-function gatherDependencyContext(task: TaskState, queue: TaskQueue, db: SqliteDb): string {
+function gatherDependencyContext(
+  task: TaskState,
+  queue: TaskQueue,
+  taskSummaries: Map<string, string>,
+): string {
   if (task.dependsOn.length === 0) return ''
 
   const contextParts: string[] = []
@@ -525,32 +552,18 @@ function gatherDependencyContext(task: TaskState, queue: TaskQueue, db: SqliteDb
     const depTask = queue.getTask(depId)
     if (!depTask) continue
 
-    // Get the completion summary from the database
-    const row = db.prepare(
-      `SELECT content FROM messages WHERE session_id = ? AND role = 'assistant' AND content LIKE ?
-       ORDER BY created_at DESC LIMIT 1`
-    ).get(task.projectId, `%${depId}%`) as { content: string } | undefined
+    // Workers report their summary directly. This used to hunt for it with
+    // `content LIKE '%<task id>%'` over the whole messages table: an
+    // unindexed scan per dependency per task, which also matched any message
+    // that merely mentioned the id.
+    const summary = taskSummaries.get(depId) ?? ''
 
-    let summary = ''
-    if (row?.content) {
-      try {
-        const parsed = JSON.parse(row.content)
-        if (parsed.summary) {
-          summary = parsed.summary
-        }
-      } catch {
-        // Not JSON, use raw content
-        summary = row.content.slice(0, 500)
-      }
-    }
-
-    // Build context for this dependency
     const filesModified = [...depTask.writeFile, ...depTask.deleteFile]
     const depContext = [
       `Task ${depId}: ${depTask.title}`,
       `Status: ${depTask.status}`,
       filesModified.length > 0 ? `Files modified: ${filesModified.join(', ')}` : '',
-      summary ? `Summary: ${summary}` : '',
+      summary ? `Summary: ${summary.slice(0, 500)}` : '',
     ].filter(Boolean).join('\n')
 
     if (depContext) {
@@ -581,6 +594,7 @@ async function executeTask(
   activeWorkers: Map<string, { agent: AgentState; handle: LaunchHandle; taskId: string }>,
   completedTasks: string[],
   failedTasks: string[],
+  taskSummaries: Map<string, string>,
   resourceLimits?: ResourceLimits,
   pool?: WorkerPool,
 ): Promise<void> {
@@ -602,7 +616,7 @@ async function executeTask(
     const createDirList = task.createDir.length > 0 ? task.createDir.join(', ') : '(none)'
 
     // Gather context from completed dependencies
-    const dependencyContext = gatherDependencyContext(task, queue, db)
+    const dependencyContext = gatherDependencyContext(task, queue, taskSummaries)
 
     const systemPrompt = [
       'You are a worker agent. Follow the instructions EXACTLY. Do not deviate.',
@@ -651,7 +665,8 @@ async function executeTask(
       )
 
       if (!result.message.toolCalls || result.message.toolCalls.length === 0) {
-        // Task complete
+        // Task complete — keep the worker's own summary for its dependents.
+        if (result.message.content) taskSummaries.set(task.id, result.message.content)
         break
       }
 

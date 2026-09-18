@@ -2,6 +2,7 @@
 
 import type { SqliteDb } from '../db/client.js'
 import type { SummaryEntry } from './summary.js'
+import { stmt } from '../db/statements.js'
 import { MAX_SEARCH_RESULTS } from './constants.js'
 
 /**
@@ -44,17 +45,38 @@ export function appendMessage(
   toolCallId?: string,
   toolName?: string,
 ): void {
-  db.prepare(
+  stmt(
+    db,
     `INSERT INTO messages (session_id, seq, role, content, tool_name, tool_call_id, tool_args, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(projectId, seq, role, content, toolName ?? null, toolCallId ?? null, toolCalls ?? null, Date.now())
 }
 
 /**
+ * Per-project message sequence. Seeded from the database the first time a
+ * project is touched, then kept in memory: every append used to run its own
+ * `SELECT MAX(seq)` first, which is both a query per message and a race
+ * between concurrent workers appending to the same project.
+ */
+const sequences = new Map<string, number>()
+
+/**
  * Get the next sequence number for a session's messages.
  */
 export function nextSeq(db: SqliteDb, projectId: string): number {
-  const row = db.prepare(`SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM messages WHERE session_id = ?`)
+  const cached = sequences.get(projectId)
+  if (cached !== undefined) {
+    sequences.set(projectId, cached + 1)
+    return cached
+  }
+
+  const row = stmt(db, `SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM messages WHERE session_id = ?`)
     .get(projectId) as { next_seq: number }
+  sequences.set(projectId, row.next_seq + 1)
   return row.next_seq
+}
+
+/** Forget a project's sequence — call when its messages are deleted. */
+export function forgetSeq(projectId: string): void {
+  sequences.delete(projectId)
 }

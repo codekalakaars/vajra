@@ -9,9 +9,8 @@ import type { PushEvents, LaunchHandle } from '../project/manager.js'
 import type { PermissionsConfig, ToolName } from '@codekalakaars/vajra-protocol'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { getToolSpecs, parseToolCall } from './tools.js'
-import { scanProject } from '../native.js'
-import { buildNestedTree } from './tree.js'
-import { buildSummaryIndex, formatSummaryIndex, type SummaryEntry } from './summary.js'
+import { formatSummaryIndex, type SummaryEntry } from './summary.js'
+import { projectContext } from './project-context.js'
 import { compressMessages } from './context.js'
 import { searchSummary, appendMessage, nextSeq } from './utils.js'
 import { MAX_AGENT_TOOL_CALLS, MAX_SEARCH_RESULTS } from './constants.js'
@@ -79,17 +78,8 @@ function buildSystemPrompt(
 export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult> {
   const { project, apiKey, provider, handle, events, db } = input
 
-  // Build project context
-  let tree: string
-  let summaryIndex: SummaryEntry[]
-  try {
-    const entries = scanProject(project.projectDir)
-    tree = buildNestedTree(entries)
-      summaryIndex = await buildSummaryIndex(project.projectDir, entries)
-  } catch {
-    tree = '(unable to read project tree)'
-    summaryIndex = []
-  }
+  // Build project context (cached per directory for a short window)
+  const { tree, summaryIndex } = await projectContext(project.projectDir)
 
   const summaryText = formatSummaryIndex(summaryIndex)
   const systemPrompt = buildSystemPrompt(project.projectDir, project.task, tree, summaryText, MAX_AGENT_TOOL_CALLS)
