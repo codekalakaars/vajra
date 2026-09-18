@@ -11,10 +11,12 @@ import type { LaunchJob, LaunchHandle, SandboxReport, ProjectLauncher } from './
 import type { ConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 import { resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 import { cpus, totalmem, freemem } from 'node:os'
+import { randomUUID } from 'node:crypto'
 
 interface PooledWorker {
-  /** Identifies this worker, not its project — several workers share a project. */
-  id: number
+  /** Unique per worker instance — NOT the projectId, since multiple workers
+   *  for the same project can be active concurrently. */
+  id: string
   handle: LaunchHandle
   job: LaunchJob
   lastUsedAt: number
@@ -49,7 +51,7 @@ export interface WorkerPoolStats {
  */
 export class WorkerPool {
   /** Workers currently in use (checked out), keyed by worker id. */
-  private active = new Map<number, PooledWorker>()
+  private active = new Map<string, PooledWorker>()
 
   /** Source of worker ids. Keying `active` by projectId, as this once did,
    * silently dropped every worker after the first: tasks in one project all
@@ -320,7 +322,7 @@ export class WorkerPool {
     )
 
     const pooled: PooledWorker = {
-      id: this.nextWorkerId++,
+      id: randomUUID(),
       handle,
       job,
       lastUsedAt: Date.now(),

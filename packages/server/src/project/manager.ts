@@ -2,12 +2,12 @@ import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
 import { stmt } from '../db/statements.js'
 import { appendMessage, forgetSeq, nextSeq } from '../agent/utils.js'
-import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage, ManagerPlan, PlannedTask } from '@codekalakaars/vajra-protocol'
+import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage, DeveloperPlan, PlannedTask } from '@codekalakaars/vajra-protocol'
 import type { FileRule, ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { FileLockManager, resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 import type { ChatProvider, ChatMessage } from '../agent/providers/types.js'
 import { createProvider } from '../agent/providers/index.js'
-import { managerConversationTurn } from '../agent/manager.js'
+import { developerConversationTurn } from '../agent/developer.js'
 import { masterLoop } from '../agent/master.js'
 import { AgentRegistry } from '../agent/registry.js'
 import { invalidateProjectContext } from '../agent/project-context.js'
@@ -81,8 +81,11 @@ interface ConversationState {
   history: ChatMessage[]
   /** Summary index for in-memory file search. Built on first turn. */
   summaryIndex: SummaryEntry[]
-  /** The plan proposed by the Manager, awaiting user confirmation. */
-  proposedPlan?: ManagerPlan
+  /** Cache of file contents already read during this conversation, keyed by path.
+   *  Avoids re-reading a file at plan time that the Developer already read while exploring. */
+  fileCache: Map<string, string>
+  /** The plan proposed by the Developer, awaiting user confirmation. */
+  proposedPlan?: DeveloperPlan
   /** The sandboxed worker handle for file tool dispatch. */
   handle: LaunchHandle
   /** File lock manager for coordinating parallel access. */
@@ -185,12 +188,13 @@ export class ProjectManager {
       this.conversations.set(projectId, {
         history: [],
         summaryIndex: [],
+        fileCache: new Map(),
         handle,
         fileLocks: new FileLockManager(),
         provider: input.provider,
       })
 
-      // Transition to talking — the user can now chat with the Manager
+      // Transition to talking — the user can now chat with the Developer
       this.setStatus(projectId, 'talking')
       this.events.push('projects.statusChanged', projectId, { status: 'talking' })
     } catch (e) {
@@ -283,6 +287,7 @@ export class ProjectManager {
           ...(m.tool_result && m.tool_call_id && { toolCallId: m.tool_call_id }),
         })),
         summaryIndex: [],
+        fileCache: new Map(),
         handle,
         fileLocks: new FileLockManager(),
         provider,
@@ -392,7 +397,7 @@ export class ProjectManager {
 
   /**
    * Send a message to the project. Routes based on current status:
-   * - `talking`: dispatch to Manager conversation loop
+   * - `talking`: dispatch to Developer conversation loop
    * - `executing`: dispatch to worker (existing behavior)
    * - `confirming`: reject (user must confirm/reject, not send new messages)
    */
@@ -440,7 +445,7 @@ export class ProjectManager {
       throw new Error('No proposed plan to confirm')
     }
 
-    const plan: ManagerPlan = editedTasks
+    const plan: DeveloperPlan = editedTasks
       ? { ...conv.proposedPlan, tasks: editedTasks }
       : conv.proposedPlan
 
@@ -450,14 +455,22 @@ export class ProjectManager {
     this.events.push('projects.planConfirmed', projectId, {})
     this.setStatus(projectId, 'executing')
 
-    // Run master loop in background
-    if (apiKeys && Object.keys(apiKeys).length > 0) {
-      const row = stmt(this.db, `SELECT project_dir, model FROM sessions WHERE id = ?`).get(projectId) as { project_dir: string; model: string }
+    // Validate API key before starting master loop
+    if (!apiKeys || Object.keys(apiKeys).length === 0) {
+      this.setStatus(projectId, 'failed', Date.now())
+      this.events.push('projects.failed', projectId, {
+        message: 'No API key provided. Cannot execute plan.',
+      })
+      return
+    }
 
-      // Resolve the key from the project's own model, not from whatever key
-      // happens to be first in the map.
-      const { provider, apiKey } = createProvider(row.model, apiKeys)
-      conv.provider = provider
+    // Run master loop in background
+    const row = stmt(this.db, `SELECT project_dir, model FROM sessions WHERE id = ?`).get(projectId) as { project_dir: string; model: string }
+
+    // Resolve the key from the project's own model, not from whatever key
+    // happens to be first in the map.
+    const { provider, apiKey } = createProvider(row.model, apiKeys!)
+    conv.provider = provider
 
       const registry = new AgentRegistry(this.db)
       const pool = this.pools.get(projectId)
@@ -511,7 +524,6 @@ export class ProjectManager {
         this.setStatus(projectId, 'failed', Date.now())
         this.events.push('projects.failed', projectId, { message })
       })
-    }
   }
 
   /**
@@ -529,7 +541,7 @@ export class ProjectManager {
   // ---- Internal helpers ----
 
   /**
-   * Dispatch a message to the Manager conversation loop.
+   * Dispatch a message to the Developer conversation loop.
    */
   private async sendConversationMessage(projectId: string, content: string, apiKeys: Record<string, string>): Promise<void> {
     const conv = this.conversations.get(projectId)
@@ -543,7 +555,7 @@ export class ProjectManager {
     this.events.push('projects.statusChanged', projectId, { status: 'talking' })
 
     try {
-      const result = await managerConversationTurn({
+      const result = await developerConversationTurn({
         projectId: projectId,
         projectDir: row.project_dir,
         userMessage: content,
@@ -555,10 +567,11 @@ export class ProjectManager {
         handle: conv.handle,
         messages: conv.history,
         summaryIndex: conv.summaryIndex,
+        fileCache: conv.fileCache,
       })
 
       if (result.type === 'plan') {
-        // Manager called propose_plan — transition to confirming
+        // Developer called propose_plan — transition to confirming
         conv.proposedPlan = result.plan
         this.setStatus(projectId, 'confirming')
         this.events.push('projects.planProposed', projectId, { plan: result.plan })

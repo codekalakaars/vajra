@@ -1,7 +1,7 @@
 import { AgentStatePayload } from '@codekalakaars/vajra-protocol'
 
 interface WorkerStatusProps { agents: AgentStatePayload[] }
-const roleLabels: Record<string, string> = { manager: 'Manager', master: 'Master', worker: 'Worker' }
+const roleLabels: Record<string, string> = { developer: 'Developer', master: 'Master', worker: 'Worker' }
 
 export function WorkerStatus({ agents }: WorkerStatusProps) {
   if (agents.length === 0) return null

@@ -5,8 +5,8 @@ export function getToolSpecs(): OpenAiToolSpec[] {
   return toOpenAiToolSpecs()
 }
 
-export function getManagerToolSpecs(): OpenAiToolSpec[] {
-  return toOpenAiToolSpecs(roleTools.manager)
+export function getDeveloperToolSpecs(): OpenAiToolSpec[] {
+  return toOpenAiToolSpecs(roleTools.developer)
 }
 
 export function getWorkerToolSpecs(): OpenAiToolSpec[] {

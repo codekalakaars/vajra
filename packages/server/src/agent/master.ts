@@ -1,6 +1,6 @@
 // Master Agent — orchestrates task execution.
 //
-// The master takes the manager's plan and:
+// The master takes the developer's plan and:
 // 1. Uses the TaskQueue to determine execution order
 // 2. Assigns tasks to workers (via the main process)
 // 3. Monitors worker progress
@@ -8,12 +8,12 @@
 // 5. Handles conflicts (serializes same-file edits)
 // 6. Aggregates results
 //
-// Like the manager, the master runs in the main server process, not in a
+// Like the developer, the master runs in the main server process, not in a
 // sandboxed worker. It communicates with workers through the main process.
 
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../project/manager.js'
-import type { ManagerPlan, PlannedTask, PermissionsConfig } from '@codekalakaars/vajra-protocol'
+import type { DeveloperPlan, PlannedTask, PermissionsConfig } from '@codekalakaars/vajra-protocol'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { FileLockManager, ChangeHistory, type ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { TaskQueue, type TaskState } from './taskqueue.js'
@@ -33,7 +33,7 @@ const log = componentLogger('master')
 export interface MasterInput {
   projectId: string
   projectDir: string
-  plan: ManagerPlan
+  plan: DeveloperPlan
   model: string
   apiKey: string
   provider: ChatProvider
@@ -87,13 +87,12 @@ export async function evaluateSkipIf(
   projectDir: string,
   handle?: LaunchHandle,
 ): Promise<boolean> {
+  if (conditions.length === 0) return false
+
   for (const condition of conditions) {
     const trimmed = condition.trim()
     const lower = trimmed.toLowerCase()
 
-    // Every branch below used to be inverted against its own documentation:
-    // "file exists:" skipped when the file was *missing*, so tasks ran when
-    // they should have been skipped and skipped when they should have run.
     if (lower.startsWith('file exists:')) {
       if (await fileExists(projectDir, trimmed.slice('file exists:'.length))) return true
       continue
@@ -118,7 +117,7 @@ export async function evaluateSkipIf(
     }
   }
 
-  return false // No conditions triggered skip
+  return true // All conditions were met
 }
 
 async function fileExists(projectDir: string, filePath: string): Promise<boolean> {
@@ -150,9 +149,9 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
   // Use provided file lock manager or create a new one
   const fileLocks = input.fileLocks ?? new FileLockManager()
-  
-  // Use provided change history or create a new one
-  const changeHistory = input.changeHistory ?? new ChangeHistory()
+
+  // Use provided change history or create a new one with projectDir for path resolution
+  const changeHistory = input.changeHistory ?? new ChangeHistory(projectDir)
 
   // Clean up stale data from previous runs (agents, tasks, dependencies).
   // One transaction: a failure partway through used to leave the tables
@@ -191,12 +190,17 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
   // Adaptive concurrency based on system resources
   const adaptiveMax = pool?.stats().adaptiveMax ?? 4
-  const maxConcurrentWorkers = Math.max(1, Math.min(adaptiveMax, plan.independentGroups[0]?.length ?? 4))
+  // Size against the widest execution wave, not just the first one — a plan
+  // that starts with a single setup task can still fan out to six later.
+  const widestWave = Math.max(1, ...plan.independentGroups.map((g) => g.length))
+  const maxConcurrentWorkers = Math.min(adaptiveMax, widestWave)
 
-  // Pre-warm: Start forking workers for independent tasks immediately
-  const prewarmCount = Math.min(maxConcurrentWorkers, 4)
+  // Pre-warm: Start forking workers for independent tasks immediately.
+  // Bounded by maxConcurrentWorkers (already resource-capped via adaptiveMax),
+  // not a fixed constant, so machines with more CPU/mem headroom actually use it.
+  const prewarmCount = maxConcurrentWorkers
   const prewarmedHandles = new Map<string, LaunchHandle>()
-  
+
   if (prewarmCount > 0) {
     events.push('projects.workerProgress', projectId, {
       projectId,
@@ -231,11 +235,11 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     })
 
     const prewarmResults = await Promise.allSettled(prewarmPromises)
-    
+
     // Log pre-warm results
     const prewarmSuccess = prewarmResults.filter(r => r.status === 'fulfilled' && r.value.success).length
     const prewarmFailed = prewarmResults.filter(r => r.status === 'fulfilled' && !r.value.success).length
-    
+
     events.push('projects.workerProgress', projectId, {
       projectId,
       agentId: masterAgent.id,
@@ -266,7 +270,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       // Use read locks for readFile, write locks for writeFile/deleteFile
       const readFiles = task.readFile
       const writeFiles = [...task.writeFile, ...task.deleteFile]
-      
+
       // Try to acquire read locks first (shared)
       const readLocksAcquired = fileLocks.tryAcquire(readFiles, task.id, 'read')
       if (!readLocksAcquired) {
@@ -286,7 +290,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         }
         continue
       }
-      
+
       // Try to acquire write locks (exclusive)
       const writeLocksAcquired = fileLocks.tryAcquire(writeFiles, task.id, 'write')
       if (!writeLocksAcquired) {
@@ -307,7 +311,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         }
         continue
       }
-      
+
       // Check skipIf conditions (file-based only at this stage)
       if (task.skipIf && task.skipIf.length > 0) {
         const shouldSkip = await evaluateSkipIf(task.skipIf, projectDir)
@@ -324,14 +328,14 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
           continue
         }
       }
-      
+
       assignable.push(task)
     }
 
     // Speculative execution: start tasks with high-confidence dependencies
     if (assignable.length === 0 && inFlight.size < maxConcurrentWorkers) {
-      const pendingTasks = queue.getReadyTasks().filter(t => 
-        t.dependsOn.length > 0 && 
+      const pendingTasks = queue.getReadyTasks().filter(t =>
+        t.dependsOn.length > 0 &&
         !speculativeTasks.has(t.id) &&
         t.dependsOn.some(depId => {
           const dep = queue.getTask(depId)
@@ -344,7 +348,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         const deps = task.dependsOn.map(depId => queue.getTask(depId)).filter(Boolean)
         const runningDeps = deps.filter(d => d?.status === 'running' || d?.status === 'assigned')
         const completedDeps = deps.filter(d => d?.status === 'done')
-        
+
         // Confidence: completed deps are 100%, running deps are ~80% likely to succeed
         const confidence = (completedDeps.length * 1.0 + runningDeps.length * 0.8) / deps.length
 
@@ -355,13 +359,13 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
             taskId: task.id,
             detail: `Speculative execution: confidence ${(confidence * 100).toFixed(0)}%`,
           })
-          
+
           // Mark as speculative
           speculativeTasks.set(task.id, {
             taskId: task.id,
             dependsOn: task.dependsOn,
           })
-          
+
           // Add to assignable (will be processed in the assignment loop)
           assignable.push(task)
         }
@@ -414,7 +418,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
         // Start task execution in background, and keep the promise so the
         // loop can await a completion instead of polling for one.
-        const running = executeTask(agent.id, task, handle, apiKey, model, provider, events, queue, registry, projectId, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, taskSummaries, resourceLimits, pool)
+        const running = executeTask(agent.id, task, handle, apiKey, model, provider, events, queue, registry, projectId, db, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, taskSummaries, resourceLimits, pool)
           .catch((e) => {
             log.error({ agentId: agent.id, error: e }, 'Worker failed')
           })
@@ -587,6 +591,7 @@ async function executeTask(
   queue: TaskQueue,
   registry: AgentRegistry,
   projectId: string,
+  db: SqliteDb,
   fileLocks: FileLockManager,
   changeHistory: ChangeHistory,
   activeWorkers: Map<string, { agent: AgentState; handle: LaunchHandle; taskId: string }>,
@@ -600,12 +605,11 @@ async function executeTask(
   let toolCallCount = 0
 
   try {
-    // Record original file content before worker starts
+    // Record original file content before worker starts (parallel disk reads
+    // instead of one at a time — this gates task start for every file involved)
     const allFiles = [...task.readFile, ...task.writeFile]
-    for (const filePath of allFiles) {
-      await changeHistory.recordBefore(task.id, filePath)
-    }
-    
+    await Promise.all(allFiles.map((filePath) => changeHistory.recordBefore(task.id, filePath)))
+
     // Build a prescriptive system prompt for the worker
     const instructionLines = task.instructions.map((inst, i) => `${i + 1}. ${inst}`).join('\n')
     const readFileList = task.readFile.length > 0 ? task.readFile.join(', ') : '(none)'
@@ -616,7 +620,7 @@ async function executeTask(
     // Gather context from completed dependencies
     const dependencyContext = gatherDependencyContext(task, queue, taskSummaries)
 
-    const systemPrompt = [
+    const systemLines = [
       'You are a worker agent. Follow the instructions EXACTLY. Do not deviate.',
       '',
       `TASK: ${task.title}`,
@@ -637,10 +641,26 @@ async function executeTask(
       '- Make precise edits using edit_file (not write_file for existing files)',
       '- Use write_file only for new files',
       '- After completing all instructions, respond with a brief summary of what was done',
-    ].join('\n')
+    ]
+
+    // On retry, include previous validation failure so worker doesn't repeat the mistake
+    if ((task.retries ?? 0) > 0) {
+      const retryRow = db.prepare(
+        `SELECT validation_output FROM tasks WHERE id = ?`
+      ).get(task.id) as { validation_output?: string } | undefined
+      if (retryRow?.validation_output) {
+        systemLines.push(
+          '',
+          `RETRY ${task.retries} — PREVIOUS VALIDATION FAILED:`,
+          retryRow.validation_output,
+          '',
+          'Do NOT repeat the mistake above. Analyze what went wrong and fix it.',
+        )
+      }
+    }
 
     const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: systemLines.join('\n') },
       { role: 'user', content: `Execute task: ${task.title}` },
     ]
 
@@ -713,12 +733,27 @@ async function executeTask(
         // after a failure case, and the worker already throws on a non-zero
         // exit, so there is nothing to scan for.
         try {
-          const taskTimeout = (task.timeout ?? 120) * 1000
+          const taskTimeout = (task.timeout ?? 120)
           const validationResult = await handle.callTool('run_command', {
             command: cmd,
             timeout: taskTimeout,
           })
           const output = typeof validationResult === 'string' ? validationResult : JSON.stringify(validationResult)
+
+          // Use structured exit code if available
+          let exitCode = 0
+          try {
+            const parsed = JSON.parse(output)
+            exitCode = parsed.exitCode ?? 0
+          } catch {
+            exitCode = 0
+          }
+
+          if (exitCode !== 0) {
+            validationPassed = false
+            queue.recordValidation(task.id, `${cmd}\n${output}`, false)
+            break
+          }
           queue.recordValidation(task.id, `${cmd}\n${output}`, true)
         } catch (e) {
           validationPassed = false
@@ -754,7 +789,7 @@ async function executeTask(
             detail: `Rolled back changes before retry ${retries + 1}/${maxRetries}`,
           })
         }
-        
+
         queue.recordValidation(task.id, `\n[retry ${retries + 1}/${maxRetries}]`, false)
         // Reset task to pending so it gets retried on the next loop iteration
         queue.retryTask(task.id)
@@ -766,7 +801,7 @@ async function executeTask(
           taskId: task.id,
           detail: 'Rolling back changes...',
         })
-        
+
         // Try change history rollback first
         if (changeHistory.hasChanges(task.id)) {
           const result = await changeHistory.rollback(task.id)
@@ -777,7 +812,7 @@ async function executeTask(
             detail: `Restored ${result.restored.length} files, deleted ${result.deleted.length} files`,
           })
         }
-        
+
         // Also run manual rollback commands if provided (for external changes)
         if (task.rollback && task.rollback.length > 0) {
           for (const cmd of task.rollback) {
@@ -788,7 +823,7 @@ async function executeTask(
             }
           }
         }
-        
+
         queue.failTask(task.id)
         failedTasks.push(task.id)
         registry.updateStatus(agentId, 'failed')
@@ -858,7 +893,22 @@ function computeTaskPermissions(task: PlannedTask | TaskState): PermissionsConfi
 
   for (const dir of dirs) {
     if (!files[dir]) {
-      files[dir] = { read: true, write: false, edit: false, delete: false }
+      // Grant write on parent dirs of writeFile entries so workers can create
+      // new files in those directories (Landlock needs write on parent to create).
+      const isWriteParent = task.writeFile.some(f => {
+        const parent = f.split('/').slice(0, -1).join('/')
+        return parent === dir || dir.startsWith(parent + '/')
+      })
+      const isDeleteParent = task.deleteFile.some(f => {
+        const parent = f.split('/').slice(0, -1).join('/')
+        return parent === dir || dir.startsWith(parent + '/')
+      })
+      files[dir] = {
+        read: true,
+        write: isWriteParent,
+        edit: isWriteParent,
+        delete: isDeleteParent,
+      }
     }
   }
 
@@ -875,7 +925,7 @@ function computeToolPermissions(task: PlannedTask | TaskState): string[] {
   if ('allowedTools' in task && task.allowedTools) {
     return task.allowedTools
   }
-  
+
   // Use toolPermissions if provided (TaskState has this as JSON string)
   if ('toolPermissions' in task && task.toolPermissions) {
     try {
@@ -886,7 +936,8 @@ function computeToolPermissions(task: PlannedTask | TaskState): string[] {
   }
 
   // Default: read + write + edit for create/modify, read + delete for delete
-  const tools = ['read_file', 'list_files', 'search_files']
+  // Always include run_command for validation commands
+  const tools = ['read_file', 'list_files', 'search_files', 'run_command']
 
   if (task.type === 'create' || task.type === 'modify' || task.type === 'refactor') {
     tools.push('write_file', 'edit_file')

@@ -1,6 +1,6 @@
 import * as readline from 'node:readline'
 import { TerminalStreamer } from './streaming.js'
-import { managerConversationTurn, type LaunchHandle, type ManagerTurnResult } from './agent/manager.js'
+import { developerConversationTurn, type LaunchHandle, type DeveloperTurnResult } from './agent/developer.js'
 import { AgentRegistry } from './agent/registry.js'
 import { TaskQueue } from './agent/taskqueue.js'
 import { streamChatCompletion, type OpenRouterMessage } from './agent/openrouter.js'
@@ -17,11 +17,14 @@ export interface RunOptions {
   model: string
   verbose: boolean
   projectDir: string
+  autoConfirm?: boolean
 }
 
 const DEFAULT_MAX_RETRIES = 2
 
 async function evaluateSkipIf(conditions: string[], projectDir: string): Promise<boolean> {
+  if (conditions.length === 0) return false
+
   for (const condition of conditions) {
     const trimmed = condition.trim()
 
@@ -30,10 +33,10 @@ async function evaluateSkipIf(conditions: string[], projectDir: string): Promise
       const fullPath = resolve(projectDir, filePath)
       try {
         await access(fullPath)
-        return true
       } catch {
-        continue
+        return false
       }
+      continue
     }
 
     if (trimmed.toLowerCase().startsWith('file missing:')) {
@@ -48,7 +51,7 @@ async function evaluateSkipIf(conditions: string[], projectDir: string): Promise
     }
   }
 
-  return false
+  return true
 }
 
 const SERVER_REQUIRED_PATTERNS = [
@@ -106,7 +109,22 @@ function computeTaskPermissions(task: { readFile: string[]; writeFile: string[];
 
   for (const dir of dirs) {
     if (!files[dir]) {
-      files[dir] = { read: true, write: false, edit: false, delete: false }
+      // Grant write on parent dirs of writeFile entries so workers can create
+      // new files in those directories.
+      const isWriteParent = task.writeFile.some(f => {
+        const parent = f.split('/').slice(0, -1).join('/')
+        return parent === dir || dir.startsWith(parent + '/')
+      })
+      const isDeleteParent = task.deleteFile.some(f => {
+        const parent = f.split('/').slice(0, -1).join('/')
+        return parent === dir || dir.startsWith(parent + '/')
+      })
+      files[dir] = {
+        read: true,
+        write: isWriteParent,
+        edit: isWriteParent,
+        delete: isDeleteParent,
+      }
     }
   }
 
@@ -220,13 +238,18 @@ async function executeTask(
       try {
         for (const cmd of task.validation) {
           try {
-            const result = await handle.callTool('run_command', { command: cmd, timeout: task.timeout * 1000 })
+            const result = await handle.callTool('run_command', { command: cmd, timeout: task.timeout })
             const output = typeof result === 'string' ? result : JSON.stringify(result)
 
-            const hasExitCode = /exit\s+code\s+[1-9]/i.test(output)
-            const hasFailPatterns = /\b(failed|failure|error|exception|panic)\b/i.test(output)
+            let exitCode = 0
+            try {
+              const parsed = JSON.parse(output)
+              exitCode = parsed.exitCode ?? 0
+            } catch {
+              exitCode = 0
+            }
 
-            if (hasExitCode || hasFailPatterns) {
+            if (exitCode !== 0) {
               return false
             }
           } catch {
@@ -262,8 +285,8 @@ export async function runCommand(options: RunOptions): Promise<void> {
   const fileLocks = new FileLockManager()
   const changeHistory = new ChangeHistory()
 
-  const managerAgent = registry.createAgent(sessionId, 'master', 'Orchestrate task execution')
-  registry.updateStatus(managerAgent.id, 'running')
+  const masterAgent = registry.createAgent(sessionId, 'master', 'Orchestrate task execution')
+  registry.updateStatus(masterAgent.id, 'running')
 
   const dummyHandle: LaunchHandle = {
     callTool: async (tool: string, args: unknown) => {
@@ -298,13 +321,31 @@ export async function runCommand(options: RunOptions): Promise<void> {
             return `Error: Command '${cmdName}' is not allowed. Allowed: ${ALLOWED_PREFIXES.join(', ')}`
           }
 
-          const { execSync } = await import('node:child_process')
-          try {
-            return execSync(command, { encoding: 'utf-8', timeout: (a.timeout as number) || 30000, cwd: a.cwd as string | undefined })
-          } catch (e: unknown) {
-            const err = e as { stdout?: string; stderr?: string; message?: string }
-            return err.stdout || err.stderr || err.message || 'Command failed'
-          }
+          const { spawn } = await import('node:child_process')
+          const timeoutMs = (a.timeout as number) || 30000
+          return await new Promise<string>((resolve) => {
+            const proc = spawn(cmdName, cmdParts.slice(1), {
+              cwd: a.cwd as string | undefined,
+              timeout: timeoutMs,
+              stdio: ['ignore', 'pipe', 'pipe'],
+              shell: false,
+            })
+            let stdout = ''
+            let stderr = ''
+            proc.stdout?.on('data', (data: Buffer) => { stdout += data.toString() })
+            proc.stderr?.on('data', (data: Buffer) => { stderr += data.toString() })
+            proc.on('close', (code) => {
+              const exitCode = code ?? 0
+              if (exitCode === 0) {
+                resolve(stdout || '(no output)')
+              } else {
+                resolve(JSON.stringify({ exitCode, stdout, stderr }))
+              }
+            })
+            proc.on('error', (err) => {
+              resolve(JSON.stringify({ exitCode: -1, stdout: '', stderr: err.message }))
+            })
+          })
         }
         default:
           return `Unknown tool: ${tool}`
@@ -332,13 +373,13 @@ export async function runCommand(options: RunOptions): Promise<void> {
   }
 
   streamer.info(`\n🔍 Scanning project in ${options.projectDir}...`)
-  streamer.info(`💬 Starting conversation with manager...\n`)
+  streamer.info(`💬 Starting conversation with developer...\n`)
 
-  let result: ManagerTurnResult
+  let result: DeveloperTurnResult
   let userMessage = initialMessage
 
   for (let turn = 0; turn < 20; turn++) {
-    result = await managerConversationTurn({
+    result = await developerConversationTurn({
       sessionId,
       projectDir: options.projectDir,
       userMessage,
@@ -356,24 +397,28 @@ export async function runCommand(options: RunOptions): Promise<void> {
     if (result.type === 'plan') {
       streamer.planSummary(result.plan)
 
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-      const confirm = await new Promise<string>(resolve => {
-        rl.question('\x1b[1m? Confirm plan? \x1b[0m', answer => {
-          rl.close()
-          resolve(answer.trim().toLowerCase())
-        })
-      })
-
-      if (confirm === 'n' || confirm === 'no') {
-        streamer.warning('Plan rejected. What would you like to change?')
-        userMessage = await new Promise<string>(resolve => {
-          const rl2 = readline.createInterface({ input: process.stdin, output: process.stdout })
-          rl2.question('\x1b[1mFeedback: \x1b[0m', answer => {
-            rl2.close()
-            resolve(answer.trim())
+      if (options.autoConfirm) {
+        streamer.info('Auto-confirming plan (--yes flag)\n')
+      } else {
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+        const confirm = await new Promise<string>(resolve => {
+          rl.question('\x1b[1m? Confirm plan? \x1b[0m', answer => {
+            rl.close()
+            resolve(answer.trim().toLowerCase())
           })
         })
-        continue
+
+        if (confirm === 'n' || confirm === 'no') {
+          streamer.warning('Plan rejected. What would you like to change?')
+          userMessage = await new Promise<string>(resolve => {
+            const rl2 = readline.createInterface({ input: process.stdin, output: process.stdout })
+            rl2.question('\x1b[1mFeedback: \x1b[0m', answer => {
+              rl2.close()
+              resolve(answer.trim())
+            })
+          })
+          continue
+        }
       }
 
       streamer.info('\n🚀 Executing tasks...\n')
@@ -409,7 +454,7 @@ export async function runCommand(options: RunOptions): Promise<void> {
             continue
           }
 
-          const agent = registry.createAgent(sessionId, 'worker', task.title, managerAgent.id)
+          const agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
           queue.assignTask(task.id, agent.id)
           registry.updateStatus(agent.id, 'running')
           queue.startTask(task.id)
@@ -503,5 +548,5 @@ export async function runCommand(options: RunOptions): Promise<void> {
     }
   }
 
-  registry.updateStatus(managerAgent.id, 'done')
+  registry.updateStatus(masterAgent.id, 'done')
 }

@@ -1,26 +1,8 @@
 import type { SqliteDb } from '../db/client.js'
 import { stmt } from '../db/statements.js'
+import type { PlannedTask } from '@codekalakaars/vajra-protocol'
 
 export type TaskStatus = 'pending' | 'assigned' | 'running' | 'done' | 'failed' | 'skipped'
-
-export interface PlannedTask {
-  id: string
-  title: string
-  description: string
-  instructions: string[]
-  readFile: string[]
-  writeFile: string[]
-  deleteFile: string[]
-  createDir: string[]
-  validation: string[]
-  dependsOn: string[]
-  type: 'create' | 'modify' | 'delete' | 'refactor'
-  allowedTools?: string[]
-  timeout?: number
-  maxRetries?: number
-  rollback?: string[]
-  skipIf?: string[]
-}
 
 export interface TaskState {
   id: string
@@ -112,7 +94,7 @@ export class TaskQueue {
       filePermissions: filePermissions ?? null,
       toolPermissions: toolPermissions ?? null,
       retries: 0,
-      maxRetries: task.maxRetries ?? 2,
+      maxRetries: task.retries ?? 2,
       timeout: task.timeout ?? 120,
       rollback: task.rollback ?? [],
       skipIf: task.skipIf ?? [],
@@ -230,7 +212,8 @@ export class TaskQueue {
   }
 
   /**
-   * Persist validation output for a task.
+   * Persist validation output for a task. Appends on retry so the worker can
+   * see why it failed last time.
    */
   recordValidation(taskId: string, output: string, passed: boolean): void {
     const task = this.tasks.get(taskId)
@@ -238,6 +221,21 @@ export class TaskQueue {
       task.validationPassed = passed
     }
 
-    stmt(this.db, `UPDATE tasks SET validation_output = ?, validation_passed = ? WHERE id = ?`).run(output, passed ? 1 : 0, taskId)
+    // Append rather than overwrite so retry history is preserved
+    const existing = this.db
+      .prepare(`SELECT validation_output FROM tasks WHERE id = ?`)
+      .get(taskId) as { validation_output?: string } | undefined
+    const combined = existing?.validation_output
+      ? `${existing.validation_output}\n---\n${output}`
+      : output
+
+    stmt(this.db, `UPDATE tasks SET validation_output = ?, validation_passed = ? WHERE id = ?`).run(combined, passed ? 1 : 0, taskId)
+  }
+
+  /**
+   * Get all tasks for a project.
+   */
+  getAllTasks(): TaskState[] {
+    return [...this.tasks.values()]
   }
 }

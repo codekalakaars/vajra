@@ -1,4 +1,4 @@
-// Shared agent utilities — deduplicated functions used across loop, manager, etc.
+// Shared agent utilities — deduplicated functions used across loop, developer, etc.
 
 import type { SqliteDb } from '../db/client.js'
 import type { SummaryEntry } from './summary.js'

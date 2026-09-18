@@ -21,7 +21,7 @@ so they can work on your code without reading your secrets.
 | Env-file parsing, sample generation, redaction | Implemented |
 | Per-file permission config | Implemented |
 | Sandbox enforcement | Linux (Landlock) and macOS (Seatbelt); **none on Windows** |
-| Multi-agent orchestration | Manager/master/worker roles with plan confirmation |
+| Multi-agent orchestration | Developer/master/worker roles with plan confirmation |
 | TypeScript harness | Implemented |
 
 ## What the native core provides

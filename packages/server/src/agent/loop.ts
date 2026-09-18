@@ -130,7 +130,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
     // intermediate assistant messages — only the final response is shown to the user)
     messages.push(result.message)
 
-    // Process each tool call
+    // Emit toolCall events up front, in order, before dispatching
     for (const toolCall of result.message.toolCalls) {
       const isFree = FREE_TOOLS.has(toolCall.name)
       if (!isFree) toolCallCount++

@@ -24,7 +24,7 @@ export interface ProjectFileEntry {
 
 export type SessionStatus = 'starting' | 'talking' | 'confirming' | 'planning' | 'executing' | 'running' | 'done' | 'failed' | 'stopped'
 
-export type AgentRole = 'manager' | 'master' | 'worker'
+export type AgentRole = 'developer' | 'master' | 'worker'
 export type AgentStatus = 'pending' | 'running' | 'done' | 'failed'
 export type TaskStatus = 'pending' | 'assigned' | 'running' | 'done' | 'failed' | 'skipped'
 export type TaskType = 'create' | 'modify' | 'delete' | 'refactor'
@@ -69,7 +69,7 @@ export interface PlannedTask {
   estimatedDuration?: number
 }
 
-export interface ManagerPlan {
+export interface DeveloperPlan {
   tasks: PlannedTask[]
   independentGroups: string[][]
   estimatedWorkers: number
@@ -210,8 +210,8 @@ export interface PushEventPayloads {
   'session.deleted': { sessionId: string }
   'session.planStarted': { sessionId: string }
   'session.planTask': { sessionId: string; task: PlannedTask }
-  'session.planComplete': { sessionId: string; plan: ManagerPlan }
-  'session.planProposed': { sessionId: string; plan: ManagerPlan }
+  'session.planComplete': { sessionId: string; plan: DeveloperPlan }
+  'session.planProposed': { sessionId: string; plan: DeveloperPlan }
   'session.planConfirmed': Record<string, never>
   'session.workerStarted': { sessionId: string; agentId: string; taskId: string }
   'session.workerProgress': { sessionId: string; agentId: string; task: string; detail: string }

@@ -1,12 +1,12 @@
 // Shared constants for agent configuration.
 //
-// Centralizes magic numbers scattered across loop, manager, and master.
+// Centralizes magic numbers scattered across loop, developer, and master.
 
 /** Maximum tool calls allowed in the single-agent loop. */
 export const MAX_AGENT_TOOL_CALLS = 150
 
-/** Maximum tool calls allowed in the manager conversation loop. */
-export const MAX_MANAGER_TOOL_CALLS = 30
+/** Maximum tool calls allowed in the developer conversation loop. */
+export const MAX_DEVELOPER_TOOL_CALLS = 30
 
 /** Default maximum tool calls for a worker task. */
 export const DEFAULT_WORKER_TOOL_CALLS = 50

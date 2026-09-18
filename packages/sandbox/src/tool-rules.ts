@@ -9,7 +9,7 @@ import type { SandboxConfig } from './config.js'
 
 /** Default tools per agent role. Used when no explicit allowedTools is set. */
 const ROLE_DEFAULTS: Record<string, string[]> = {
-  manager: ['read_file', 'list_files'],
+  developer: ['read_file', 'list_files'],
   master: ['read_file', 'list_files', 'run_command'],
   worker: ['read_file', 'list_files', 'write_file', 'edit_file', 'delete_file', 'create_dir', 'copy_file', 'rename_file'],
 }

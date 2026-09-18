@@ -49,6 +49,7 @@ export class TerminalStreamer {
   }
 
   progress(current: number, total: number, message: string): void {
+    if (total <= 0) return
     const bar = `[${'█'.repeat(Math.floor((current / total) * 20))}${'░'.repeat(20 - Math.floor((current / total) * 20))}]`
     process.stdout.write(`\r\x1b[36m${bar} ${current}/${total}\x1b[0m ${message}`)
     if (current === total) process.stdout.write('\n')

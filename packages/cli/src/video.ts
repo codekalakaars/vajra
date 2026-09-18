@@ -1,7 +1,5 @@
 import { Command } from 'commander'
-import { execSync } from 'node:child_process'
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 const REGISTRY_BASE =
   'https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry'
@@ -42,7 +40,7 @@ videoCommand
         args.push('--tailwind')
       }
       
-      execSync(args.join(' '), { stdio: 'inherit' })
+      execFileSync('npx', args.slice(1), { stdio: 'inherit' })
       console.log(`\nProject "${name}" initialized successfully!`)
       console.log(`\nNext steps:`)
       console.log(`  cd ${name}`)
@@ -62,7 +60,7 @@ videoCommand
     console.log(`Adding block "${block}"...`)
     
     try {
-      execSync(`npx hyperframes add ${block} --dir ${options.dir} --no-clipboard`, {
+      execFileSync('npx', ['hyperframes', 'add', block, '--dir', options.dir, '--no-clipboard'], {
         stdio: 'inherit',
       })
       console.log(`\nBlock "${block}" added successfully!`)
@@ -142,7 +140,7 @@ videoCommand
     if (options.strict) args.push('--strict')
     
     try {
-      execSync(args.join(' '), { stdio: 'inherit' })
+      execFileSync('npx', args.slice(1), { stdio: 'inherit' })
       console.log('\nRender complete!')
     } catch (error) {
       console.error('Render failed:', error)
@@ -159,7 +157,7 @@ videoCommand
     console.log('Starting preview server...\n')
     
     try {
-      execSync(`npx hyperframes preview ${dir} --port ${options.port}`, {
+      execFileSync('npx', ['hyperframes', 'preview', dir, '--port', options.port], {
         stdio: 'inherit',
       })
     } catch (error) {

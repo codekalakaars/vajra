@@ -1,6 +1,6 @@
-import type { ManagerPlan, PlannedTask, ToolName } from '@codekalakaars/vajra-protocol'
+import type { DeveloperPlan, PlannedTask, ToolName } from '@codekalakaars/vajra-protocol'
 import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
-import { getManagerToolSpecs, parseToolCall } from './tools.js'
+import { getDeveloperToolSpecs, parseToolCall } from './tools.js'
 import { scanProject } from '../native.js'
 import { buildNestedTree } from './tree.js'
 import { buildSummaryIndex, formatSummaryIndexHierarchical, searchSummary, type SummaryEntry } from './summary.js'
@@ -86,12 +86,13 @@ function compressMessages(messages: OpenRouterMessage[], model: string, reserveT
     currentTokens += estimateTokens(messages[systemIdx])
   }
 
-  // Keep last 6 messages for recent context
+  // Keep last 6 messages for recent context — but ensure tool-call pairs stay
+  // together. Walk backwards from the end and collect complete units (assistant
+  // with tool_calls + all following tool results).
   const recentCount = 6
   const recentStart = Math.max(0, messages.length - recentCount)
   const recentMessages = messages.slice(recentStart)
 
-  // Add recent messages
   for (const msg of recentMessages) {
     if (compressed.includes(msg)) continue
     const msgTokens = estimateTokens(msg)
@@ -101,39 +102,50 @@ function compressMessages(messages: OpenRouterMessage[], model: string, reserveT
     }
   }
 
-  // If still over limit, compress older tool results
+  // Ensure every tool result in compressed has its parent assistant tool_call
+  // message. If a tool result was included but its assistant was not, drop the
+  // orphaned tool result.
+  const toolCallIds = new Set<string>()
+  for (const msg of compressed) {
+    if (msg.role === 'assistant' && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        toolCallIds.add(tc.id)
+      }
+    }
+  }
+  const pruned = compressed.filter(msg => {
+    if (msg.role === 'tool' && msg.tool_call_id && !toolCallIds.has(msg.tool_call_id)) {
+      currentTokens -= estimateTokens(msg)
+      return false
+    }
+    return true
+  })
+
+  // If still over limit, truncate tool result payloads (each) rather than
+  // dropping entire turns.
   if (currentTokens > maxTokens) {
-    for (let i = 0; i < compressed.length; i++) {
-      const msg = compressed[i]
+    for (let i = 0; i < pruned.length; i++) {
+      const msg = pruned[i]
       if (msg.role === 'tool' && msg.content && msg.content.length > 500) {
         const truncated = msg.content.slice(0, 500) + '\n... (truncated)'
         const savedTokens = estimateTokens(msg) - estimateTokens({ ...msg, content: truncated })
-        compressed[i] = { ...msg, content: truncated }
+        pruned[i] = { ...msg, content: truncated }
         currentTokens -= savedTokens
         if (currentTokens <= maxTokens) break
       }
     }
   }
 
-  // Add summary message if we compressed
-  if (compressed.length < messages.length) {
-    const skippedCount = messages.length - compressed.length
-    compressed.splice(1, 0, {
-      role: 'system',
-      content: `[System: ${skippedCount} earlier messages were compressed to fit context window]`,
-    })
-  }
-
-  return compressed
+  return pruned
 }
 
-function buildManagerConversationPrompt(
+function buildDeveloperConversationPrompt(
   projectDir: string,
   tree: string,
   summary: string,
 ): string {
   return [
-    'You are the Manager — a software engineering planning agent.',
+    'You are the Developer — a software engineering planning agent.',
     '',
     'Your job is to:',
     '1. Understand the user\'s task through conversation',
@@ -197,7 +209,7 @@ function buildManagerConversationPrompt(
   ].join('\n')
 }
 
-function parseProposePlanArgs(raw: unknown): ManagerPlan {
+function parseProposePlanArgs(raw: unknown): DeveloperPlan {
   const args = raw as {
     tasks?: Array<{
       title: string
@@ -235,7 +247,7 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
     validation: t.validation ?? [],
     dependsOn: t.dependsOn ?? [],
     type: (['create', 'modify', 'delete', 'refactor'].includes(t.type) ? t.type : 'modify') as PlannedTask['type'],
-    complexity: (['low', 'medium', 'high', 'critical'].includes(t.complexity ?? '') ? t.complexity : 'medium') as PlannedTask['complexity'],
+    complexity: (['low', 'medium', 'high'].includes(t.complexity ?? '') ? t.complexity : 'medium') as PlannedTask['complexity'],
     validationStrategy: (['hierarchical', 'targeted', 'full', 'skip'].includes(t.validationStrategy ?? '') ? t.validationStrategy : 'hierarchical') as PlannedTask['validationStrategy'],
     alternativeApproaches: t.alternativeApproaches ?? [],
     estimatedDuration: t.estimatedDuration ? parseInt(t.estimatedDuration, 10) : undefined,
@@ -251,21 +263,27 @@ function parseProposePlanArgs(raw: unknown): ManagerPlan {
     task.dependsOn = task.dependsOn.filter(dep => taskIds.has(dep))
   }
 
+  // Compute parallel execution waves. Level 0 is everything with no
+  // dependencies; level N is everything whose dependencies all landed in an
+  // earlier level. Tasks sharing a level can genuinely run in parallel — the
+  // previous greedy pass put a task in the same group as its own dependency,
+  // so "independent group" did not mean independent.
   const independentGroups: string[][] = []
-  const assigned = new Set<string>()
-  for (const task of tasks) {
-    if (assigned.has(task.id)) continue
-    const group = [task.id]
-    assigned.add(task.id)
-    for (const other of tasks) {
-      if (assigned.has(other.id)) continue
-      const depsUnassigned = other.dependsOn.some(dep => !assigned.has(dep))
-      if (!depsUnassigned) {
-        group.push(other.id)
-        assigned.add(other.id)
-      }
+  const placed = new Set<string>()
+  while (placed.size < tasks.length) {
+    const wave = tasks
+      .filter((t) => !placed.has(t.id) && t.dependsOn.every((dep) => placed.has(dep)))
+      .map((t) => t.id)
+
+    // Nothing can advance — whatever is left is unresolvable (e.g. a cycle
+    // that survived cleanup). Emit it as a final wave instead of spinning.
+    if (wave.length === 0) {
+      independentGroups.push(tasks.filter((t) => !placed.has(t.id)).map((t) => t.id))
+      break
     }
-    independentGroups.push(group)
+
+    for (const id of wave) placed.add(id)
+    independentGroups.push(wave)
   }
 
   return {
@@ -323,21 +341,27 @@ function detectAndRemoveCircularDeps(tasks: PlannedTask[]): PlannedTask[] {
 }
 
 function addFileLevelDependencies(tasks: PlannedTask[]): PlannedTask[] {
-  for (const task of tasks) {
-    for (const other of tasks) {
-      if (task.id === other.id) continue
-      const writesToReadFiles = other.writeFile.some(file =>
-        task.readFile.includes(file) || task.writeFile.includes(file)
+  // Edges always point backwards in plan order: a later task that touches a
+  // file an earlier task writes waits for it. Adding the edge in both
+  // directions (as this used to) deadlocks the queue whenever two tasks touch
+  // the same file — neither ever becomes ready and the plan silently stalls.
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i]
+    for (let j = 0; j < i; j++) {
+      const earlier = tasks[j]
+      const writesFileWeTouch = earlier.writeFile.some(
+        (file) => task.readFile.includes(file) || task.writeFile.includes(file),
       )
-      if (writesToReadFiles && !task.dependsOn.includes(other.id)) {
-        task.dependsOn.push(other.id)
+      if (writesFileWeTouch && !task.dependsOn.includes(earlier.id)) {
+        task.dependsOn.push(earlier.id)
       }
     }
   }
+
   return tasks
 }
 
-export interface ManagerTurnInput {
+export interface DeveloperTurnInput {
   sessionId: string
   projectDir: string
   userMessage: string
@@ -350,13 +374,13 @@ export interface ManagerTurnInput {
   onThinkingDelta?: (text: string) => void
 }
 
-export type ManagerTurnResult =
+export type DeveloperTurnResult =
   | { type: 'response'; response: string }
-  | { type: 'plan'; plan: ManagerPlan }
+  | { type: 'plan'; plan: DeveloperPlan }
 
-export async function managerConversationTurn(
-  input: ManagerTurnInput,
-): Promise<ManagerTurnResult> {
+export async function developerConversationTurn(
+  input: DeveloperTurnInput,
+): Promise<DeveloperTurnResult> {
   const { sessionId, projectDir, userMessage, model, apiKey, handle, messages, summaryIndex, onTextDelta, onThinkingDelta } = input
 
   if (messages.length === 0) {
@@ -375,13 +399,13 @@ export async function managerConversationTurn(
     const summaryText = formatSummaryIndexHierarchical(summaryIndex)
     messages.push({
       role: 'system',
-      content: buildManagerConversationPrompt(projectDir, tree, summaryText),
+      content: buildDeveloperConversationPrompt(projectDir, tree, summaryText),
     })
   }
 
   messages.push({ role: 'user', content: userMessage })
 
-  const toolSpecs = getManagerToolSpecs()
+  const toolSpecs = getDeveloperToolSpecs()
   let toolCallCount = 0
   const MAX_TOOL_CALLS = 30
 
@@ -426,8 +450,10 @@ export async function managerConversationTurn(
           })
           continue
         }
-        plan.tasks = detectAndRemoveCircularDeps(plan.tasks)
         plan.tasks = addFileLevelDependencies(plan.tasks)
+        // Must run AFTER the file-level pass, which can introduce edges the
+        // planner never declared.
+        plan.tasks = detectAndRemoveCircularDeps(plan.tasks)
         messages.push({
           role: 'tool',
           content: 'Plan proposed. Awaiting user review.',
@@ -439,7 +465,18 @@ export async function managerConversationTurn(
       const isFree = FREE_TOOLS.has(toolCall.function.name)
       if (!isFree) {
         toolCallCount++
-        if (toolCallCount > MAX_TOOL_CALLS) break
+      }
+
+      // Budget exhausted — still append a synthetic result so the tool-call
+      // chain is never left dangling. The provider will reject a conversation
+      // with an assistant tool_call that has no matching tool result.
+      if (toolCallCount > MAX_TOOL_CALLS) {
+        messages.push({
+          role: 'tool',
+          content: 'Error: Tool call budget exhausted. Please produce a plan based on what you have learned so far.',
+          tool_call_id: toolCall.id,
+        })
+        continue
       }
 
       const parsed = parseToolCall(toolCall)
