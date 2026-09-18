@@ -29,12 +29,13 @@ program
 
 program
   .command('run')
-  .description('Start an interactive session with the manager agent')
+  .description('Start an interactive session with the developer agent')
   .argument('[task]', 'Initial task description (optional)')
   .option('-k, --api-key <key>', 'API key (OpenRouter or OpenCode Zen)')
   .option('-m, --model <model>', 'LLM model to use', process.env.VAJRA_MODEL || 'zen/nemotron-3-ultra-free')
   .option('-v, --verbose', 'Show thinking/reasoning output')
   .option('-d, --dir <directory>', 'Project directory', process.cwd())
+  .option('-y, --yes', 'Auto-confirm all plans without prompting')
   .action(async (task, options) => {
     await runCommand({
       task,
@@ -42,6 +43,7 @@ program
       model: options.model,
       verbose: options.verbose,
       projectDir: options.dir,
+      autoConfirm: options.yes,
     })
   })
 
@@ -87,7 +89,7 @@ program
       }
 
       writeFileSync(envPath, envContent)
-      console.log(`Set ${key}=${value}`)
+      console.log(`Set ${key}=${key.includes('KEY') ? '***' : value}`)
       return
     }
 

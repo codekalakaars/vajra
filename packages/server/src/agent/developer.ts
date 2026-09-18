@@ -1,38 +1,38 @@
-// Manager Agent — conversational planning.
+// Developer Agent — conversational planning.
 //
-// The manager runs in the main server process and makes LLM calls to
+// The developer runs in the main server process and makes LLM calls to
 // understand the user's task through conversation. When it has enough
 // context, it calls the `propose_plan` tool, which is intercepted here
 // (never dispatched to the sandboxed worker) and returned as a
-// ManagerPlan for the user to review.
+// DeveloperPlan for the user to review.
 //
 // File tools (read_file, list_files, search_files) are dispatched to the
 // sandboxed worker via the LaunchHandle, same as the single-agent loop.
 
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../project/manager.js'
-import type { ManagerPlan, PlannedTask, ToolName } from '@codekalakaars/vajra-protocol'
+import type { DeveloperPlan, PlannedTask, ToolName } from '@codekalakaars/vajra-protocol'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
-import { getManagerToolSpecs, parseToolCall } from './tools.js'
-import { formatSummaryIndexHierarchical, type SummaryEntry } from './summary.js'
+import { getDeveloperToolSpecs, parseToolCall } from './tools.js'
 import { projectContext } from './project-context.js'
+import { buildSummaryIndex, formatSummaryIndexHierarchical, type SummaryEntry } from './summary.js'
 import { compressMessages } from './context.js'
 import { searchSummary, appendMessage, nextSeq } from './utils.js'
-import { MAX_MANAGER_TOOL_CALLS, MAX_TASK_CONTEXT_SIZE, MAX_CONTEXT_LINES } from './constants.js'
+import { MAX_DEVELOPER_TOOL_CALLS, MAX_TASK_CONTEXT_SIZE, MAX_CONTEXT_LINES } from './constants.js'
 import { componentLogger } from '../logger.js'
 
-const log = componentLogger('manager')
+const log = componentLogger('developer')
 
 const FREE_TOOLS = new Set(['search_files'])
 
-function buildManagerConversationPrompt(
+function buildDeveloperConversationPrompt(
   projectDir: string,
   tree: string,
   summary: string,
   architecture?: string,
 ): string {
   return [
-    'You are the Manager — a software engineering planning agent.',
+    'You are the Developer — a software engineering planning agent.',
     '',
     'Your job is to:',
     '1. Understand the user\'s task through conversation',
@@ -47,10 +47,13 @@ function buildManagerConversationPrompt(
     '- propose_plan(tasks, summary): propose a detailed plan when ready',
     '',
     'IMPORTANT RULES:',
-    '- Do NOT call propose_plan on the first message — gather context first',
-    '- Ask 2-4 clarifying questions before planning',
+    '- Do NOT call propose_plan on the first message — read files first to understand the codebase',
+    '- If the user provides specific requirements (validation rules, file names, libraries to use), skip ALL clarifying questions and go directly to propose_plan',
+    '- Only ask clarifying questions if the task is extremely vague (e.g., "fix the bug" with no context)',
+    '- NEVER ask more than 2 clarifying questions — prefer making reasonable defaults',
     '- Only read files you need to understand the task',
     '- Tasks must be HIGHLY PRESCRIPTIVE — the worker should not need to think',
+    '- NEVER put "run tests" or "verify" as the first task — always edit code first, then test',
     '',
     'When calling propose_plan, each task MUST include:',
     '- title: Short title',
@@ -60,7 +63,7 @@ function buildManagerConversationPrompt(
     '- writeFile: Files the worker will create or modify',
     '- deleteFile: Files to delete',
     '- createDir: Directories to create',
-    '- validation: Commands to run after completion (must exit 0 on success)',
+    '- validation: Commands to run after completion (must exit 0 on success). IMPORTANT: Do NOT use commands that require a running server (npm test, curl localhost, etc.) unless the task explicitly starts the server. Use syntax checks (node --check, tsc --noEmit) or static analysis (eslint) instead.',
     '- dependsOn: Task IDs this depends on',
     '- type: create, modify, delete, or refactor',
     '- allowedTools: Tools this worker can use (optional, defaults to task-type defaults)',
@@ -111,19 +114,23 @@ async function readTaskContext(
   writeFile: string[],
   instructions: string[],
   handle: LaunchHandle,
+  fileCache: Map<string, string>,
 ): Promise<string> {
   // Combine all files that need to be read or written
   const allFiles = [...new Set([...readFile, ...writeFile])]
 
-  // One round trip each, serially, meant the plan sat waiting on IPC for as
-  // many hops as it had files.
-  const reads = await Promise.all(
-    allFiles.map(async (filePath) => {
+  // Reuse content already fetched during the Developer's exploration; only
+  // fetch the ones that are missing, and fetch those concurrently instead
+  // of one file at a time.
+  const uncached = allFiles.filter((f) => !fileCache.has(f))
+  await Promise.all(
+    uncached.map(async (filePath) => {
       try {
         const result = await handle.callTool('read_file', { path: filePath })
-        return { filePath, content: typeof result === 'string' ? result : JSON.stringify(result) }
+        const content = typeof result === 'string' ? result : JSON.stringify(result)
+        fileCache.set(filePath, content)
       } catch {
-        return null // File might not exist yet (for writeFile targets)
+        // File might not exist yet (for writeFile targets) — leave uncached
       }
     }),
   )
@@ -131,16 +138,20 @@ async function readTaskContext(
   const contextParts: string[] = []
   let currentSize = 0
 
-  for (const read of reads) {
-    if (!read) continue
+  for (const filePath of allFiles) {
     if (currentSize >= MAX_TASK_CONTEXT_SIZE) break
 
-    const relevantLines = extractRelevantLines(read.content, instructions)
-    if (relevantLines.length === 0) continue
+    const content = fileCache.get(filePath)
+    if (content === undefined) continue
 
-    const snippet = `\n--- ${read.filePath} ---\n${relevantLines}\n--- end ${read.filePath} ---`
-    contextParts.push(snippet)
-    currentSize += snippet.length
+    // Extract relevant lines based on instructions
+    const relevantLines = extractRelevantLines(content, instructions)
+
+    if (relevantLines.length > 0) {
+      const snippet = `\n--- ${filePath} ---\n${relevantLines}\n--- end ${filePath} ---`
+      contextParts.push(snippet)
+      currentSize += snippet.length
+    }
   }
 
   return contextParts.join('\n')
@@ -212,12 +223,13 @@ function extractRelevantLines(content: string, instructions: string[]): string {
 }
 
 /**
- * Identify key files in the project for initial exploration.
- * Returns files that are likely entry points, configs, or architecture-defining.
+ * Analyze project architecture from key files.
+ * Returns a summary of the project's structure and patterns.
  */
-function identifyKeyFiles(summary: SummaryEntry[]): string[] {
-  const keyFiles: string[] = []
-  
+async function analyzeArchitecture(
+  summaryIndex: SummaryEntry[],
+  handle: LaunchHandle,
+): Promise<string> {
   // Common entry points and config files
   const entryPatterns = [
     /package\.json$/,
@@ -233,9 +245,10 @@ function identifyKeyFiles(summary: SummaryEntry[]): string[] {
     /.*config\.(ts|js|json)$/,
     /.*\.config\.(ts|js|json)$/,
   ]
-  
+
   // Find files matching entry patterns
-  for (const entry of summary) {
+  const keyFiles: string[] = []
+  for (const entry of summaryIndex) {
     for (const pattern of entryPatterns) {
       if (pattern.test(entry.path)) {
         keyFiles.push(entry.path)
@@ -243,43 +256,23 @@ function identifyKeyFiles(summary: SummaryEntry[]): string[] {
       }
     }
   }
-  
+
   // Find files with high export counts (likely architecture-defining)
-  const highExportFiles = summary
+  const highExportFiles = summaryIndex
     .filter(e => e.exportCount >= 3)
     .sort((a, b) => b.exportCount - a.exportCount)
     .slice(0, 5)
     .map(e => e.path)
-  
-  keyFiles.push(...highExportFiles)
-  
-  // Find files with many imports (likely integration points)
-  const highImportFiles = summary
-    .filter(e => e.importCount >= 5)
-    .sort((a, b) => b.importCount - a.importCount)
-    .slice(0, 5)
-    .map(e => e.path)
-  
-  keyFiles.push(...highImportFiles)
-  
-  // Deduplicate and return top files
-  return [...new Set(keyFiles)].slice(0, 10)
-}
 
-/**
- * Analyze project architecture from key files.
- * Returns a summary of the project's structure and patterns.
- */
-async function analyzeArchitecture(
-  summary: SummaryEntry[],
-  handle: LaunchHandle,
-): Promise<string> {
-  const keyFiles = identifyKeyFiles(summary).slice(0, 5)
+  keyFiles.push(...highExportFiles)
+
+  // Deduplicate and take top 5
+  const uniqueKeyFiles = [...new Set(keyFiles)].slice(0, 5)
 
   // Read them together: one round trip each, serially, was five round trips
-  // of latency before the manager could say anything at all.
+  // of latency before the developer could say anything at all.
   const reads = await Promise.all(
-    keyFiles.map(async (filePath) => {
+    uniqueKeyFiles.map(async (filePath) => {
       try {
         const result = await handle.callTool('read_file', { path: filePath })
         return { filePath, content: typeof result === 'string' ? result : JSON.stringify(result) }
@@ -306,7 +299,7 @@ async function analyzeArchitecture(
   return architectureParts.join('\n')
 }
 
-export function parseProposePlanArgs(raw: unknown): ManagerPlan {
+function parseProposePlanArgs(raw: unknown): DeveloperPlan {
   const args = raw as {
     tasks: Array<{
       title: string
@@ -359,23 +352,31 @@ export function parseProposePlanArgs(raw: unknown): ManagerPlan {
   tasks = addFileLevelDependencies(tasks)
   tasks = detectAndRemoveCircularDeps(tasks)
 
-  // Compute independent groups from dependency graph
+  // Detect and remove circular dependencies. Must run AFTER the file-level
+  // pass, which can introduce edges the planner never declared.
+  tasks = detectAndRemoveCircularDeps(tasks)
+
+  // Compute parallel execution waves. Level 0 is everything with no
+  // dependencies; level N is everything whose dependencies all landed in an
+  // earlier level. Tasks sharing a level can genuinely run in parallel — the
+  // previous greedy pass put a task in the same group as its own dependency,
+  // so "independent group" did not mean independent.
   const independentGroups: string[][] = []
-  const assigned = new Set<string>()
-  for (const task of tasks) {
-    if (assigned.has(task.id)) continue
-    const group = [task.id]
-    assigned.add(task.id)
-    // Find tasks with no deps on unassigned tasks
-    for (const other of tasks) {
-      if (assigned.has(other.id)) continue
-      const depsUnassigned = other.dependsOn.some(dep => !assigned.has(dep))
-      if (!depsUnassigned) {
-        group.push(other.id)
-        assigned.add(other.id)
-      }
+  const placed = new Set<string>()
+  while (placed.size < tasks.length) {
+    const wave = tasks
+      .filter((t) => !placed.has(t.id) && t.dependsOn.every((dep) => placed.has(dep)))
+      .map((t) => t.id)
+
+    // Nothing can advance — whatever is left is unresolvable (e.g. a cycle
+    // that survived cleanup). Emit it as a final wave instead of spinning.
+    if (wave.length === 0) {
+      independentGroups.push(tasks.filter((t) => !placed.has(t.id)).map((t) => t.id))
+      break
     }
-    independentGroups.push(group)
+
+    for (const id of wave) placed.add(id)
+    independentGroups.push(wave)
   }
 
   // Optimize task ordering for parallelism
@@ -405,16 +406,16 @@ function estimateTaskDurations(tasks: PlannedTask[]): PlannedTask[] {
 
   return tasks.map(task => {
     const base = baseDuration[task.complexity ?? 'medium'] ?? 120
-    
+
     // Adjust based on file count
     const fileCount = task.readFile.length + task.writeFile.length
     const fileMultiplier = Math.max(1, fileCount / 3) // 3 files = 1x, 6 files = 2x
-    
+
     // Adjust based on validation count
     const validationMultiplier = Math.max(1, task.validation.length / 2) // 2 commands = 1x
-    
+
     const estimatedDuration = Math.round(base * fileMultiplier * validationMultiplier)
-    
+
     return {
       ...task,
       estimatedDuration,
@@ -506,7 +507,7 @@ function addFileLevelDependencies(tasks: PlannedTask[]): PlannedTask[] {
 function optimizeTaskOrder(tasks: PlannedTask[], independentGroups: string[][]): PlannedTask[] {
   const taskMap = new Map(tasks.map(t => [t.id, t]))
   const optimized: PlannedTask[] = []
-  
+
   for (const group of independentGroups) {
     // Sort tasks within group by complexity (low first for quick wins)
     const groupTasks = group
@@ -515,16 +516,16 @@ function optimizeTaskOrder(tasks: PlannedTask[], independentGroups: string[][]):
         const complexityOrder = { low: 0, medium: 1, high: 2 }
         return (complexityOrder[a.complexity ?? 'medium'] ?? 1) - (complexityOrder[b.complexity ?? 'medium'] ?? 1)
       })
-    
+
     optimized.push(...groupTasks)
   }
-  
+
   return optimized
 }
 
 // ---- Public API ----
 
-export interface ManagerTurnInput {
+export interface DeveloperTurnInput {
   projectId: string
   projectDir: string
   userMessage: string
@@ -538,25 +539,27 @@ export interface ManagerTurnInput {
   messages: ChatMessage[]
   /** Summary index for in-memory search. Built on first turn. */
   summaryIndex: SummaryEntry[]
+  /** Cache of file contents already read during this conversation. Mutated in place. */
+  fileCache: Map<string, string>
 }
 
-export type ManagerTurnResult =
+export type DeveloperTurnResult =
   | { type: 'response'; response: string }
-  | { type: 'plan'; plan: ManagerPlan }
+  | { type: 'plan'; plan: DeveloperPlan }
 
 /**
- * Run one turn of the Manager's conversation.
+ * Run one turn of the Developer's conversation.
  *
  * On the first call, builds the system prompt with project context.
  * Subsequent calls reuse the existing conversation history.
  *
- * Returns either a text response (Manager is still gathering context) or
- * a ManagerPlan (Manager called propose_plan).
+ * Returns either a text response (Developer is still gathering context) or
+ * a DeveloperPlan (Developer called propose_plan).
  */
-export async function managerConversationTurn(
-  input: ManagerTurnInput,
-): Promise<ManagerTurnResult> {
-  const { projectId, projectDir, userMessage, model, apiKey, provider, events, db, handle, messages, summaryIndex } = input
+export async function developerConversationTurn(
+  input: DeveloperTurnInput,
+): Promise<DeveloperTurnResult> {
+  const { projectId, projectDir, userMessage, model, apiKey, provider, events, db, handle, messages, summaryIndex, fileCache } = input
 
   // First turn: build system prompt and project context
   if (messages.length === 0) {
@@ -569,7 +572,7 @@ export async function managerConversationTurn(
     // Auto-analyze architecture from key files
     events.push('projects.workerProgress', projectId, {
       projectId,
-      agentId: 'manager',
+      agentId: 'developer',
       taskId: 'master',
       detail: 'Analyzing project architecture...',
     })
@@ -578,7 +581,7 @@ export async function managerConversationTurn(
     const summaryText = formatSummaryIndexHierarchical(summaryIndex)
     messages.push({
       role: 'system',
-      content: buildManagerConversationPrompt(projectDir, tree, summaryText, architecture),
+      content: buildDeveloperConversationPrompt(projectDir, tree, summaryText, architecture),
     })
   }
 
@@ -590,11 +593,11 @@ export async function managerConversationTurn(
   messages.push({ role: 'user', content: userMessage })
 
   const providerType = provider.name === 'anthropic' ? 'anthropic' : 'openai'
-  const toolSpecs = getManagerToolSpecs(providerType)
+  const toolSpecs = getDeveloperToolSpecs(providerType)
   let toolCallCount = 0
 
-  // Tool-use loop (Manager may call read_file/list_files/search_files before proposing)
-  while (toolCallCount < MAX_MANAGER_TOOL_CALLS) {
+  // Tool-use loop (Developer may call read_file/list_files/search_files before proposing)
+  while (toolCallCount < MAX_DEVELOPER_TOOL_CALLS) {
     // Compress for the request only. The full history stays in `messages`:
     // overwriting it with the compressed view discards context permanently and
     // makes every later turn compress an already-lossy transcript.
@@ -618,38 +621,97 @@ export async function managerConversationTurn(
     // Has tool calls — process them
     messages.push(result.message)
 
-    for (const toolCall of result.message.toolCalls) {
-      // Intercept propose_plan — never dispatch to worker
-      if (toolCall.name === 'propose_plan') {
-        let parsed: unknown
-        try {
-          parsed = JSON.parse(toolCall.arguments)
-        } catch {
-          // Bad JSON — tell the LLM and let it retry
-          messages.push({
-            role: 'tool',
-            content: 'Error: propose_plan arguments were not valid JSON. Please try again.',
-            toolCallId: toolCall.id,
-          })
-          continue
+    // propose_plan ends the turn immediately (never dispatched to the worker),
+    // so any tool calls before it in this batch are the only ones that need
+    // dispatching — run those concurrently instead of one at a time.
+    const planIndex = result.message.toolCalls.findIndex((tc) => tc.name === 'propose_plan')
+    const dispatchCalls = planIndex === -1 ? result.message.toolCalls : result.message.toolCalls.slice(0, planIndex)
+
+    const dispatchResults = await Promise.all(
+      dispatchCalls.map(async (toolCall) => {
+        const isFree = FREE_TOOLS.has(toolCall.name)
+        if (!isFree) {
+          toolCallCount++
+          if (toolCallCount > MAX_DEVELOPER_TOOL_CALLS) return null
         }
 
-        const plan = parseProposePlanArgs(parsed)
+        const parsed = parseToolCall(toolCall)
+        let resultContent: string
 
-        // Inject relevant code context into task instructions
-        events.push('projects.workerProgress', projectId, {
-          projectId,
-          agentId: 'manager',
-          taskId: 'master',
-          detail: 'Injecting code context into task instructions...',
+        if (!parsed.ok) {
+          resultContent = `Error: ${parsed.error}`
+        } else if (parsed.call.tool === ('search_files' as ToolName)) {
+          // Handle search_files in main process (in-memory index)
+          const args = parsed.call.args as { query: string }
+          resultContent = searchSummary(summaryIndex, args.query)
+        } else {
+          // Dispatch read_file / list_files to sandboxed worker
+          try {
+            const callResult = await handle.callTool(parsed.call.tool, parsed.call.args)
+            resultContent = typeof callResult === 'string' ? callResult : JSON.stringify(callResult)
+            // Cache read_file results so plan-time context gathering doesn't re-read
+            if (parsed.call.tool === ('read_file' as ToolName)) {
+              const args = parsed.call.args as { path: string }
+              fileCache.set(args.path, resultContent)
+            }
+          } catch (e) {
+            resultContent = `Error: ${e instanceof Error ? e.message : String(e)}`
+          }
+        }
+
+        return { role: 'tool' as const, content: resultContent, toolCallId: toolCall.id }
+      }),
+    )
+
+    for (const toolResult of dispatchResults) {
+      if (toolResult) messages.push(toolResult)
+    }
+
+    if (planIndex !== -1) {
+      const toolCall = result.message.toolCalls[planIndex]
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(toolCall.arguments)
+      } catch {
+        // Bad JSON — tell the LLM and let it retry on the next loop iteration
+        messages.push({
+          role: 'tool',
+          content: 'Error: propose_plan arguments were not valid JSON. Please try again.',
+          toolCallId: toolCall.id,
         })
+        continue
+      }
 
-        await Promise.all(plan.tasks.map(async (task) => {
+      const plan = parseProposePlanArgs(parsed)
+
+      // Close out the tool call before returning. The assistant message holding
+      // this tool_call is already in history, and providers reject a
+      // conversation where a tool call has no matching result — without this,
+      // the next user turn (rejecting the plan and giving feedback) fails.
+      messages.push({
+        role: 'tool',
+        content: 'Plan proposed. Awaiting user review.',
+        toolCallId: toolCall.id,
+      })
+
+      // Inject relevant code context into task instructions
+      events.push('projects.workerProgress', projectId, {
+        projectId,
+        agentId: 'developer',
+        taskId: 'master',
+        detail: 'Injecting code context into task instructions...',
+      })
+
+      // Tasks are independent for context-gathering purposes; the shared
+      // fileCache dedupes overlapping reads across tasks, so fetch concurrently.
+      await Promise.all(
+        plan.tasks.map(async (task) => {
           const context = await readTaskContext(
             task.readFile,
             task.writeFile,
             task.instructions,
             handle,
+            fileCache,
           )
 
           if (context) {
@@ -661,56 +723,21 @@ export async function managerConversationTurn(
               ...task.instructions,
             ]
           }
-        }))
+        }),
+      )
 
-        // Emit plan events
-        events.push('projects.planStarted', projectId, { projectId })
-        for (const t of plan.tasks) {
-          events.push('projects.planTask', projectId, { projectId, task: t })
-        }
-        events.push('projects.planComplete', projectId, { projectId, plan })
-
-        // Persist the plan as the final assistant message
-        const planSeq = nextSeq(db, projectId)
-        appendMessage(db, projectId, planSeq, 'assistant', JSON.stringify(plan))
-
-        return { type: 'plan', plan }
+      // Emit plan events
+      events.push('projects.planStarted', projectId, { projectId })
+      for (const t of plan.tasks) {
+        events.push('projects.planTask', projectId, { projectId, task: t })
       }
+      events.push('projects.planComplete', projectId, { projectId, plan })
 
-      // All other tools: dispatch to sandboxed worker
-      const isFree = FREE_TOOLS.has(toolCall.name)
-      if (!isFree) toolCallCount++
-      // Over budget: answer the call with an error instead of breaking out of
-      // the batch. Every tool call in the assistant message needs a result —
-      // leaving one unanswered makes the next request invalid.
-      const overBudget = !isFree && toolCallCount > MAX_MANAGER_TOOL_CALLS
+      // Persist the plan as the final assistant message
+      const planSeq = nextSeq(db, projectId)
+      appendMessage(db, projectId, planSeq, 'assistant', JSON.stringify(plan))
 
-      const parsed = parseToolCall(toolCall)
-      let resultContent: string
-
-      if (overBudget) {
-        resultContent = `Error: tool call budget exhausted (${MAX_MANAGER_TOOL_CALLS}). Stop exploring and either ask the user a question or call propose_plan.`
-      } else if (!parsed.ok) {
-        resultContent = `Error: ${parsed.error}`
-      } else if (parsed.call.tool === ('search_files' as ToolName)) {
-        // Handle search_files in main process (in-memory index)
-        const args = parsed.call.args as { query: string }
-        resultContent = searchSummary(summaryIndex, args.query)
-      } else {
-        // Dispatch read_file / list_files to sandboxed worker
-        try {
-          const result = await handle.callTool(parsed.call.tool, parsed.call.args)
-          resultContent = typeof result === 'string' ? result : JSON.stringify(result)
-        } catch (e) {
-          resultContent = `Error: ${e instanceof Error ? e.message : String(e)}`
-        }
-      }
-
-      messages.push({
-        role: 'tool',
-        content: resultContent,
-        toolCallId: toolCall.id,
-      })
+      return { type: 'plan', plan }
     }
   }
 

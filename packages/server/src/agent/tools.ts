@@ -22,9 +22,9 @@ export function getToolSpecs(provider: 'openai' | 'anthropic' = 'openai'): ToolS
   })
 }
 
-/** Tool specs for the Manager role (read-only + propose_plan). */
-export function getManagerToolSpecs(provider: 'openai' | 'anthropic' = 'openai'): ToolSpec[] {
-  const raw = provider === 'anthropic' ? toAnthropicToolSpecs(roleTools.manager) : toOpenAiToolSpecs(roleTools.manager)
+/** Tool specs for the Developer role (read-only + propose_plan). */
+export function getDeveloperToolSpecs(provider: 'openai' | 'anthropic' = 'openai'): ToolSpec[] {
+  const raw = provider === 'anthropic' ? toAnthropicToolSpecs(roleTools.developer) : toOpenAiToolSpecs(roleTools.developer)
   return raw.map((s) => {
     if ('function' in s) {
       return { name: s.function.name, description: s.function.description, parameters: s.function.parameters as unknown as Record<string, unknown> }

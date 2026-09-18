@@ -1,6 +1,6 @@
 // Provider-agnostic types for LLM interaction.
 //
-// All agent code (loop, manager, master) depends on ChatProvider, never on a
+// All agent code (loop, developer, master) depends on ChatProvider, never on a
 // concrete SDK. Adding a new provider means implementing this interface — no
 // changes to the agent layer.
 

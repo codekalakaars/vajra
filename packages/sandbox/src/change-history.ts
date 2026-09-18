@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { dirname, resolve, relative } from 'node:path'
 
 export interface FileChange {
   taskId: string
@@ -18,9 +18,33 @@ export interface TaskChanges {
  * Tracks file modifications for rollback support.
  * Stores original file content before each modification,
  * allowing rollback to the pre-modification state.
+ *
+ * If projectDir is provided, all paths are resolved relative to it
+ * and a guard refuses any resolved path outside the project root.
  */
 export class ChangeHistory {
   private changes = new Map<string, TaskChanges>()
+  private projectDir: string | null
+
+  constructor(projectDir?: string) {
+    this.projectDir = projectDir ?? null
+  }
+
+  /**
+   * Resolve a task-relative path to an absolute path, ensuring it stays
+   * within the project directory. If no projectDir was set, returns the
+   * path as-is (legacy behavior).
+   */
+  private resolvePath(filePath: string): string {
+    if (!this.projectDir) return filePath
+    const abs = resolve(this.projectDir, filePath)
+    // Guard: resolved path must be inside the project root
+    const rel = relative(this.projectDir, abs)
+    if (rel.startsWith('..')) {
+      throw new Error(`Path '${filePath}' resolves outside project directory`)
+    }
+    return abs
+  }
 
   /**
    * Record that a file is about to be modified.
@@ -36,8 +60,10 @@ export class ChangeHistory {
     // Don't overwrite if we already recorded this file
     if (taskChanges.files.has(filePath)) return
 
+    const resolvedPath = this.resolvePath(filePath)
+
     try {
-      const content = await readFile(filePath, 'utf-8')
+      const content = await readFile(resolvedPath, 'utf-8')
       taskChanges.files.set(filePath, content)
     } catch {
       // File doesn't exist yet — record as null (will be deleted on rollback)
@@ -74,15 +100,18 @@ export class ChangeHistory {
     const deleted: string[] = []
 
     for (const [filePath, originalContent] of taskChanges.files) {
+      const resolvedPath = this.resolvePath(filePath)
       try {
         if (originalContent === null) {
           // File was created — delete it
           const { unlink } = await import('node:fs/promises')
-          await unlink(filePath)
+          await unlink(resolvedPath)
           deleted.push(filePath)
         } else {
           // File was modified — restore original content
-          await writeFile(filePath, originalContent, 'utf-8')
+          // Ensure parent directory exists
+          await mkdir(dirname(resolvedPath), { recursive: true })
+          await writeFile(resolvedPath, originalContent, 'utf-8')
           restored.push(filePath)
         }
       } catch {

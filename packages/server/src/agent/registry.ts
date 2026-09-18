@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
 import { stmt } from '../db/statements.js'
 
-export type AgentRole = 'manager' | 'master' | 'worker'
+export type AgentRole = 'developer' | 'master' | 'worker'
 export type AgentStatus = 'pending' | 'running' | 'done' | 'failed'
 
 export interface AgentState {

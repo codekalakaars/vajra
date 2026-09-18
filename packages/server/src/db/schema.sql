@@ -40,11 +40,11 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 
--- Agent registry: tracks manager, master, and worker agents within a session.
+-- Agent registry: tracks developer, master, and worker agents within a session.
 CREATE TABLE IF NOT EXISTS agents (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id),
-  role TEXT NOT NULL,              -- 'manager' | 'master' | 'worker'
+  role TEXT NOT NULL,              -- 'developer' | 'master' | 'worker'
   status TEXT NOT NULL,            -- 'pending' | 'running' | 'done' | 'failed'
   task_summary TEXT,
   parent_agent_id TEXT,
