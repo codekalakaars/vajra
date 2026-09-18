@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
+import { stmt } from '../db/statements.js'
 
 export type AgentRole = 'manager' | 'master' | 'worker'
 export type AgentStatus = 'pending' | 'running' | 'done' | 'failed'
@@ -27,12 +28,11 @@ export class AgentRegistry {
     const id = randomUUID()
     const now = Date.now()
 
-    this.db
-      .prepare(
-        `INSERT INTO agents (id, session_id, role, status, task_summary, parent_agent_id, created_at)
-         VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
-      )
-      .run(id, projectId, role, taskSummary, parentAgentId ?? null, now)
+    stmt(
+      this.db,
+      `INSERT INTO agents (id, session_id, role, status, task_summary, parent_agent_id, created_at)
+       VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
+    ).run(id, projectId, role, taskSummary, parentAgentId ?? null, now)
 
     return {
       id,
@@ -48,19 +48,16 @@ export class AgentRegistry {
 
   updateStatus(agentId: string, status: AgentStatus): void {
     const endedAt = status === 'done' || status === 'failed' ? Date.now() : null
-    this.db
-      .prepare(
-        endedAt
-          ? `UPDATE agents SET status = ?, ended_at = ? WHERE id = ?`
-          : `UPDATE agents SET status = ? WHERE id = ?`,
-      )
-      .run(status, ...(endedAt !== null ? [endedAt, agentId] : [agentId]))
+    stmt(
+      this.db,
+      endedAt
+        ? `UPDATE agents SET status = ?, ended_at = ? WHERE id = ?`
+        : `UPDATE agents SET status = ? WHERE id = ?`,
+    ).run(status, ...(endedAt !== null ? [endedAt, agentId] : [agentId]))
   }
 
   get(agentId: string): AgentState | undefined {
-    const row = this.db
-      .prepare(`SELECT * FROM agents WHERE id = ?`)
-      .get(agentId) as
+    const row = stmt(this.db, `SELECT * FROM agents WHERE id = ?`).get(agentId) as
       | {
           id: string
           session_id: string
@@ -78,9 +75,7 @@ export class AgentRegistry {
   }
 
   getByProject(projectId: string): AgentState[] {
-    const rows = this.db
-      .prepare(`SELECT * FROM agents WHERE session_id = ? ORDER BY created_at`)
-      .all(projectId) as Array<{
+    const rows = stmt(this.db, `SELECT * FROM agents WHERE session_id = ? ORDER BY created_at`).all(projectId) as Array<{
       id: string
       session_id: string
       role: AgentRole
@@ -105,8 +100,8 @@ export class AgentRegistry {
   }
 
   deleteByProject(projectId: string): void {
-    this.db.prepare(`DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
-    this.db.prepare(`DELETE FROM agents WHERE session_id = ?`).run(projectId)
+    stmt(this.db, `DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
+    stmt(this.db, `DELETE FROM agents WHERE session_id = ?`).run(projectId)
   }
 
   private rowToState(row: {

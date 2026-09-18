@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ProjectFileEntry } from '@codekalakaars/vajra-protocol'
 import { MAX_SUMMARY_TOTAL_SIZE } from './constants.js'
@@ -8,6 +8,17 @@ const SKIP_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.woff', '.woff2', '.ttf', '.eot',
   '.map', '.lock', '.min.js', '.min.css', '.wasm', '.exe', '.bin', '.db', '.db-shm', '.db-wal',
 ])
+
+/** Suffixes that the extension check above cannot see: it only looks at the
+ * segment after the last dot, so '.min.js' never matched. */
+const SKIP_SUFFIXES = ['.min.js', '.min.css', '.d.ts']
+
+/** Files past this size are not worth summarizing and cost real time to read. */
+const MAX_FILE_BYTES = 512 * 1024
+
+/** How many files to read at once. Reading them one at a time made indexing
+ * a large project a long serial walk. */
+const READ_CONCURRENCY = 16
 
 const SYMBOL_PATTERNS: RegExp[] = [
   /\b(?:export\s+)?(?:async\s+)?function\s+(\w+)/g,
@@ -59,34 +70,59 @@ function getPreview(content: string, maxLines = 3): string {
 
 function shouldSkipFile(entry: ProjectFileEntry): boolean {
   if (entry.isDir) return true
-  const ext = '.' + entry.path.split('.').pop()?.toLowerCase()
+
+  const path = entry.path.toLowerCase()
+  const ext = '.' + path.split('.').pop()
   if (SKIP_EXTENSIONS.has(ext)) return true
-  if (entry.path.includes('node_modules/') || entry.path.includes('.git/')) return true
-  return false
+  if (SKIP_SUFFIXES.some((suffix) => path.endsWith(suffix))) return true
+
+  // SKIP_DIRS was declared and never consulted, so build output — dist,
+  // target, .next — was read and parsed on every index.
+  return path.split('/').some((segment) => SKIP_DIRS.has(segment))
+}
+
+async function summarizeFile(projectDir: string, entry: ProjectFileEntry): Promise<SummaryEntry | null> {
+  try {
+    const fullPath = join(projectDir, entry.path)
+
+    const info = await stat(fullPath)
+    if (!info.isFile() || info.size > MAX_FILE_BYTES) return null
+
+    const content = await readFile(fullPath, 'utf-8')
+    const symbols = extractSymbols(content)
+
+    return {
+      path: entry.path,
+      symbols,
+      preview: getPreview(content),
+      lineCount: content.split('\n').length,
+      importCount: countImports(content),
+      exportCount: countExports(content),
+    }
+  } catch {
+    // Skip unreadable files
+    return null
+  }
 }
 
 export async function buildSummaryIndex(projectDir: string, entries: ProjectFileEntry[]): Promise<SummaryEntry[]> {
+  const candidates = entries.filter((entry) => !shouldSkipFile(entry))
   const summary: SummaryEntry[] = []
   let totalSize = 0
 
-  for (const entry of entries) {
-    if (shouldSkipFile(entry)) continue
+  for (let i = 0; i < candidates.length; i += READ_CONCURRENCY) {
     if (totalSize >= MAX_SUMMARY_TOTAL_SIZE) break
 
-    try {
-      const fullPath = join(projectDir, entry.path)
-      const content = await readFile(fullPath, 'utf-8')
+    const batch = await Promise.all(
+      candidates.slice(i, i + READ_CONCURRENCY).map((entry) => summarizeFile(projectDir, entry)),
+    )
 
-      const symbols = extractSymbols(content)
-      const preview = getPreview(content)
-      const lineCount = content.split('\n').length
-      const importCount = countImports(content)
-      const exportCount = countExports(content)
+    for (const entry of batch) {
+      if (!entry) continue
+      if (totalSize >= MAX_SUMMARY_TOTAL_SIZE) break
 
-      summary.push({ path: entry.path, symbols, preview, lineCount, importCount, exportCount })
-      totalSize += entry.path.length + symbols.join('').length + preview.length + 50
-    } catch {
-      // Skip unreadable files
+      summary.push(entry)
+      totalSize += entry.path.length + entry.symbols.join('').length + entry.preview.length + 50
     }
   }
 

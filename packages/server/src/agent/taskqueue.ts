@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
+import { stmt } from '../db/statements.js'
 
 export type TaskStatus = 'pending' | 'assigned' | 'running' | 'done' | 'failed' | 'skipped'
 
@@ -75,12 +75,11 @@ export class TaskQueue {
   addTask(task: PlannedTask, filePermissions?: string, toolPermissions?: string): TaskState {
     const now = Date.now()
 
-    this.db
-      .prepare(
-        `INSERT INTO tasks (id, session_id, title, description, status, file_permissions, tool_permissions, created_at)
-         VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
-      )
-      .run(
+    stmt(
+      this.db,
+      `INSERT INTO tasks (id, session_id, title, description, status, file_permissions, tool_permissions, created_at)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
+    ).run(
         task.id,
         this.projectId,
         task.title,
@@ -92,9 +91,7 @@ export class TaskQueue {
 
     // Store dependencies
     for (const depId of task.dependsOn) {
-      this.db
-        .prepare(`INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)`)
-        .run(task.id, depId)
+      stmt(this.db, `INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)`).run(task.id, depId)
     }
 
     // All files this task touches (for file ownership tracking)
@@ -167,9 +164,7 @@ export class TaskQueue {
     task.status = 'assigned'
     task.assignedAgentId = agentId
 
-    this.db
-      .prepare(`UPDATE tasks SET status = 'assigned', assigned_agent_id = ? WHERE id = ?`)
-      .run(agentId, taskId)
+    stmt(this.db, `UPDATE tasks SET status = 'assigned', assigned_agent_id = ? WHERE id = ?`).run(agentId, taskId)
   }
 
   startTask(taskId: string): void {
@@ -179,9 +174,7 @@ export class TaskQueue {
     task.status = 'running'
     task.startedAt = Date.now()
 
-    this.db
-      .prepare(`UPDATE tasks SET status = 'running', started_at = ? WHERE id = ?`)
-      .run(task.startedAt, taskId)
+    stmt(this.db, `UPDATE tasks SET status = 'running', started_at = ? WHERE id = ?`).run(task.startedAt, taskId)
   }
 
   completeTask(taskId: string, validationPassed?: boolean): TaskState[] {
@@ -192,10 +185,7 @@ export class TaskQueue {
     task.completedAt = Date.now()
     task.validationPassed = validationPassed ?? null
 
-    this.db
-      .prepare(
-        `UPDATE tasks SET status = 'done', completed_at = ?, validation_passed = ? WHERE id = ?`,
-      )
+    stmt(this.db, `UPDATE tasks SET status = 'done', completed_at = ?, validation_passed = ? WHERE id = ?`)
       .run(task.completedAt, validationPassed === true ? 1 : validationPassed === false ? 0 : null, taskId)
 
     // Release file ownership
@@ -216,9 +206,7 @@ export class TaskQueue {
     task.status = 'failed'
     task.completedAt = Date.now()
 
-    this.db
-      .prepare(`UPDATE tasks SET status = 'failed', completed_at = ? WHERE id = ?`)
-      .run(task.completedAt, taskId)
+    stmt(this.db, `UPDATE tasks SET status = 'failed', completed_at = ? WHERE id = ?`).run(task.completedAt, taskId)
 
     // Release file ownership
     for (const [file, ownerTaskId] of this.fileToTask) {
@@ -237,9 +225,7 @@ export class TaskQueue {
     task.assignedAgentId = null
     task.startedAt = null
 
-    this.db
-      .prepare(`UPDATE tasks SET status = 'pending', assigned_agent_id = NULL, started_at = NULL WHERE id = ?`)
-      .run(taskId)
+    stmt(this.db, `UPDATE tasks SET status = 'pending', assigned_agent_id = NULL, started_at = NULL WHERE id = ?`).run(taskId)
   }
 
   skipTask(taskId: string): void {
@@ -249,9 +235,7 @@ export class TaskQueue {
     task.status = 'skipped'
     task.completedAt = Date.now()
 
-    this.db
-      .prepare(`UPDATE tasks SET status = 'skipped', completed_at = ? WHERE id = ?`)
-      .run(task.completedAt, taskId)
+    stmt(this.db, `UPDATE tasks SET status = 'skipped', completed_at = ? WHERE id = ?`).run(task.completedAt, taskId)
   }
 
   /**
@@ -450,9 +434,7 @@ export class TaskQueue {
       task.validationPassed = passed
     }
 
-    this.db
-      .prepare(`UPDATE tasks SET validation_output = ?, validation_passed = ? WHERE id = ?`)
-      .run(output, passed ? 1 : 0, taskId)
+    stmt(this.db, `UPDATE tasks SET validation_output = ?, validation_passed = ? WHERE id = ?`).run(output, passed ? 1 : 0, taskId)
   }
 
   /**

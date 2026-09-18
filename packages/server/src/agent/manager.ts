@@ -14,9 +14,8 @@ import type { PushEvents, LaunchHandle } from '../project/manager.js'
 import type { ManagerPlan, PlannedTask, ToolName } from '@codekalakaars/vajra-protocol'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { getManagerToolSpecs, parseToolCall } from './tools.js'
-import { scanProject } from '../native.js'
-import { buildNestedTree } from './tree.js'
-import { buildSummaryIndex, formatSummaryIndex, formatSummaryIndexHierarchical, compressSummaryByRelevance, type SummaryEntry } from './summary.js'
+import { formatSummaryIndexHierarchical, type SummaryEntry } from './summary.js'
+import { projectContext } from './project-context.js'
 import { compressMessages } from './context.js'
 import { searchSummary, appendMessage, nextSeq } from './utils.js'
 import { MAX_MANAGER_TOOL_CALLS, MAX_TASK_CONTEXT_SIZE, MAX_CONTEXT_LINES } from './constants.js'
@@ -108,36 +107,40 @@ function buildManagerConversationPrompt(
  * Extracts relevant code snippets from files that the worker needs to read.
  */
 async function readTaskContext(
-  projectDir: string,
   readFile: string[],
   writeFile: string[],
   instructions: string[],
   handle: LaunchHandle,
 ): Promise<string> {
-  const contextParts: string[] = []
-  let currentSize = 0
-
   // Combine all files that need to be read or written
   const allFiles = [...new Set([...readFile, ...writeFile])]
 
-  for (const filePath of allFiles) {
+  // One round trip each, serially, meant the plan sat waiting on IPC for as
+  // many hops as it had files.
+  const reads = await Promise.all(
+    allFiles.map(async (filePath) => {
+      try {
+        const result = await handle.callTool('read_file', { path: filePath })
+        return { filePath, content: typeof result === 'string' ? result : JSON.stringify(result) }
+      } catch {
+        return null // File might not exist yet (for writeFile targets)
+      }
+    }),
+  )
+
+  const contextParts: string[] = []
+  let currentSize = 0
+
+  for (const read of reads) {
+    if (!read) continue
     if (currentSize >= MAX_TASK_CONTEXT_SIZE) break
 
-    try {
-      const result = await handle.callTool('read_file', { path: filePath })
-      const content = typeof result === 'string' ? result : JSON.stringify(result)
-      
-      // Extract relevant lines based on instructions
-      const relevantLines = extractRelevantLines(content, instructions, filePath)
-      
-      if (relevantLines.length > 0) {
-        const snippet = `\n--- ${filePath} ---\n${relevantLines}\n--- end ${filePath} ---`
-        contextParts.push(snippet)
-        currentSize += snippet.length
-      }
-    } catch {
-      // File might not exist yet (for writeFile targets)
-    }
+    const relevantLines = extractRelevantLines(read.content, instructions)
+    if (relevantLines.length === 0) continue
+
+    const snippet = `\n--- ${read.filePath} ---\n${relevantLines}\n--- end ${read.filePath} ---`
+    contextParts.push(snippet)
+    currentSize += snippet.length
   }
 
   return contextParts.join('\n')
@@ -147,7 +150,7 @@ async function readTaskContext(
  * Extract relevant lines from a file based on instructions.
  * Looks for line numbers, function names, or class names mentioned in instructions.
  */
-function extractRelevantLines(content: string, instructions: string[], filePath: string): string {
+function extractRelevantLines(content: string, instructions: string[]): string {
   const lines = content.split('\n')
   const relevantLineNumbers = new Set<number>()
 
@@ -187,9 +190,9 @@ function extractRelevantLines(content: string, instructions: string[], filePath:
     }
   }
 
-  // If no specific lines found, return first 50 lines as context
+  // If no specific lines found, return the head of the file as context
   if (relevantLineNumbers.size === 0) {
-    return lines.slice(0, 50).join('\n')
+    return lines.slice(0, MAX_CONTEXT_LINES).join('\n')
   }
 
   // Sort and return relevant lines with context
@@ -212,7 +215,7 @@ function extractRelevantLines(content: string, instructions: string[], filePath:
  * Identify key files in the project for initial exploration.
  * Returns files that are likely entry points, configs, or architecture-defining.
  */
-function identifyKeyFiles(summary: SummaryEntry[], tree: string): string[] {
+function identifyKeyFiles(summary: SummaryEntry[]): string[] {
   const keyFiles: string[] = []
   
   // Common entry points and config files
@@ -268,33 +271,38 @@ function identifyKeyFiles(summary: SummaryEntry[], tree: string): string[] {
  * Returns a summary of the project's structure and patterns.
  */
 async function analyzeArchitecture(
-  projectDir: string,
   summary: SummaryEntry[],
   handle: LaunchHandle,
 ): Promise<string> {
-  const keyFiles = identifyKeyFiles(summary, '')
+  const keyFiles = identifyKeyFiles(summary).slice(0, 5)
+
+  // Read them together: one round trip each, serially, was five round trips
+  // of latency before the manager could say anything at all.
+  const reads = await Promise.all(
+    keyFiles.map(async (filePath) => {
+      try {
+        const result = await handle.callTool('read_file', { path: filePath })
+        return { filePath, content: typeof result === 'string' ? result : JSON.stringify(result) }
+      } catch {
+        return null // Skip unreadable files
+      }
+    }),
+  )
+
   const architectureParts: string[] = []
-  
-  // Read key files to understand architecture
-  for (const filePath of keyFiles.slice(0, 5)) {
-    try {
-      const result = await handle.callTool('read_file', { path: filePath })
-      const content = typeof result === 'string' ? result : JSON.stringify(result)
-      
-      // Extract architecture-relevant info
-      const lines = content.split('\n')
-      const imports = lines.filter(l => l.startsWith('import ')).slice(0, 5)
-      const exports = lines.filter(l => l.startsWith('export ')).slice(0, 5)
-      
-      architectureParts.push(`--- ${filePath} ---`)
-      if (imports.length > 0) architectureParts.push(`Imports: ${imports.join(', ')}`)
-      if (exports.length > 0) architectureParts.push(`Exports: ${exports.join(', ')}`)
-      architectureParts.push('')
-    } catch {
-      // Skip unreadable files
-    }
+  for (const read of reads) {
+    if (!read) continue
+
+    const lines = read.content.split('\n')
+    const imports = lines.filter(l => l.startsWith('import ')).slice(0, 5)
+    const exports = lines.filter(l => l.startsWith('export ')).slice(0, 5)
+
+    architectureParts.push(`--- ${read.filePath} ---`)
+    if (imports.length > 0) architectureParts.push(`Imports: ${imports.join(', ')}`)
+    if (exports.length > 0) architectureParts.push(`Exports: ${exports.join(', ')}`)
+    architectureParts.push('')
   }
-  
+
   return architectureParts.join('\n')
 }
 
@@ -552,28 +560,20 @@ export async function managerConversationTurn(
 
   // First turn: build system prompt and project context
   if (messages.length === 0) {
-    let tree = ''
-    let architecture = ''
-    try {
-      const entries = scanProject(projectDir)
-      tree = buildNestedTree(entries)
-      // Build summary index if not already provided
-      if (summaryIndex.length === 0) {
-        const indexed = await buildSummaryIndex(projectDir, entries)
-        summaryIndex.push(...indexed)
-      }
-      
-      // Auto-analyze architecture from key files
-      events.push('projects.workerProgress', projectId, {
-        projectId,
-        agentId: 'manager',
-        taskId: 'master',
-        detail: 'Analyzing project architecture...',
-      })
-      architecture = await analyzeArchitecture(projectDir, summaryIndex, handle)
-    } catch {
-      tree = '(unable to read project tree)'
+    const context = await projectContext(projectDir)
+    const tree = context.tree
+    if (summaryIndex.length === 0) {
+      summaryIndex.push(...context.summaryIndex)
     }
+
+    // Auto-analyze architecture from key files
+    events.push('projects.workerProgress', projectId, {
+      projectId,
+      agentId: 'manager',
+      taskId: 'master',
+      detail: 'Analyzing project architecture...',
+    })
+    const architecture = await analyzeArchitecture(summaryIndex, handle)
 
     const summaryText = formatSummaryIndexHierarchical(summaryIndex)
     messages.push({
@@ -644,9 +644,8 @@ export async function managerConversationTurn(
           detail: 'Injecting code context into task instructions...',
         })
 
-        for (const task of plan.tasks) {
+        await Promise.all(plan.tasks.map(async (task) => {
           const context = await readTaskContext(
-            projectDir,
             task.readFile,
             task.writeFile,
             task.instructions,
@@ -662,7 +661,7 @@ export async function managerConversationTurn(
               ...task.instructions,
             ]
           }
-        }
+        }))
 
         // Emit plan events
         events.push('projects.planStarted', projectId, { projectId })

@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { SqliteDb } from '../db/client.js'
+import { stmt } from '../db/statements.js'
+import { appendMessage, forgetSeq, nextSeq } from '../agent/utils.js'
 import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage, ManagerPlan, PlannedTask } from '@codekalakaars/vajra-protocol'
 import type { FileRule, ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { FileLockManager, resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
@@ -8,6 +10,7 @@ import { createProvider } from '../agent/providers/index.js'
 import { managerConversationTurn, type ManagerTurnResult } from '../agent/manager.js'
 import { masterLoop } from '../agent/master.js'
 import { AgentRegistry } from '../agent/registry.js'
+import { invalidateProjectContext } from '../agent/project-context.js'
 import type { SummaryEntry } from '../agent/summary.js'
 import { WorkerPool } from './pool.js'
 
@@ -116,12 +119,11 @@ export class ProjectManager {
     const projectId = randomUUID()
     const now = Date.now()
 
-    this.db
-      .prepare(
-        `INSERT INTO sessions (id, project_dir, task, model, status, created_at)
-         VALUES (?, ?, ?, ?, 'starting', ?)`,
-      )
-      .run(projectId, input.projectDir, input.task, input.model, now)
+    stmt(
+      this.db,
+      `INSERT INTO sessions (id, project_dir, task, model, status, created_at)
+       VALUES (?, ?, ?, ?, 'starting', ?)`,
+    ).run(projectId, input.projectDir, input.task, input.model, now)
 
     subscribe(projectId)
 
@@ -195,9 +197,10 @@ export class ProjectManager {
   }
 
   list(): SessionListResult {
-    const rows = this.db
-      .prepare(`SELECT id, project_dir, task, model, status, created_at FROM sessions ORDER BY created_at DESC`)
-      .all() as Array<{ id: string; project_dir: string; task: string; model: string; status: SessionStatus; created_at: number }>
+    const rows = stmt(
+      this.db,
+      `SELECT id, project_dir, task, model, status, created_at FROM sessions ORDER BY created_at DESC`,
+    ).all() as Array<{ id: string; project_dir: string; task: string; model: string; status: SessionStatus; created_at: number }>
 
     return rows.map((r) => ({
       id: r.id,
@@ -210,13 +213,12 @@ export class ProjectManager {
   }
 
   async attach(projectId: string, apiKeys?: Record<string, string>) {
-    const row = this.db
-      .prepare(
-        `SELECT id, project_dir, task, model, status, created_at,
-                sandbox_enforced, sandbox_mechanism, sandbox_warnings
-         FROM sessions WHERE id = ?`,
-      )
-      .get(projectId) as
+    const row = stmt(
+      this.db,
+      `SELECT id, project_dir, task, model, status, created_at,
+              sandbox_enforced, sandbox_mechanism, sandbox_warnings
+       FROM sessions WHERE id = ?`,
+    ).get(projectId) as
       | {
           id: string
           project_dir: string
@@ -234,12 +236,11 @@ export class ProjectManager {
       throw new Error(`No such project '${projectId}'`)
     }
 
-    const messages = this.db
-      .prepare(
-        `SELECT seq, role, content, tool_name, tool_call_id, tool_args, tool_result, created_at
-         FROM messages WHERE session_id = ? ORDER BY seq`,
-      )
-      .all(projectId) as Array<{
+    const messages = stmt(
+      this.db,
+      `SELECT seq, role, content, tool_name, tool_call_id, tool_args, tool_result, created_at
+       FROM messages WHERE session_id = ? ORDER BY seq`,
+    ).all(projectId) as Array<{
         seq: number
         role: string
         content: string | null
@@ -352,7 +353,7 @@ export class ProjectManager {
     // Switching models can switch providers. Leaving the conversation's
     // provider in place sent, say, an Anthropic model id to OpenRouter.
     const { provider, resolvedModel } = createProvider(model, apiKeys)
-    this.db.prepare(`UPDATE sessions SET model = ? WHERE id = ?`).run(resolvedModel, projectId)
+    stmt(this.db, `UPDATE sessions SET model = ? WHERE id = ?`).run(resolvedModel, projectId)
 
     const conv = this.conversations.get(projectId)
     if (conv) conv.provider = provider
@@ -374,15 +375,16 @@ export class ProjectManager {
 
     this.conversations.delete(projectId)
     const tx = this.db.transaction(() => {
-      this.db.prepare(`DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
-      this.db.prepare(`DELETE FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)`).run(projectId)
-      this.db.prepare(`DELETE FROM tasks WHERE session_id = ?`).run(projectId)
-      this.db.prepare(`DELETE FROM agents WHERE session_id = ?`).run(projectId)
-      this.db.prepare(`DELETE FROM plan_steps WHERE session_id = ?`).run(projectId)
-      this.db.prepare(`DELETE FROM messages WHERE session_id = ?`).run(projectId)
-      this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(projectId)
+      stmt(this.db, `DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
+      stmt(this.db, `DELETE FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)`).run(projectId)
+      stmt(this.db, `DELETE FROM tasks WHERE session_id = ?`).run(projectId)
+      stmt(this.db, `DELETE FROM agents WHERE session_id = ?`).run(projectId)
+      stmt(this.db, `DELETE FROM plan_steps WHERE session_id = ?`).run(projectId)
+      stmt(this.db, `DELETE FROM messages WHERE session_id = ?`).run(projectId)
+      stmt(this.db, `DELETE FROM sessions WHERE id = ?`).run(projectId)
     })
     tx()
+    forgetSeq(projectId)
     this.events.push('projects.deleted', projectId, { projectId })
   }
 
@@ -448,9 +450,7 @@ export class ProjectManager {
 
     // Run master loop in background
     if (apiKeys && Object.keys(apiKeys).length > 0) {
-      const row = this.db
-        .prepare(`SELECT project_dir, model FROM sessions WHERE id = ?`)
-        .get(projectId) as { project_dir: string; model: string }
+      const row = stmt(this.db, `SELECT project_dir, model FROM sessions WHERE id = ?`).get(projectId) as { project_dir: string; model: string }
 
       // Resolve the key from the project's own model, not from whatever key
       // happens to be first in the map.
@@ -498,10 +498,13 @@ export class ProjectManager {
           return workerHandle
         },
       }).then((result) => {
+        // Workers have changed the tree; the cached scan is stale.
+        invalidateProjectContext(row.project_dir)
         this.appendMessage(projectId, result.summary)
         this.setStatus(projectId, 'done', Date.now())
         this.events.push('projects.completed', projectId, {})
       }).catch((e) => {
+        invalidateProjectContext(row.project_dir)
         const message = e instanceof Error ? e.message : String(e)
         this.setStatus(projectId, 'failed', Date.now())
         this.events.push('projects.failed', projectId, { message })
@@ -530,9 +533,7 @@ export class ProjectManager {
     const conv = this.conversations.get(projectId)
     if (!conv) throw new Error('No conversation state')
 
-    const row = this.db
-      .prepare(`SELECT project_dir, model FROM sessions WHERE id = ?`)
-      .get(projectId) as { project_dir: string; model: string }
+    const row = stmt(this.db, `SELECT project_dir, model FROM sessions WHERE id = ?`).get(projectId) as { project_dir: string; model: string }
 
     const { provider: activeProvider, apiKey } = createProvider(row.model, apiKeys)
     conv.provider = activeProvider
@@ -579,9 +580,7 @@ export class ProjectManager {
 
     const conv = this.conversations.get(projectId)
 
-    const row = this.db
-      .prepare(`SELECT project_dir, model FROM sessions WHERE id = ?`)
-      .get(projectId) as { project_dir: string; model: string }
+    const row = stmt(this.db, `SELECT project_dir, model FROM sessions WHERE id = ?`).get(projectId) as { project_dir: string; model: string }
 
     const { provider: activeProvider, apiKey } = createProvider(row.model, apiKeys)
     if (conv) conv.provider = activeProvider
@@ -637,40 +636,28 @@ export class ProjectManager {
    * Append a message to the project's message log.
    */
   private appendMessage(projectId: string, content: string): void {
-    const seq = this.db
-      .prepare(`SELECT COALESCE(MAX(seq), -1) + 1 AS next_seq FROM messages WHERE session_id = ?`)
-      .get(projectId) as { next_seq: number }
-
-    this.db
-      .prepare(
-        `INSERT INTO messages (session_id, seq, role, content, created_at)
-         VALUES (?, ?, 'assistant', ?, ?)`,
-      )
-      .run(projectId, seq.next_seq, content, Date.now())
+    appendMessage(this.db, projectId, nextSeq(this.db, projectId), 'assistant', content)
   }
 
   private recordSandboxReport(projectId: string, report: SandboxReport): void {
-    this.db
-      .prepare(
-        `UPDATE sessions SET sandbox_enforced = ?, sandbox_mechanism = ?, sandbox_warnings = ? WHERE id = ?`,
-      )
-      .run(report.enforced ? 1 : 0, report.mechanism, JSON.stringify(report.warnings), projectId)
+    stmt(
+      this.db,
+      `UPDATE sessions SET sandbox_enforced = ?, sandbox_mechanism = ?, sandbox_warnings = ? WHERE id = ?`,
+    ).run(report.enforced ? 1 : 0, report.mechanism, JSON.stringify(report.warnings), projectId)
 
     this.events.push('projects.sandboxStatus', projectId, report)
   }
 
   getStatus(projectId: string): SessionStatus | undefined {
-    const row = this.db
-      .prepare(`SELECT status FROM sessions WHERE id = ?`)
-      .get(projectId) as { status: SessionStatus } | undefined
+    const row = stmt(this.db, `SELECT status FROM sessions WHERE id = ?`).get(projectId) as { status: SessionStatus } | undefined
     return row?.status
   }
 
   private setStatus(projectId: string, status: SessionStatus, endedAt?: number): void {
     if (endedAt !== undefined) {
-      this.db.prepare(`UPDATE sessions SET status = ?, ended_at = ? WHERE id = ?`).run(status, endedAt, projectId)
+      stmt(this.db, `UPDATE sessions SET status = ?, ended_at = ? WHERE id = ?`).run(status, endedAt, projectId)
     } else {
-      this.db.prepare(`UPDATE sessions SET status = ? WHERE id = ?`).run(status, projectId)
+      stmt(this.db, `UPDATE sessions SET status = ? WHERE id = ?`).run(status, projectId)
     }
   }
 }
