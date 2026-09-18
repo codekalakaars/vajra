@@ -29,6 +29,8 @@ export interface ChatRequest {
   messages: ChatMessage[]
   tools?: ToolSpec[]
   toolChoice?: 'auto' | 'required' | 'none'
+  /** Cancels the request — e.g. when the project is stopped. */
+  signal?: AbortSignal
 }
 
 export interface TokenUsage {
