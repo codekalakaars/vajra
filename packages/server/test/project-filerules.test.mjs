@@ -1,8 +1,8 @@
-// Regression: session.create must fold .vajra-sandbox.json fileRules into the
+// Regression: projects.create must fold .vajra-sandbox.json fileRules into the
 // LaunchJob so the worker enforces them at the OS level (Landlock/Seatbelt),
 // not just as a per-tool-call software check.
 //
-// Before the fix, session.create built a LaunchJob with only permissions and
+// Before the fix, projects.create built a LaunchJob with only permissions and
 // allowUnenforced — fileRules and defaultFilePermissions were never passed.
 // The worker still had its own per-tool-call check, but the OS-level sandbox
 // had no knowledge of the rules, so a compromised worker could bypass them.
@@ -27,9 +27,9 @@ function makeProject(tag) {
 // Unit test: mock launcher captures the job
 // ---------------------------------------------------------------------------
 
-test('session.create passes fileRules from .vajra-sandbox.json to the launcher', async () => {
-  // Build the SessionManager with a mock launcher that captures the job.
-  const { SessionManager } = require('../dist/session/manager.js')
+test('projects.create passes fileRules from .vajra-sandbox.json to the launcher', async () => {
+  // Build the ProjectManager with a mock launcher that captures the job.
+  const { ProjectManager } = require('../dist/project/manager.js')
 
   let capturedJob = null
   const mockLauncher = async (job, _onReport) => {
@@ -42,7 +42,7 @@ test('session.create passes fileRules from .vajra-sandbox.json to the launcher',
 
   const db = makeInMemoryDb()
   const events = makeEvents()
-  const manager = new SessionManager(db, mockLauncher, events)
+  const manager = new ProjectManager(db, mockLauncher, events)
 
   const project = makeProject('unit')
   writeFileSync(
@@ -83,8 +83,8 @@ test('session.create passes fileRules from .vajra-sandbox.json to the launcher',
   }
 })
 
-test('session.create works without .vajra-sandbox.json (no fileRules)', async () => {
-  const { SessionManager } = require('../dist/session/manager.js')
+test('projects.create works without .vajra-sandbox.json (no fileRules)', async () => {
+  const { ProjectManager } = require('../dist/project/manager.js')
 
   let capturedJob = null
   const mockLauncher = async (job, _onReport) => {
@@ -97,7 +97,7 @@ test('session.create works without .vajra-sandbox.json (no fileRules)', async ()
 
   const db = makeInMemoryDb()
   const events = makeEvents()
-  const manager = new SessionManager(db, mockLauncher, events)
+  const manager = new ProjectManager(db, mockLauncher, events)
 
   const project = makeProject('no-config')
 
@@ -130,7 +130,7 @@ test('worker enforces fileRules from .vajra-sandbox.json via OS-level sandbox', 
     return
   }
 
-  const { forkSessionLauncher } = require('../dist/session/launcher.js')
+  const { forkProjectLauncher } = require('../dist/project/launcher.js')
 
   const project = makeProject('integration')
   // Create files: secret.env should be unreadable, readme.txt should be readable
@@ -147,13 +147,13 @@ test('worker enforces fileRules from .vajra-sandbox.json via OS-level sandbox', 
     }),
   )
 
-  // Load the config like session.create does
+  // Load the config like projects.create does
   const { loadSandboxConfig } = require('@codekalakaars/vajra-sandbox')
   const sandboxConfig = loadSandboxConfig(project)
 
-  const handle = await forkSessionLauncher(
+  const handle = await forkProjectLauncher(
     {
-      sessionId: 'filerules-test',
+      projectId: 'filerules-test',
       projectDir: project,
       permissions: { version: 1, default: { read: true, write: false, edit: false, delete: false }, files: {} },
       allowUnenforced: false,
@@ -224,8 +224,8 @@ function makeEvents() {
   const emitted = []
   return {
     emitted,
-    push(event, sessionId, payload) {
-      emitted.push({ event, sessionId, payload })
+    push(event, projectId, payload) {
+      emitted.push({ event, projectId, payload })
     },
   }
 }

@@ -5,12 +5,13 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-schema.mjs",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && node scripts/copy-schema.mjs",
     "dev": "node scripts/copy-schema.mjs && concurrently \"tsc -p tsconfig.json --watch\" \"node --watch dist/index.js\"",
     "dev:tsc": "tsc -p tsconfig.json --watch",
     "dev:server": "node --watch dist/index.js",
     "test": "node --test \"test/*.test.mjs\"",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

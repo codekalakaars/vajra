@@ -9,12 +9,10 @@
 import type { ChatProvider } from './types.js'
 import { OpenRouterProvider } from './openrouter.js'
 import { AnthropicProvider } from './anthropic.js'
-import { ZenProvider } from './zen.js'
+import { ZenProvider, ZEN_GO_BASE_URL } from './zen.js'
 import { componentLogger } from '../../logger.js'
 
 const log = componentLogger('providers')
-
-const ZEN_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
 
 const providers = new Map<string, () => ChatProvider>([
   ['openrouter', () => new OpenRouterProvider()],

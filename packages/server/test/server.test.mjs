@@ -89,32 +89,35 @@ test('an unknown RPC method returns a clean error, not a crash', async () => {
   }
 })
 
-test('session.create fails closed when no launcher is configured yet', async () => {
+// A project resolves its provider when it is created, so these need a key.
+const TEST_API_KEYS = { openrouter: 'test-key' }
+
+test('projects.create fails closed when no launcher is configured yet', async () => {
   // This is the security-relevant case for this slice: with no worker/sandbox
   // implementation wired in, a session must come back `failed`, never
   // `running` — there is no path in this slice where an agent could execute
   // unsandboxed by omission.
   const { dbPath, dir } = scratchDbPath()
-  const server = await startServer({ dbPath })
+  const server = await startServer({ dbPath, apiKeys: TEST_API_KEYS })
   const ws = await connect(server.port)
 
   try {
     const permissions = await call(ws, 'project.loadPermissions', { projectDir: dir })
-    const failedEvent = waitForEvent(ws, 'session.failed')
+    const failedEvent = waitForEvent(ws, 'projects.failed')
 
-    const { sessionId } = await call(ws, 'session.create', {
+    const { projectId } = await call(ws, 'projects.create', {
       projectDir: dir,
       permissions,
       task: 'do something',
       model: 'openrouter/some-model',
     })
-    assert.equal(typeof sessionId, 'string')
+    assert.equal(typeof projectId, 'string')
 
     const failure = await failedEvent
     assert.match(failure.payload.message, /not implemented/)
 
-    const attached = await call(ws, 'session.attach', { sessionId })
-    assert.equal(attached.session.status, 'failed')
+    const attached = await call(ws, 'projects.attach', { projectId })
+    assert.equal(attached.project.status, 'failed')
     assert.equal(attached.sandbox, null)
     assert.ok(Array.isArray(attached.messages))
     assert.equal(attached.messages.length, 0)
@@ -125,19 +128,19 @@ test('session.create fails closed when no launcher is configured yet', async () 
   }
 })
 
-test('session.list reflects created sessions', async () => {
+test('projects.list reflects created projects', async () => {
   const { dbPath, dir } = scratchDbPath()
-  const server = await startServer({ dbPath })
+  const server = await startServer({ dbPath, apiKeys: TEST_API_KEYS })
   const ws = await connect(server.port)
 
   try {
     const permissions = await call(ws, 'project.loadPermissions', { projectDir: dir })
-    await call(ws, 'session.create', { projectDir: dir, permissions, task: 'a task', model: 'm' })
+    await call(ws, 'projects.create', { projectDir: dir, permissions, task: 'a task', model: 'openrouter/some-model' })
 
-    const sessions = await call(ws, 'session.list', {})
-    assert.equal(sessions.length, 1)
-    assert.equal(sessions[0].task, 'a task')
-    assert.equal(sessions[0].status, 'failed')
+    const projects = await call(ws, 'projects.list', {})
+    assert.equal(projects.length, 1)
+    assert.equal(projects[0].task, 'a task')
+    assert.equal(projects[0].status, 'failed')
   } finally {
     ws.close()
     await server.close()

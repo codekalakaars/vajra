@@ -1,8 +1,8 @@
-// The launcher (session/launcher.ts) end to end: forking, the sandbox
+// The launcher (project/launcher.ts) end to end: forking, the sandbox
 // report reaching the caller's callback, tool dispatch through the resolved
 // handle, and stop() behavior. Complements sandbox-tool-dispatch.test.mjs,
 // which exercises the worker script directly — this exercises the
-// TypeScript-side client of it that SessionManager actually uses.
+// TypeScript-side client of it that ProjectManager actually uses.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -10,7 +10,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
-import { forkSessionLauncher } from '../dist/session/launcher.js'
+import { forkProjectLauncher } from '../dist/project/launcher.js'
 
 const require = createRequire(import.meta.url)
 const native = require('@codekalakaars/vajra-core')
@@ -31,8 +31,8 @@ test('the launcher resolves with a handle once the sandbox report arrives', asyn
   const project = outsideAnyGrant('resolve')
   const reports = []
 
-  const handle = await forkSessionLauncher(
-    { sessionId: 's1', projectDir: project, permissions: undefined, allowUnenforced: false },
+  const handle = await forkProjectLauncher(
+    { projectId: 's1', projectDir: project, permissions: undefined, allowUnenforced: false },
     (report) => reports.push(report),
   )
 
@@ -54,8 +54,8 @@ test('callTool dispatches to the worker and enforces confinement', async (t) => 
   writeFileSync(join(project, 'app.js'), 'inside')
   writeFileSync(join(outside, 'secret.txt'), 'hunter2')
 
-  const handle = await forkSessionLauncher(
-    { sessionId: 's2', projectDir: project, permissions: undefined, allowUnenforced: false },
+  const handle = await forkProjectLauncher(
+    { projectId: 's2', projectDir: project, permissions: undefined, allowUnenforced: false },
     () => {},
   )
 
@@ -78,8 +78,8 @@ test('stop() rejects any calls still pending', async (t) => {
   }
 
   const project = outsideAnyGrant('stop')
-  const handle = await forkSessionLauncher(
-    { sessionId: 's3', projectDir: project, permissions: undefined, allowUnenforced: false },
+  const handle = await forkProjectLauncher(
+    { projectId: 's3', projectDir: project, permissions: undefined, allowUnenforced: false },
     () => {},
   )
 
@@ -93,7 +93,7 @@ test('stop() rejects any calls still pending', async (t) => {
 
   handle.stop()
 
-  await assert.rejects(() => pending, /Session stopped/)
+  await assert.rejects(() => pending, /Project stopped/)
   rmSync(project, { recursive: true, force: true })
 })
 
@@ -106,13 +106,13 @@ test('an unenforceable platform is refused by the launcher, not silently accepte
   const project = outsideAnyGrant('refuse')
 
   await assert.rejects(
-    () => forkSessionLauncher({ sessionId: 's4', projectDir: project, permissions: undefined, allowUnenforced: false }, () => {}),
+    () => forkProjectLauncher({ projectId: 's4', projectDir: project, permissions: undefined, allowUnenforced: false }, () => {}),
     /Refusing to continue unconfined/,
   )
 
   const reports = []
-  const handle = await forkSessionLauncher(
-    { sessionId: 's5', projectDir: project, permissions: undefined, allowUnenforced: true },
+  const handle = await forkProjectLauncher(
+    { projectId: 's5', projectDir: project, permissions: undefined, allowUnenforced: true },
     (report) => reports.push(report),
   )
   assert.equal(reports[0].enforced, false)
