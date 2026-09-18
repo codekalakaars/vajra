@@ -4,7 +4,7 @@ import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import type { ChildProcess } from 'child_process'
 import { join, resolve, relative } from 'path'
-import { readFile, writeFile, mkdir, access, rm } from 'fs/promises'
+import { readFile, writeFile, mkdir, access, readdir } from 'fs/promises'
 import { componentLogger } from '../../logger.js'
 
 const execFileAsync = promisify(execFile)
@@ -19,6 +19,8 @@ interface VideoInitParams {
   template: string
   resolution?: string
   tailwind?: boolean
+  /** Scaffold into a directory that already has files in it. */
+  force?: boolean
 }
 
 interface VideoAddBlockParams {
@@ -105,7 +107,7 @@ function validateProjectDir(projectDir: string): string {
 
 export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
   router.register('video.init', async (params: VideoInitParams) => {
-    const { projectDir, template, resolution = 'landscape', tailwind = false } = params
+    const { projectDir, template, resolution = 'landscape', tailwind = false, force = false } = params
 
     if (!projectDir || !template) {
       return { success: false, error: 'projectDir and template are required' }
@@ -119,12 +121,24 @@ export function registerVideoHandlers(router: RpcRouter<ServerContext>): void {
     }
 
     try {
-      // Remove directory if it exists
+      // This used to `rm -rf` whatever was already there. Confinement to the
+      // base directory is not consent: any existing directory under it — a
+      // source tree, someone else's project — was silently destroyed by a
+      // caller that only meant to scaffold. Refuse instead, and make the
+      // destructive path explicit.
+      let existing: string[] | null = null
       try {
         await access(safeDir)
-        await rm(safeDir, { recursive: true, force: true })
+        existing = await readdir(safeDir)
       } catch {
         // Directory doesn't exist, which is fine
+      }
+
+      if (existing !== null && existing.length > 0 && !force) {
+        return {
+          success: false,
+          error: `Directory "${projectDir}" already exists and is not empty. Choose another path, or pass force: true to scaffold into it.`,
+        }
       }
 
       const args = [
