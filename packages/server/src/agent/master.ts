@@ -199,25 +199,24 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       .filter(t => t.dependsOn.length === 0)
       .slice(0, prewarmCount)
 
+    // Only the worker process is warmed here. The agent row is created when
+    // the task is actually assigned — registering one now produced a second,
+    // orphaned agent stuck in `pending` for the lifetime of the project.
     const prewarmPromises = prewarmTasks.map(async (task) => {
       try {
-        const agent = registry.createAgent(projectId, 'worker', task.title, masterAgent.id)
-        const permissions = computeTaskPermissions(task)
-        const toolPermissions = computeToolPermissions(task)
-
         const handle = await launchWorker({
           projectId,
           projectDir,
           role: 'worker',
-          permissions,
-          allowedTools: toolPermissions,
+          permissions: computeTaskPermissions(task),
+          allowedTools: computeToolPermissions(task),
           taskId: task.id,
         })
 
         prewarmedHandles.set(task.id, handle)
-        return { taskId: task.id, agent, handle, success: true }
+        return { taskId: task.id, handle, success: true }
       } catch (e) {
-        return { taskId: task.id, agent: null, handle: null, success: false, error: e }
+        return { taskId: task.id, handle: null, success: false, error: e }
       }
     })
 
@@ -480,7 +479,9 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     }
   }
 
-  // Cleanup any unused prewarmed handles
+  // Cleanup any unused prewarmed handles. They were acquired from the pool,
+  // so they have to go back through it — calling stop() directly leaves the
+  // pool believing the slot is still checked out.
   for (const [taskId, handle] of prewarmedHandles) {
     events.push('projects.workerProgress', projectId, {
       projectId,
@@ -488,7 +489,11 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       taskId,
       detail: 'Discarding unused pre-warmed worker',
     })
-    handle.stop()
+    if (pool) {
+      pool.release(handle, false)
+    } else {
+      handle.stop()
+    }
   }
 
   registry.updateStatus(masterAgent.id, 'done')

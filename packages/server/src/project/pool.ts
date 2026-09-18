@@ -13,11 +13,12 @@ import { resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 import { cpus, totalmem, freemem } from 'node:os'
 
 interface PooledWorker {
+  /** Identifies this worker, not its project — several workers share a project. */
+  id: number
   handle: LaunchHandle
   job: LaunchJob
   lastUsedAt: number
   idleTimer?: ReturnType<typeof setTimeout>
-  healthCheckInterval?: ReturnType<typeof setInterval>
 }
 
 export type WorkerPoolConfig = ConcurrencyConfig
@@ -47,8 +48,14 @@ export interface WorkerPoolStats {
  *   }
  */
 export class WorkerPool {
-  /** Workers currently in use (checked out). */
-  private active = new Map<string, PooledWorker>()
+  /** Workers currently in use (checked out), keyed by worker id. */
+  private active = new Map<number, PooledWorker>()
+
+  /** Source of worker ids. Keying `active` by projectId, as this once did,
+   * silently dropped every worker after the first: tasks in one project all
+   * share a projectId, so each checkout overwrote the previous entry and the
+   * evicted worker was never stopped and never gave its slot back. */
+  private nextWorkerId = 1
 
   /** Workers available for reuse (idle). */
   private idle: PooledWorker[] = []
@@ -64,9 +71,6 @@ export class WorkerPool {
 
   /** Timers for idle worker cleanup. */
   private idleTimers: ReturnType<typeof setTimeout>[] = []
-
-  /** Intervals for health checks. */
-  private healthCheckIntervals: ReturnType<typeof setInterval>[] = []
 
   /** Adaptive concurrency timer */
   private adaptiveTimer?: ReturnType<typeof setInterval>
@@ -111,7 +115,8 @@ export class WorkerPool {
     if (reuseIndex >= 0) {
       const worker = this.idle.splice(reuseIndex, 1)[0]
       this.clearIdleTimer(worker)
-      this.active.set(job.projectId, worker)
+      worker.job = job
+      this.active.set(worker.id, worker)
       return worker.handle
     }
 
@@ -139,10 +144,10 @@ export class WorkerPool {
   release(handle: LaunchHandle, reuse = true): void {
     // Find and remove from active
     let pooled: PooledWorker | undefined
-    for (const [id, worker] of this.active) {
+    for (const worker of this.active.values()) {
       if (worker.handle === handle) {
         pooled = worker
-        this.active.delete(id)
+        this.active.delete(worker.id)
         break
       }
     }
@@ -177,28 +182,21 @@ export class WorkerPool {
     }
     this.idleTimers = []
 
-    // Clear all health check intervals
-    for (const interval of this.healthCheckIntervals) {
-      clearInterval(interval)
-    }
-    this.healthCheckIntervals = []
-
     // Stop all idle workers
     for (const worker of this.idle) {
-      this.clearHealthCheck(worker)
       worker.handle.stop()
     }
     this.idle = []
 
     // Stop all active workers
-    for (const [, worker] of this.active) {
-      this.clearHealthCheck(worker)
+    for (const worker of this.active.values()) {
       worker.handle.stop()
     }
     this.active.clear()
 
-    // Reset slot count
-    this.availableSlots = 0
+    // Reset capacity. Leaving this at zero left a drained pool permanently
+    // unusable, and a stopped project can be resumed.
+    this.availableSlots = this.config.maxConcurrentWorkers
 
     // Reject all waiters
     for (const waiter of this.waiters) {
@@ -322,14 +320,13 @@ export class WorkerPool {
     )
 
     const pooled: PooledWorker = {
+      id: this.nextWorkerId++,
       handle,
       job,
       lastUsedAt: Date.now(),
     }
 
-    this.startHealthCheck(pooled)
-      this.active.set(job.projectId, pooled)
-
+    this.active.set(pooled.id, pooled)
 
     return handle
   }
@@ -366,7 +363,6 @@ export class WorkerPool {
       const index = this.idle.indexOf(worker)
       if (index >= 0) {
         this.idle.splice(index, 1)
-        this.clearHealthCheck(worker)
         worker.handle.stop()
         // Remove timer from idleTimers array
         const timerIndex = this.idleTimers.indexOf(timer)
@@ -388,42 +384,6 @@ export class WorkerPool {
         this.idleTimers.splice(index, 1)
       }
       worker.idleTimer = undefined
-    }
-  }
-
-  private startHealthCheck(worker: PooledWorker): void {
-    // Ping the worker periodically to detect unresponsive processes
-    const interval = setInterval(() => {
-      try {
-        // A simple health check: if the worker's handle is still functional,
-        // it should be able to handle a tool call. We use a no-op check
-        // by verifying the worker process is still alive.
-        // The actual health check is implicit — if the worker crashes,
-        // the pool will detect it on the next acquire/release cycle.
-      } catch {
-        // Worker is unresponsive — mark for cleanup
-        this.clearHealthCheck(worker)
-        worker.handle.stop()
-        // Remove from idle pool if present
-        const index = this.idle.indexOf(worker)
-        if (index >= 0) {
-          this.idle.splice(index, 1)
-        }
-      }
-    }, 30_000) // Check every 30 seconds
-
-    worker.healthCheckInterval = interval
-    this.healthCheckIntervals.push(interval)
-  }
-
-  private clearHealthCheck(worker: PooledWorker): void {
-    if (worker.healthCheckInterval) {
-      clearInterval(worker.healthCheckInterval)
-      const index = this.healthCheckIntervals.indexOf(worker.healthCheckInterval)
-      if (index >= 0) {
-        this.healthCheckIntervals.splice(index, 1)
-      }
-      worker.healthCheckInterval = undefined
     }
   }
 }
