@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Marked } from 'marked'
 import { markedHighlight } from 'marked-highlight'
 import hljs from 'highlight.js/lib/core'
+import DOMPurify from 'dompurify'
 
 // Register only commonly used languages
 import javascript from 'highlight.js/lib/languages/javascript'
@@ -44,22 +45,6 @@ const markedInstance = new Marked(
 )
 
 markedInstance.setOptions({ gfm: true })
-
-// Simple HTML sanitizer — removes dangerous tags and attributes
-function sanitize(html: string): string {
-  return html
-    // Remove script, iframe, object, embed, form tags
-    .replace(/<(script|iframe|object|embed|form|input|textarea|button|select)[^>]*>[\s\S]*?<\/\1>/gi, '')
-    .replace(/<(script|iframe|object|embed|form|input|textarea|button|select)[^>]*\/?>/gi, '')
-    // Remove on* event handlers
-    .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '')
-    .replace(/\s+on\w+\s*=\s*\S+/gi, '')
-    // Remove javascript: URLs
-    .replace(/href\s*=\s*["']javascript:[^"']*["']/gi, 'href="#"')
-    .replace(/src\s*=\s*["']javascript:[^"']*["']/gi, 'src=""')
-    // Remove data: URLs except images
-    .replace(/src\s*=\s*["']data:(?!image\/)[^"']*["']/gi, 'src=""')
-}
 
 function isCodeLine(trimmed: string): boolean {
   if (!trimmed) return false
@@ -118,7 +103,10 @@ export function MarkdownRenderer({ content }: { content: string }) {
   const html = useMemo(() => {
     const processed = wrapRawCodeBlocks(content)
     const raw = markedInstance.parse(processed) as string
-    return sanitize(raw)
+    return DOMPurify.sanitize(raw, {
+      ADD_TAGS: ['code', 'pre', 'span'],
+      ADD_ATTR: ['class'],
+    })
   }, [content])
 
   return (

@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import type { PlannedTask as ProtocolPlannedTask } from '@codekalakaars/vajra-protocol'
 
 export type TaskStatus = 'pending' | 'assigned' | 'running' | 'done' | 'failed' | 'skipped'
@@ -143,15 +142,34 @@ export class TaskQueue {
     return this.getReadyTasks()
   }
 
-  failTask(taskId: string): void {
+  failTask(taskId: string): TaskState[] {
     const task = this.tasks.get(taskId)
-    if (!task) return
+    if (!task) return []
     task.status = 'failed'
     task.completedAt = Date.now()
 
     for (const [file, ownerTaskId] of this.fileToTask) {
       if (ownerTaskId === taskId) {
         this.fileToTask.delete(file)
+      }
+    }
+
+    this.skipDependents(taskId)
+
+    return this.getReadyTasks()
+  }
+
+  private skipDependents(taskId: string): void {
+    const queue = [taskId]
+    while (queue.length > 0) {
+      const currentId = queue.shift()!
+      for (const [id, task] of this.tasks) {
+        if (task.status !== 'pending') continue
+        if (task.dependsOn.includes(currentId)) {
+          task.status = 'skipped'
+          task.completedAt = Date.now()
+          queue.push(id)
+        }
       }
     }
   }
@@ -172,85 +190,8 @@ export class TaskQueue {
     task.completedAt = Date.now()
   }
 
-  hasConflict(task1Id: string, task2Id: string): boolean {
-    const task1 = this.tasks.get(task1Id)
-    const task2 = this.tasks.get(task2Id)
-    if (!task1 || !task2) return false
-
-    const task1WriteFiles = [...task1.writeFile, ...task1.deleteFile]
-    const task2WriteFiles = [...task2.writeFile, ...task2.deleteFile]
-
-    for (const file of task1WriteFiles) {
-      if (task2.readFile.includes(file) || task2WriteFiles.includes(file)) {
-        return true
-      }
-    }
-
-    for (const file of task2WriteFiles) {
-      if (task1.readFile.includes(file)) {
-        return true
-      }
-    }
-
-    return false
-  }
-
-  getLockedFiles(): Set<string> {
-    const locked = new Set<string>()
-    for (const [file, taskId] of this.fileToTask) {
-      const task = this.tasks.get(taskId)
-      if (task?.status === 'running' || task?.status === 'assigned') {
-        locked.add(file)
-      }
-    }
-    return locked
-  }
-
   getTask(taskId: string): TaskState | undefined {
     return this.tasks.get(taskId)
-  }
-
-  getTaskFiles(taskId: string): string[] {
-    const files: string[] = []
-    for (const [file, owner] of this.fileToTask) {
-      if (owner === taskId) files.push(file)
-    }
-    return files
-  }
-
-  canRunInParallel(taskIds: string[]): boolean {
-    for (let i = 0; i < taskIds.length; i++) {
-      for (let j = i + 1; j < taskIds.length; j++) {
-        if (this.hasConflict(taskIds[i], taskIds[j])) {
-          return false
-        }
-      }
-    }
-    return true
-  }
-
-  getParallelBatches(): string[][] {
-    const ready = this.getReadyTasks()
-    const batches: string[][] = []
-    const assigned = new Set<string>()
-
-    for (const task of ready) {
-      if (assigned.has(task.id)) continue
-      const batch = [task.id]
-      assigned.add(task.id)
-
-      for (const other of ready) {
-        if (assigned.has(other.id)) continue
-        if (this.canRunInParallel([...batch, other.id])) {
-          batch.push(other.id)
-          assigned.add(other.id)
-        }
-      }
-
-      batches.push(batch)
-    }
-
-    return batches
   }
 
   getStatus(): QueueStatus {

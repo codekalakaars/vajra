@@ -25,7 +25,7 @@ function App() {
       completed: false,
       createdAt: new Date().toISOString()
     }
-    todos.push(newTodo)  // BUG: Direct mutation
+    setTodos([...todos, newTodo])  // BUG: Direct mutation
     setTodos(todos)
     localStorage.setItem('todos', JSON.stringify(todos))
   }

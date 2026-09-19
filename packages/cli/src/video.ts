@@ -4,6 +4,10 @@ import { execFileSync } from 'node:child_process'
 const REGISTRY_BASE =
   'https://raw.githubusercontent.com/heygen-com/hyperframes/main/registry'
 
+const VALID_TYPES = ['example', 'block', 'component']
+const VALID_QUALITIES = ['draft', 'standard', 'high']
+const VALID_FORMATS = ['mp4', 'webm', 'mov', 'gif']
+
 interface RegistryItem {
   name: string
   type: 'hyperframes:block' | 'hyperframes:component' | 'hyperframes:example'
@@ -99,6 +103,11 @@ videoCommand
   .description('List available templates, blocks, and components')
   .option('-t, --type <type>', 'Filter by type (example, block, component)')
   .action(async (options) => {
+    if (options.type && !VALID_TYPES.includes(options.type)) {
+      console.error(`\x1b[31m✗ Invalid type '${options.type}'. Valid types: ${VALID_TYPES.join(', ')}\x1b[0m`)
+      process.exit(1)
+    }
+
     console.log('Fetching registry...\n')
 
     try {
@@ -160,6 +169,15 @@ Quality options:
 Format options:
   mp4, webm, mov, gif`)
   .action((dir, options) => {
+    if (!VALID_QUALITIES.includes(options.quality)) {
+      console.error(`\x1b[31m✗ Invalid quality '${options.quality}'. Valid options: ${VALID_QUALITIES.join(', ')}\x1b[0m`)
+      process.exit(1)
+    }
+    if (!VALID_FORMATS.includes(options.format)) {
+      console.error(`\x1b[31m✗ Invalid format '${options.format}'. Valid options: ${VALID_FORMATS.join(', ')}\x1b[0m`)
+      process.exit(1)
+    }
+
     console.log('Rendering video...\n')
 
     const args = ['npx', 'hyperframes', 'render', dir]

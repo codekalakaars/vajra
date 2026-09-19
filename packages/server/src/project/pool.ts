@@ -21,6 +21,8 @@ interface PooledWorker {
   job: LaunchJob
   lastUsedAt: number
   idleTimer?: ReturnType<typeof setTimeout>
+  /** Timestamp of last successful health check ping */
+  lastHealthCheck: number
 }
 
 export type WorkerPoolConfig = ConcurrencyConfig
@@ -77,6 +79,9 @@ export class WorkerPool {
   /** Adaptive concurrency timer */
   private adaptiveTimer?: ReturnType<typeof setInterval>
 
+  /** Health check timer */
+  private healthCheckTimer?: ReturnType<typeof setInterval>
+
   /** Current adaptive max concurrent workers */
   private adaptiveMax: number
 
@@ -100,18 +105,28 @@ export class WorkerPool {
     if (this.config.adaptiveConcurrency) {
       this.startAdaptiveMonitoring()
     }
+
+    // Start health check monitoring
+    this.startHealthChecks()
   }
 
   /**
    * Acquire a worker from the pool. Blocks if at capacity.
    *
-   * If an idle worker exists with the same projectDir, it's reused.
+   * Workers are keyed on their full permission identity (projectDir + permissions
+   * + allowedTools). A worker sandboxed for task A's file set is never handed to
+   * task B, which would result in over-permission or under-permission.
+   *
+   * If an idle worker exists with the same permission identity, it's reused.
    * Otherwise a new worker is forked.
    */
   async acquire(job: LaunchJob): Promise<LaunchHandle> {
-    // Try to reuse an idle worker with same project
+    // Compute permission identity for this job
+    const jobKey = this.permissionKey(job)
+
+    // Try to reuse an idle worker with same permission identity
     const reuseIndex = this.idle.findIndex(
-      (w) => w.job.projectDir === job.projectDir,
+      (w) => this.permissionKey(w.job) === jobKey,
     )
 
     if (reuseIndex >= 0) {
@@ -177,6 +192,9 @@ export class WorkerPool {
   async drain(): Promise<void> {
     // Stop adaptive monitoring
     this.stopAdaptiveMonitoring()
+
+    // Stop health check monitoring
+    this.stopHealthChecks()
 
     // Clear all idle timers
     for (const timer of this.idleTimers) {
@@ -311,6 +329,70 @@ export class WorkerPool {
     }
   }
 
+  /**
+   * Start health check monitoring. Pings active workers every 10 seconds
+   * and removes dead ones.
+   */
+  private startHealthChecks(): void {
+    this.healthCheckTimer = setInterval(() => {
+      this.checkWorkerHealth()
+    }, 10000)
+  }
+
+  /**
+   * Stop health check monitoring.
+   */
+  private stopHealthChecks(): void {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer)
+      this.healthCheckTimer = undefined
+    }
+  }
+
+  /**
+   * Check health of active workers by pinging them with a lightweight tool call.
+   * Dead workers are removed and their slots are freed.
+   */
+  private async checkWorkerHealth(): Promise<void> {
+    const HEALTH_TIMEOUT = 5000
+    const now = Date.now()
+
+    for (const [id, worker] of this.active) {
+      // Skip workers that were recently checked (avoid overwhelming with pings)
+      if (now - worker.lastHealthCheck < 15000) continue
+
+      try {
+        // Use a lightweight tool call as a ping
+        await Promise.race([
+          worker.handle.callTool('list_files', { path: '.' }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Health check timeout')), HEALTH_TIMEOUT)),
+        ])
+
+        // Worker responded — update health check timestamp
+        worker.lastHealthCheck = now
+      } catch {
+        // Worker is dead — remove it and free the slot
+        console.warn(`Worker ${id} failed health check, removing`)
+        worker.handle.stop()
+        this.active.delete(id)
+        this.availableSlots = Math.min(this.availableSlots + 1, this.config.maxConcurrentWorkers)
+        this.notifyWaiter()
+      }
+    }
+  }
+
+  /**
+   * Compute a stable key for a job's permission identity.
+   * Two jobs with identical permissions and tools can share a worker;
+   * everything else requires a fresh fork.
+   */
+  private permissionKey(job: LaunchJob): string {
+    const perms = job.permissions
+    const files = Object.keys(perms.files).sort().map(k => `${k}:${JSON.stringify(perms.files[k])}`).join('|')
+    const tools = Array.from(job.allowedTools ?? []).sort().join(',')
+    return `${job.projectDir}::${JSON.stringify(perms.default)}::${files}::${tools}`
+  }
+
   // ---- Internal ----
 
   private async forkWorker(job: LaunchJob): Promise<LaunchHandle> {
@@ -326,6 +408,7 @@ export class WorkerPool {
       handle,
       job,
       lastUsedAt: Date.now(),
+      lastHealthCheck: Date.now(),
     }
 
     this.active.set(pooled.id, pooled)
@@ -342,16 +425,9 @@ export class WorkerPool {
   private notifyWaiter(): void {
     if (this.waiters.length === 0) return
 
-    // If there's an idle worker, give it to the waiter
-    const worker = this.idle.pop()
-    if (worker) {
-      const waiter = this.waiters.shift()!
-      waiter.resolve(worker)
-      return
-    }
-
-    // If there's a free slot (worker was destroyed), notify waiter with null
-    // so it can fork a new worker
+    // Always give waiters a free slot (null) so they fork fresh workers.
+    // Passing an idle worker caused slot accounting drift: acquire would stop
+    // the idle worker (no slot change) then fork without decrementing.
     if (this.availableSlots > 0) {
       this.availableSlots--
       const waiter = this.waiters.shift()!

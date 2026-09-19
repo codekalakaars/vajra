@@ -65,13 +65,10 @@ function shouldSkipFile(entry: ProjectFileEntry): boolean {
 }
 
 export function buildSummaryIndex(projectDir: string, entries: ProjectFileEntry[]): SummaryEntry[] {
-  const summary: SummaryEntry[] = []
-  let totalSize = 0
-  const MAX_TOTAL = 16000
+  const candidates: SummaryEntry[] = []
 
   for (const entry of entries) {
     if (shouldSkipFile(entry)) continue
-    if (totalSize >= MAX_TOTAL) break
 
     try {
       const fullPath = join(projectDir, entry.path)
@@ -83,28 +80,31 @@ export function buildSummaryIndex(projectDir: string, entries: ProjectFileEntry[
       const importCount = countImports(content)
       const exportCount = countExports(content)
 
-      summary.push({ path: entry.path, symbols, preview, lineCount, importCount, exportCount })
-      totalSize += entry.path.length + symbols.join('').length + preview.length + 50
+      candidates.push({ path: entry.path, symbols, preview, lineCount, importCount, exportCount })
     } catch {
       // Skip unreadable files
     }
   }
 
-  return summary
-}
+  // Rank by importance: exports (entry points) > imports (high fan-in) > line count
+  candidates.sort((a, b) => {
+    if (a.exportCount !== b.exportCount) return b.exportCount - a.exportCount
+    if (a.importCount !== b.importCount) return b.importCount - a.importCount
+    return b.lineCount - a.lineCount
+  })
 
-export function formatSummaryIndex(summary: SummaryEntry[]): string {
-  if (summary.length === 0) return '(no files indexed)'
+  // Truncate after ranking
+  const summary: SummaryEntry[] = []
+  let totalSize = 0
+  const MAX_TOTAL = 16000
+
+  for (const entry of candidates) {
+    if (totalSize >= MAX_TOTAL) break
+    summary.push(entry)
+    totalSize += entry.path.length + entry.symbols.join('').length + entry.preview.length + 50
+  }
 
   return summary
-    .map(entry => {
-      const symbols = entry.symbols.length > 0 ? entry.symbols.join(', ') : '(no symbols)'
-      const meta = `${entry.lineCount}L`
-      const imports = entry.importCount > 0 ? `, ${entry.importCount} imports` : ''
-      const exports = entry.exportCount > 0 ? `, ${entry.exportCount} exports` : ''
-      return `${entry.path} [${meta}${imports}${exports}]: ${symbols}`
-    })
-    .join('\n')
 }
 
 /**
@@ -171,68 +171,6 @@ export function formatSummaryIndexHierarchical(
       result.push(line)
       currentSize += line.length
     }
-  }
-
-  return result.join('\n')
-}
-
-/**
- * Compress summary based on relevance to a task.
- * Returns only files relevant to the task's file lists.
- */
-export function compressSummaryByRelevance(
-  summary: SummaryEntry[],
-  readFile: string[],
-  writeFile: string[],
-  maxTokens: number = 2000,
-): string {
-  if (summary.length === 0) return '(no files indexed)'
-
-  // Score each entry by relevance
-  const scored = summary.map(entry => {
-    let score = 0
-
-    // Direct file match
-    if (readFile.includes(entry.path)) score += 10
-    if (writeFile.includes(entry.path)) score += 10
-
-    // Directory match
-    const entryDir = entry.path.split('/').slice(0, -1).join('/')
-    for (const file of [...readFile, ...writeFile]) {
-      const fileDir = file.split('/').slice(0, -1).join('/')
-      if (entryDir === fileDir) score += 3
-      if (fileDir.startsWith(entryDir)) score += 1
-    }
-
-    // Symbol relevance (if any symbols match file names)
-    for (const symbol of entry.symbols) {
-      for (const file of [...readFile, ...writeFile]) {
-        const fileName = file.split('/').pop()?.replace(/\.\w+$/, '') || ''
-        if (symbol.toLowerCase().includes(fileName.toLowerCase())) {
-          score += 2
-        }
-      }
-    }
-
-    return { entry, score }
-  })
-
-  // Sort by relevance score
-  const sorted = scored.sort((a, b) => b.score - a.score)
-
-  const result: string[] = []
-  let currentSize = 0
-
-  // Always include high-relevance files
-  for (const { entry, score } of sorted) {
-    if (currentSize >= maxTokens) break
-
-    const symbols = entry.symbols.length > 0 ? entry.symbols.join(', ') : ''
-    const prefix = score >= 10 ? '★' : score >= 3 ? '●' : '○'
-    const line = `${prefix} ${entry.path} [${entry.lineCount}L]: ${symbols}`
-
-    result.push(line)
-    currentSize += line.length
   }
 
   return result.join('\n')

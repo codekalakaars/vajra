@@ -58,8 +58,10 @@ export class TaskQueue {
 
     stmt(
       this.db,
-      `INSERT INTO tasks (id, session_id, title, description, status, file_permissions, tool_permissions, created_at)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      `INSERT INTO tasks (id, session_id, title, description, status, file_permissions, tool_permissions,
+       instructions, read_file, write_file, delete_file, create_dir, validation, type,
+       retries, max_retries, timeout, rollback, skip_if, created_at)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
         task.id,
         this.projectId,
@@ -67,6 +69,18 @@ export class TaskQueue {
         task.description,
         filePermissions ?? null,
         toolPermissions ?? null,
+        JSON.stringify(task.instructions),
+        JSON.stringify(task.readFile),
+        JSON.stringify(task.writeFile),
+        JSON.stringify(task.deleteFile),
+        JSON.stringify(task.createDir),
+        JSON.stringify(task.validation),
+        task.type,
+        0,
+        task.retries ?? 2,
+        task.timeout ?? 120,
+        JSON.stringify(task.rollback ?? []),
+        JSON.stringify(task.skipIf ?? []),
         now,
       )
 

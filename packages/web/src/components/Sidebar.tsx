@@ -77,16 +77,14 @@ export function Sidebar({ client, onNewProject, onOpenVideoCreator }: { client: 
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {projects.length === 0 ? (
+          {projects.length === 0 ? (
           <div className="p-4 text-sm" style={{ color: '#525252' }}>No projects yet</div>
         ) : projects.map((s) => {
           const isActive = currentPath === `/project/${s.id}`
           return (
             <div key={s.id} onClick={() => navigate(`/project/${s.id}`)}
-              className="group px-3 py-3 cursor-pointer transition-colors"
-              style={{ borderBottom: '1px solid #2a2a2a', background: isActive ? '#1a1a1a' : 'transparent' }}
-              onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = '#141414' }}
-              onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent' }}>
+              className="group px-3 py-3 cursor-pointer transition-colors hover:bg-[#141414]"
+              style={{ borderBottom: '1px solid #2a2a2a', background: isActive ? '#1a1a1a' : 'transparent' }}>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: dotColor(s.status) }} />
                 <span className="text-sm truncate" style={{ color: '#e5e5e5' }}>{s.projectDir.split('/').pop() || s.projectDir}</span>

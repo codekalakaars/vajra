@@ -36,7 +36,7 @@ export function App() {
             {route.path === '/project/:id' && <ProjectDetailView projectId={route.params.id} connected={connected} />}
             {route.path === '/video/:dir' && (
               <VideoProjectView
-                projectDir={decodeURIComponent(route.params.dir)}
+                projectDir={route.params.dir}
                 client={client}
                 onClose={() => window.history.back()}
               />

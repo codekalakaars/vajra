@@ -228,21 +228,71 @@ export function resolveFilePermission(
  * Build a PermissionsConfig (the shape vajra-core expects) from a
  * SandboxConfig. The result contains a `files` map with one entry per
  * unique path that has non-default permissions.
+ *
+ * This materializes glob rules into concrete per-path entries so the OS
+ * layer enforces them too, not just the in-process check.
  */
 export function resolveFilePermissions(config: SandboxConfig): PermissionsConfig {
-  // We need to produce a PermissionsConfig. The challenge: vajra-core
-  // applies rules per-path, but our glob patterns can match many paths.
-  // We resolve this by keeping the defaultPermissions as the base and
-  // encoding the glob rules so the worker can evaluate them at call time.
-  //
-  // For now, we return the config with the default permissions and let the
-  // worker evaluate rules per tool call. This is the safe approach: the
-  // worker re-validates everything anyway.
+  const files: Record<string, FilePermissions> = {}
+
+  // Scan the project directory to find all files
+  const projectDir = config.projectDir
+  const entries = scanProjectFiles(projectDir)
+
+  // For each file, resolve its permissions using the glob rules
+  const compiled = new CompiledRules(config.defaultPermissions, config.fileRules)
+
+  for (const entry of entries) {
+    const perm = compiled.resolve(entry)
+    // Only include files with non-default permissions
+    if (
+      perm.read !== config.defaultPermissions.read ||
+      perm.write !== config.defaultPermissions.write ||
+      perm.edit !== config.defaultPermissions.edit ||
+      perm.delete !== config.defaultPermissions.delete
+    ) {
+      files[entry] = perm
+    }
+  }
+
   return {
     version: 1,
     default: { ...config.defaultPermissions },
-    files: {},
+    files,
   }
+}
+
+/**
+ * Scan a project directory and return all file paths (relative to project root).
+ */
+function scanProjectFiles(projectDir: string): string[] {
+  const files: string[] = []
+  const SKIP_DIRS = new Set(['node_modules', '.git', 'target', '.next', 'dist', 'build', '__pycache__'])
+
+  function walk(dir: string, relative: string) {
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = require('node:fs').readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') && entry.name !== '.sample.env') continue
+      if (SKIP_DIRS.has(entry.name)) continue
+
+      const path = relative ? `${relative}/${entry.name}` : entry.name
+
+      if (entry.isDirectory()) {
+        walk(require('node:path').join(dir, entry.name), path)
+      } else if (entry.isFile()) {
+        files.push(path)
+      }
+    }
+  }
+
+  walk(projectDir, '')
+  return files
 }
 
 /**

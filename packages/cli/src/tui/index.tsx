@@ -1,5 +1,11 @@
 import React, { useState, useRef } from 'react'
 import { render, Box, Text, useInput, useApp } from 'ink'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
 interface AppProps {
   version: string
@@ -11,11 +17,23 @@ function App({ version }: AppProps) {
   const selectedIdxRef = useRef(0)
   const { exit } = useApp()
 
+  function runCommand(command: string, args: string[] = []) {
+    const self = resolve(__dirname, '..', '..', 'index.js')
+    const child = spawn(process.execPath, [self, command, ...args], {
+      stdio: 'inherit',
+      cwd: process.cwd(),
+    })
+    child.on('close', (code) => {
+      process.exitCode = code ?? 0
+      exit()
+    })
+  }
+
   const menuItems = [
-    { label: 'Run Agent', description: 'Start an interactive session with the developer agent', action: () => { exit(); process.argv = ['node', 'vajra', 'run'] } },
-    { label: 'Video Tools', description: 'Create and manage HyperFrames videos', action: () => { exit(); process.argv = ['node', 'vajra', 'video'] } },
-    { label: 'Config', description: 'View or update configuration', action: () => { exit(); process.argv = ['node', 'vajra', 'config'] } },
-    { label: 'Help', description: 'Show usage information', action: () => { exit(); process.argv = ['node', 'vajra', '--help'] } },
+    { label: 'Run Agent', description: 'Start an interactive session with the developer agent', action: () => { exit(); runCommand('run') } },
+    { label: 'Video Tools', description: 'Create and manage HyperFrames videos', action: () => { exit(); runCommand('video', ['--help']) } },
+    { label: 'Config', description: 'View or update configuration', action: () => { exit(); runCommand('config') } },
+    { label: 'Help', description: 'Show usage information', action: () => { exit(); runCommand('--help') } },
     { label: 'Exit', action: () => exit() },
   ]
 
@@ -75,12 +93,12 @@ function App({ version }: AppProps) {
   )
 }
 
-export function startTUI(version: string) {
+export async function startTUI(version: string): Promise<void> {
   if (!process.stdin.isTTY) {
     console.log('Vajra CLI - Run with --help for usage')
     process.exit(0)
   }
 
-  const { unmount, waitUntilExit } = render(<App version={version} />)
-  return { unmount, waitUntilExit }
+  const { waitUntilExit } = render(<App version={version} />)
+  await waitUntilExit()
 }

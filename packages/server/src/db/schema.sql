@@ -68,6 +68,18 @@ CREATE TABLE IF NOT EXISTS tasks (
   validation_passed INTEGER,      -- NULL until validated, 0/1 after
   file_permissions TEXT,           -- JSON: PermissionsConfig for this task
   tool_permissions TEXT,           -- JSON: string[] of allowed tool names
+  instructions TEXT,               -- JSON: string[]
+  read_file TEXT,                  -- JSON: string[]
+  write_file TEXT,                 -- JSON: string[]
+  delete_file TEXT,                -- JSON: string[]
+  create_dir TEXT,                 -- JSON: string[]
+  validation TEXT,                 -- JSON: string[] (validation commands)
+  type TEXT NOT NULL DEFAULT 'modify',  -- 'create' | 'modify' | 'delete' | 'refactor'
+  retries INTEGER NOT NULL DEFAULT 0,
+  max_retries INTEGER NOT NULL DEFAULT 2,
+  timeout INTEGER NOT NULL DEFAULT 120,
+  rollback TEXT,                   -- JSON: string[]
+  skip_if TEXT,                    -- JSON: string[]
   created_at INTEGER NOT NULL,
   started_at INTEGER,
   completed_at INTEGER

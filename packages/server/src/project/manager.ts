@@ -4,7 +4,7 @@ import { stat } from 'node:fs/promises'
 import type { SqliteDb } from '../db/client.js'
 import { stmt } from '../db/statements.js'
 import { appendMessage, forgetSeq, nextSeq } from '../agent/utils.js'
-import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage, DeveloperPlan, PlannedTask } from '@codekalakaars/vajra-protocol'
+import type { PermissionsConfig, FilePermissions, SessionStatus, SessionListResult, AttachMessage, DeveloperPlan, PlannedTask, PushEventName, PushEventPayloads } from '@codekalakaars/vajra-protocol'
 import type { FileRule, ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { FileLockManager, resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 import type { ChatProvider, ChatMessage } from '../agent/providers/types.js'
@@ -74,7 +74,7 @@ export interface CreateProjectInput {
 }
 
 export interface PushEvents {
-  push(event: string, projectId: string, payload: unknown): void
+  push<E extends PushEventName>(event: E, projectId: string, payload: PushEventPayloads[E]): void
 }
 
 /** In-memory state for an active conversation project. */
@@ -94,6 +94,12 @@ interface ConversationState {
   fileLocks: FileLockManager
   /** The chat provider for this project. */
   provider: ChatProvider
+  /** Whether the project was created with allowUnenforced. Carried to worker launches. */
+  allowUnenforced: boolean
+  /** Glob-based file rules from the sandbox config. Passed to worker launches. */
+  fileRules?: readonly FileRule[]
+  /** Default file permissions for files with no matching rule. */
+  defaultFilePermissions?: FilePermissions
 }
 
 export class ProjectManager {
@@ -220,6 +226,9 @@ export class ProjectManager {
         handle,
         fileLocks: new FileLockManager(),
         provider: input.provider,
+        allowUnenforced: input.allowUnenforced ?? false,
+        fileRules,
+        defaultFilePermissions,
       })
 
       // Transition to talking — the user can now chat with the Developer
@@ -301,24 +310,44 @@ export class ProjectManager {
         : undefined
 
     if (!this.conversations.has(projectId) && handle && provider) {
-      this.conversations.set(projectId, {
-        history: messages.map((m) => ({
-          role: m.role as 'user' | 'assistant' | 'system',
-          content: m.content ?? '',
-          ...(m.tool_name && {
+      // Rebuild conversation history from persisted messages. Tool results
+      // are stored as their own rows and must be restored as role: 'tool'
+      // messages. Tool call arguments must remain a JSON string (matching
+      // the ToolCall interface), not a parsed object.
+      const history: ChatMessage[] = []
+      for (const m of messages) {
+        if (m.role === 'assistant' && m.tool_name) {
+          history.push({
+            role: 'assistant',
+            content: m.content ?? '',
             toolCalls: [{
               id: m.tool_call_id ?? '',
               name: m.tool_name,
-              arguments: (() => { try { return m.tool_args ? JSON.parse(m.tool_args) : {} } catch { return {} } })(),
+              arguments: m.tool_args ?? '{}',
             }],
-          }),
-          ...(m.tool_result && m.tool_call_id && { toolCallId: m.tool_call_id }),
-        })),
+          })
+        } else if (m.role === 'tool' && m.tool_call_id) {
+          history.push({
+            role: 'tool',
+            content: m.content ?? m.tool_result ?? '',
+            toolCallId: m.tool_call_id,
+          })
+        } else {
+          history.push({
+            role: m.role as 'user' | 'assistant' | 'system',
+            content: m.content ?? '',
+          })
+        }
+      }
+
+      this.conversations.set(projectId, {
+        history,
         summaryIndex: [],
         fileCache: new Map(),
         handle,
         fileLocks: new FileLockManager(),
         provider,
+        allowUnenforced: false,
       })
 
       // If status is confirming, extract the plan from the last assistant message
@@ -402,6 +431,13 @@ export class ProjectManager {
   }
 
   delete(projectId: string): void {
+    // Abort the master loop if running
+    const abortController = this.abortControllers.get(projectId)
+    if (abortController) {
+      abortController.abort()
+      this.abortControllers.delete(projectId)
+    }
+
     const handle = this.handles.get(projectId)
     if (handle) {
       handle.stop()
@@ -427,7 +463,7 @@ export class ProjectManager {
     })
     tx()
     forgetSeq(projectId)
-    this.events.push('projects.deleted', projectId, { projectId })
+    this.events.push('projects.deleted', projectId, {})
   }
 
   /**
@@ -444,6 +480,10 @@ export class ProjectManager {
       throw new Error('Cannot send messages while plan is awaiting confirmation. Confirm or reject the plan first.')
     }
 
+    if (status === 'executing' || status === 'running') {
+      throw new Error('Cannot send messages while the master loop is executing. Wait for completion or stop the project.')
+    }
+
     // Allow recovery from failed status — reset to talking
     if (status === 'failed') {
       this.setStatus(projectId, 'talking')
@@ -458,12 +498,6 @@ export class ProjectManager {
 
     if (status === 'talking' || status === 'failed' || status === 'stopped') {
       await this.sendConversationMessage(projectId, content, apiKeys)
-      return
-    }
-
-    if (status === 'executing' || status === 'running') {
-      // Legacy path: dispatch directly to worker
-      await this.sendWorkerMessage(projectId, content, apiKeys)
       return
     }
 
@@ -526,6 +560,9 @@ export class ProjectManager {
         registry,
         fileLocks: conv.fileLocks,
         pool,
+        allowUnenforced: conv.allowUnenforced,
+        fileRules: conv.fileRules,
+        defaultFilePermissions: conv.defaultFilePermissions,
         launchWorker: async (job) => {
           // Use pool if available, otherwise fall back to direct launch
           if (pool) {
@@ -533,8 +570,10 @@ export class ProjectManager {
               projectId: projectId,
               projectDir: job.projectDir,
               permissions: job.permissions,
-              allowUnenforced: false,
+              allowUnenforced: job.allowUnenforced,
               allowedTools: job.allowedTools,
+              fileRules: job.fileRules,
+              defaultFilePermissions: job.defaultFilePermissions,
             })
           }
 
@@ -544,8 +583,10 @@ export class ProjectManager {
               projectId: projectId,
               projectDir: job.projectDir,
               permissions: job.permissions,
-              allowUnenforced: false,
+              allowUnenforced: job.allowUnenforced,
               allowedTools: job.allowedTools,
+              fileRules: job.fileRules,
+              defaultFilePermissions: job.defaultFilePermissions,
             },
             (report) => this.recordSandboxReport(projectId, report),
           )
@@ -626,66 +667,6 @@ export class ProjectManager {
       const message = e instanceof Error ? e.message : String(e)
       this.setStatus(projectId, 'failed', Date.now())
       this.events.push('projects.failed', projectId, { message })
-    }
-  }
-
-  /**
-   * Legacy path: dispatch a message directly to the worker agent loop.
-   */
-  private async sendWorkerMessage(projectId: string, content: string, apiKeys: Record<string, string>): Promise<void> {
-    const { agentLoop } = await import('../agent/loop.js')
-
-    const conv = this.conversations.get(projectId)
-
-    const row = stmt(this.db, `SELECT project_dir, model FROM sessions WHERE id = ?`).get(projectId) as { project_dir: string; model: string }
-
-    const { provider: activeProvider, apiKey } = createProvider(row.model, apiKeys)
-    if (conv) conv.provider = activeProvider
-
-    const { loadPermissions } = await import('../native.js')
-    const permissions = loadPermissions(row.project_dir) ?? {
-      version: 1,
-      default: { read: true, write: false, edit: false, delete: false },
-      files: {},
-    }
-
-    // Re-launch the sandbox worker if the previous one crashed or was stopped
-    let handle = this.handles.get(projectId)
-    if (!handle) {
-      handle = await this.launcher(
-        {
-          projectId: projectId,
-          projectDir: row.project_dir,
-          permissions,
-          allowUnenforced: false,
-        },
-        (report) => this.recordSandboxReport(projectId, report),
-      )
-      this.handles.set(projectId, handle)
-    }
-
-    if (!activeProvider) {
-      throw new Error('No chat provider available for this project')
-    }
-
-    this.setStatus(projectId, 'running')
-    try {
-      const result = await agentLoop({
-        project: { id: projectId, projectDir: row.project_dir, task: content, model: row.model },
-        apiKey,
-        provider: activeProvider,
-        handle,
-        permissions,
-        events: this.events,
-        db: this.db,
-      })
-      this.setStatus(projectId, 'done', Date.now())
-      this.events.push('projects.completed', projectId, { summary: result.summary })
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e)
-      this.setStatus(projectId, 'failed', Date.now())
-      this.events.push('projects.failed', projectId, { message })
-      // Don't re-throw — event already emitted, RPC handler shouldn't double-fail
     }
   }
 

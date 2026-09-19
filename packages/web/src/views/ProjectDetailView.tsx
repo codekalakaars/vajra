@@ -9,7 +9,7 @@ import { ModelSelector } from '../components/ModelSelector'
 import { Square } from 'lucide-react'
 import type { PlannedTask } from '@codekalakaars/vajra-protocol'
 
-const C = { bg: '#0a0a0a', raised: '#1a1a1a', overlay: '#222222', border: '#2a2a2a', text: '#e5e5e5', textMuted: '#737373', placeholder: '#525252', input: '#333333', muted: '#141414' }
+import { C } from '../lib/theme'
 
 interface ParsedPlan { tasks: PlannedTask[]; independentGroups: string[][]; estimatedWorkers: number }
 function tryParsePlan(content: string): ParsedPlan | null {
@@ -21,10 +21,10 @@ function tryParsePlan(content: string): ParsedPlan | null {
   } catch {}
   return null
 }
-function PlanMessage({ content }: { content: string }) {
+function PlanMessage({ content, taskStates }: { content: string; taskStates?: Map<string, 'pending' | 'running' | 'done' | 'failed' | 'assigned' | 'skipped'> }) {
   const plan = useMemo(() => tryParsePlan(content), [content])
   if (!plan) return <MarkdownRenderer content={content} />
-  return <PlanView tasks={plan.tasks} independentGroups={plan.independentGroups} estimatedWorkers={plan.estimatedWorkers} />
+  return <PlanView tasks={plan.tasks} taskStates={taskStates} independentGroups={plan.independentGroups} estimatedWorkers={plan.estimatedWorkers} />
 }
 
 export function ProjectDetailView({ projectId, connected }: { projectId: string; connected: boolean }) {
@@ -34,7 +34,13 @@ export function ProjectDetailView({ projectId, connected }: { projectId: string;
   const [inputValue, setInputValue] = useState('')
   const [attached, setAttached] = useState(false)
 
-  useEffect(() => { project.attach(projectId).then(() => setAttached(true)) }, [projectId])
+  useEffect(() => {
+    let cancelled = false
+    project.attach(projectId)
+      .then(() => { if (!cancelled) setAttached(true) })
+      .catch(() => { if (!cancelled) setAttached(true) })
+    return () => { cancelled = true }
+  }, [projectId])
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight }, [project.messages, project._streamingText, project.thinkingText])
   useEffect(() => { if (!isStreaming && inputRef.current) inputRef.current.focus() }, [project.status])
 
@@ -64,7 +70,7 @@ export function ProjectDetailView({ projectId, connected }: { projectId: string;
           {!attached && <div className="text-center mt-20" style={{ color: C.placeholder }}>Loading...</div>}
           {attached && project.messages.length === 0 && project.status !== 'streaming' && <div className="text-center mt-20" style={{ color: C.placeholder }}>No messages yet</div>}
 
-          {project.messages.map((msg, i) => (
+          {project.messages.map((msg: { role: string; content: string }, i: number) => (
             <div key={i}>
               {msg.role === 'user' ? (
                 <div className="flex items-start gap-3 justify-end">
@@ -76,7 +82,7 @@ export function ProjectDetailView({ projectId, connected }: { projectId: string;
               ) : (
                 <div className="flex items-start gap-3">
                   <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: C.overlay, color: C.text }}>V</div>
-                  <div className="flex-1 min-w-0"><PlanMessage content={msg.content} /></div>
+                   <div className="flex-1 min-w-0"><PlanMessage content={msg.content} taskStates={project.taskStates} /></div>
                 </div>
               )}
             </div>
@@ -128,7 +134,7 @@ export function ProjectDetailView({ projectId, connected }: { projectId: string;
       </div>
 
       {project.planTasks.length > 0 && (
-        <TaskSidebar tasks={project.planTasks} taskStates={undefined} status={project.status} />
+        <TaskSidebar tasks={project.planTasks} taskStates={project.taskStates} status={project.status} />
       )}
     </div>
   )

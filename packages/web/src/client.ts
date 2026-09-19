@@ -22,8 +22,8 @@ export class VajraClient {
         const msg = data as Record<string, unknown>
         if (msg.kind === 'event' && typeof msg.event === 'string') {
           const payload = (typeof msg.payload === 'object' && msg.payload !== null)
-            ? { ...msg.payload as Record<string, unknown>, projectId: msg.projectId }
-            : { projectId: msg.projectId }
+            ? { ...msg.payload as Record<string, unknown>, projectId: msg.sessionId }
+            : { projectId: msg.sessionId }
           this.events.emit(msg.event, payload)
         }
       }

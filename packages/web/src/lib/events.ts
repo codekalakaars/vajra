@@ -27,7 +27,11 @@ export class EventBus {
     const set = this.listeners.get(event)
     if (!set) return
     for (const handler of set) {
-      handler(payload)
+      try {
+        handler(payload)
+      } catch (err) {
+        console.error(`[EventBus] Error in handler for "${event}":`, err)
+      }
     }
   }
 }

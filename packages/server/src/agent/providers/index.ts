@@ -118,8 +118,9 @@ export function createProvider(
       `Available providers: ${[...providers.keys()].join(', ')}`
     )
   }
-  // Route API key: require provider-specific key. No cross-vendor fallback.
-  const apiKey = apiKeys[providerName] ?? ''
+  // Route API key: require provider-specific key. The "go" provider is a
+  // Zen variant and shares the same OPENCODE_API_KEY.
+  const apiKey = apiKeys[providerName] ?? (providerName === 'go' ? apiKeys['zen'] : undefined) ?? ''
   if (!apiKey) {
     throw new Error(
       `No API key found for provider '${providerName}'. ` +

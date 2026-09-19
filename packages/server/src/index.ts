@@ -2,7 +2,7 @@ import { createServer as createHttpServer } from 'node:http'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import dotenv from 'dotenv'
-import { openDb } from './db/client.js'
+import { openDb, reconcileStaleSessions } from './db/client.js'
 import { createAppServer } from './ws/server.js'
 import type { ProjectLauncher } from './project/manager.js'
 import { forkProjectLauncher } from './project/launcher.js'
@@ -53,6 +53,7 @@ export function startServer(options: StartOptions = {}): Promise<RunningServer> 
 
   const httpServer = createHttpServer()
   const db = openDb(options.dbPath ?? 'vajra.db')
+  reconcileStaleSessions(db)
   const { wss } = createAppServer(httpServer, { db, launcher: options.launcher, apiKeys: options.apiKeys })
 
   return new Promise((resolve) => {

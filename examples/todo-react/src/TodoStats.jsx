@@ -5,7 +5,7 @@ function TodoStats({ todos }) {
   const active = total - completed
 
   // BUG 2: Division by zero when no todos
-  const percentage = Math.round((completed / total) * 100)
+  const percentage = total > 0 ? Math.round((completed / total) * 100) : 0
 
   // BUG 3: Not formatting percentage correctly
   // Shows NaN when no todos

@@ -21,7 +21,9 @@ export interface RpcFailure {
 
 export type RpcResponse<R = unknown> = RpcSuccess<R> | RpcFailure
 
-export interface PushEvent<E extends string = string, P = unknown> {
+import type { PushEventPayloads, PushEventName } from './messages.js'
+
+export interface PushEvent<E extends PushEventName = PushEventName, P = PushEventPayloads[E]> {
   kind: 'event'
   event: E
   sessionId?: string

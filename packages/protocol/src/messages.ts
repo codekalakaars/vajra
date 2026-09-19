@@ -91,6 +91,8 @@ export interface TaskStatePayload {
 }
 
 export interface ConflictPayload {
+  agentId?: string
+  taskId?: string
   task1: string
   task2: string
   files: string[]
@@ -198,27 +200,44 @@ export interface FailedPayload {
 
 export interface ThinkingDeltaPayload {
   text: string
+  agentId?: string
+  taskId?: string
+}
+
+export interface ToolCallPayload {
+  callId: string
+  tool: string
+  args: Record<string, unknown>
+}
+
+export interface ToolResultPayload {
+  callId: string
+  tool: string
+  ok: boolean
+  result: string
 }
 
 export interface PushEventPayloads {
-  'session.statusChanged': { status: SessionStatus }
-  'session.sandboxStatus': SandboxStatusPayload
-  'session.assistantDelta': AssistantDeltaPayload
-  'session.thinkingDelta': ThinkingDeltaPayload
-  'session.completed': Record<string, never>
-  'session.failed': FailedPayload
-  'session.deleted': { sessionId: string }
-  'session.planStarted': { sessionId: string }
-  'session.planTask': { sessionId: string; task: PlannedTask }
-  'session.planComplete': { sessionId: string; plan: DeveloperPlan }
-  'session.planProposed': { sessionId: string; plan: DeveloperPlan }
-  'session.planConfirmed': Record<string, never>
-  'session.workerStarted': { sessionId: string; agentId: string; taskId: string }
-  'session.workerProgress': { sessionId: string; agentId: string; task: string; detail: string }
-  'session.workerCompleted': { sessionId: string; agentId: string; taskId: string; validationPassed: boolean }
-  'session.workerFailed': { sessionId: string; agentId: string; taskId: string; error: string }
-  'session.conflictDetected': { sessionId: string } & ConflictPayload
-  'session.conflictResolved': { sessionId: string; task1: string; task2: string; resolution: string }
+  'projects.statusChanged': { status: SessionStatus }
+  'projects.sandboxStatus': SandboxStatusPayload
+  'projects.assistantDelta': AssistantDeltaPayload
+  'projects.thinkingDelta': ThinkingDeltaPayload
+  'projects.completed': Record<string, never>
+  'projects.failed': FailedPayload
+  'projects.deleted': Record<string, never>
+  'projects.planStarted': Record<string, never>
+  'projects.planTask': { task: PlannedTask }
+  'projects.planComplete': { plan: DeveloperPlan }
+  'projects.planProposed': { plan: DeveloperPlan }
+  'projects.planConfirmed': Record<string, never>
+  'projects.workerStarted': { agentId: string; taskId: string }
+  'projects.workerProgress': { agentId: string; taskId: string; detail: string }
+  'projects.workerCompleted': { agentId: string; taskId: string; validationPassed: boolean }
+  'projects.workerFailed': { agentId: string; taskId: string; error: string }
+  'projects.conflictDetected': ConflictPayload
+  'projects.conflictResolved': { task1: string; task2: string; resolution: string }
+  'projects.toolCall': ToolCallPayload
+  'projects.toolResult': ToolResultPayload
 }
 
 export type PushEventName = keyof PushEventPayloads

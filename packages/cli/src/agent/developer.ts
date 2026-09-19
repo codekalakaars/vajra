@@ -14,44 +14,24 @@ export interface LaunchHandle {
 // Approximate tokens per character (conservative estimate)
 const CHARS_PER_TOKEN = 4
 
-// Maximum context sizes by model (in tokens)
-const MODEL_LIMITS: Record<string, number> = {
-  'nvidia/nemotron-3-ultra-550b-a55b:free': 1000000,
-  'nvidia/nemotron-3-super-120b-a12b:free': 262144,
-  'nvidia/nemotron-3.5-lightning:free': 1000000,
-  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': 256000,
-  'dots-studio/dots-3-note-preview:free': 512000,
-  'google/gemma-4-31b-it:free': 262144,
-  'google/gemma-4-26b-a4b-it:free': 262144,
-  'nex-agi/nex-n2.5-pro:free': 262144,
-  'poolside/laguna-s-2.1:free': 262144,
-  'poolside/laguna-xs-2.1:free': 262144,
-  'cohere/north-mini-code:free': 256000,
-  'inclusionai/ling-3.0-flash-vl:free': 262144,
-  // Zen models
-  'deepseek-v4-flash-free': 128000,
-  'mimo-v2.5-free': 128000,
-  'nemotron-3-ultra-free': 1000000,
-  'nemotron-3.5-lightning-free': 1000000,
-  'nemotron-3-super-free': 262144,
-  'ling-3.0-flash-fin-free': 128000,
-  'gpt-5.5': 256000,
-  'gpt-5.4': 256000,
-  'gpt-5.4-mini': 128000,
-  'deepseek-v4-pro': 128000,
-  'kimi-k3': 128000,
-  'big-pickle': 128000,
-  'mimo-v2.5': 128000,
-  'mimo-v2.5-pro': 128000,
+// Default context limits by provider (in tokens)
+// Most models fall into these ranges; specific models can override if known
+const PROVIDER_DEFAULTS: Record<string, number> = {
+  'nvidia/': 256000,      // NVIDIA Nemotron models
+  'google/': 256000,      // Google Gemma models
+  'meta-llama/': 128000,  // Meta Llama models
+  'openai/': 128000,      // OpenAI models
+  'anthropic/': 200000,   // Anthropic Claude models
+  'zen/': 128000,         // Zen models
+  'go/': 128000,          // Go models
   default: 128000,
 }
 
 function getModelLimit(model: string): number {
-  if (MODEL_LIMITS[model]) return MODEL_LIMITS[model]
-  for (const [key, limit] of Object.entries(MODEL_LIMITS)) {
-    if (model.includes(key)) return limit
+  for (const [prefix, limit] of Object.entries(PROVIDER_DEFAULTS)) {
+    if (prefix !== 'default' && model.startsWith(prefix)) return limit
   }
-  return MODEL_LIMITS.default
+  return PROVIDER_DEFAULTS.default
 }
 
 function estimateTokens(message: OpenRouterMessage): number {
@@ -174,11 +154,9 @@ function buildDeveloperConversationPrompt(
     '- instructions: EXACT step-by-step instructions (e.g. "Add try-catch around line 42 in src/api.ts")',
     '- readFile: Files the worker needs to read for context',
     '- writeFile: Files the worker will create or modify',
-    '- deleteFile: Files to delete',
-    '- createDir: Directories to create',
     '- validation: Commands to run after completion (must exit 0 on success). IMPORTANT: Do NOT use commands that require a running server (npm test, curl localhost, etc.) unless the task explicitly starts the server. Use syntax checks (node --check, tsc --noEmit) or static analysis (eslint) instead.',
     '- dependsOn: Task IDs this depends on',
-    '- type: create, modify, delete, or refactor',
+    '- type: create, modify, or refactor',
     '- complexity: low, medium, or high (affects task sizing)',
     '- rollback: Commands to undo changes if validation fails (optional)',
     '- alternativeApproaches: Different ways to solve this task (optional)',
@@ -217,8 +195,6 @@ function parseProposePlanArgs(raw: unknown): DeveloperPlan {
       instructions: string[]
       readFile: string[]
       writeFile: string[]
-      deleteFile: string[]
-      createDir: string[]
       validation: string[]
       dependsOn: string[]
       type: string
@@ -242,11 +218,11 @@ function parseProposePlanArgs(raw: unknown): DeveloperPlan {
     instructions: t.instructions ?? [],
     readFile: t.readFile ?? [],
     writeFile: t.writeFile ?? [],
-    deleteFile: t.deleteFile ?? [],
-    createDir: t.createDir ?? [],
+    deleteFile: [],
+    createDir: [],
     validation: t.validation ?? [],
     dependsOn: t.dependsOn ?? [],
-    type: (['create', 'modify', 'delete', 'refactor'].includes(t.type) ? t.type : 'modify') as PlannedTask['type'],
+    type: (['create', 'modify', 'refactor'].includes(t.type) ? t.type : 'modify') as PlannedTask['type'],
     complexity: (['low', 'medium', 'high'].includes(t.complexity ?? '') ? t.complexity : 'medium') as PlannedTask['complexity'],
     validationStrategy: (['hierarchical', 'targeted', 'full', 'skip'].includes(t.validationStrategy ?? '') ? t.validationStrategy : 'hierarchical') as PlannedTask['validationStrategy'],
     alternativeApproaches: t.alternativeApproaches ?? [],
@@ -372,6 +348,7 @@ export interface DeveloperTurnInput {
   summaryIndex: SummaryEntry[]
   onTextDelta?: (text: string) => void
   onThinkingDelta?: (text: string) => void
+  isInterrupted?: () => boolean
 }
 
 export type DeveloperTurnResult =
@@ -381,7 +358,7 @@ export type DeveloperTurnResult =
 export async function developerConversationTurn(
   input: DeveloperTurnInput,
 ): Promise<DeveloperTurnResult> {
-  const { sessionId, projectDir, userMessage, model, apiKey, handle, messages, summaryIndex, onTextDelta, onThinkingDelta } = input
+  const { sessionId, projectDir, userMessage, model, apiKey, handle, messages, summaryIndex, onTextDelta, onThinkingDelta, isInterrupted } = input
 
   if (messages.length === 0) {
     let tree = ''
@@ -410,6 +387,10 @@ export async function developerConversationTurn(
   const MAX_TOOL_CALLS = 30
 
   while (toolCallCount < MAX_TOOL_CALLS) {
+    if (isInterrupted?.()) {
+      break
+    }
+
     // Compress messages to fit within context window
     const compressedMessages = compressMessages(messages, model)
 
@@ -504,7 +485,9 @@ export async function developerConversationTurn(
     }
   }
 
-  const fallbackContent = 'I have enough context. Let me propose a plan.'
+  const fallbackContent = isInterrupted?.()
+    ? 'Interrupted by user.'
+    : 'I have enough context. Let me propose a plan.'
   messages.push({ role: 'assistant', content: fallbackContent })
   return { type: 'response', response: fallbackContent }
 }

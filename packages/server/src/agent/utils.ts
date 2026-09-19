@@ -3,6 +3,7 @@
 import type { SqliteDb } from '../db/client.js'
 import type { SummaryEntry } from './summary.js'
 import { stmt } from '../db/statements.js'
+import { runInTransaction } from '../db/client.js'
 import { MAX_SEARCH_RESULTS } from './constants.js'
 
 /**
@@ -79,4 +80,51 @@ export function nextSeq(db: SqliteDb, projectId: string): number {
 /** Forget a project's sequence — call when its messages are deleted. */
 export function forgetSeq(projectId: string): void {
   sequences.delete(projectId)
+}
+
+/**
+ * Append a tool result message (role: 'tool') to the session's message log.
+ * Tool results are stored as their own rows with a tool_call_id linking them
+ * to the parent assistant message's tool call.
+ */
+export function appendToolResult(
+  db: SqliteDb,
+  projectId: string,
+  seq: number,
+  content: string,
+  toolCallId: string,
+): void {
+  stmt(
+    db,
+    `INSERT INTO messages (session_id, seq, role, content, tool_call_id, created_at)
+     VALUES (?, ?, 'tool', ?, ?, ?)`,
+  ).run(projectId, seq, content, toolCallId, Date.now())
+}
+
+/**
+ * Atomically append an assistant message and its tool results in a single
+ * transaction. The assistant message gets `seq`, and each tool result gets the
+ * next sequential number. This prevents the race condition where two concurrent
+ * callers compute the same `nextSeq` value and the second INSERT violates the
+ * primary key.
+ */
+export function appendMessageWithToolResults(
+  db: SqliteDb,
+  projectId: string,
+  content: string | null,
+  toolCalls?: Array<{ id: string; name: string; arguments: string }>,
+  toolResults?: Array<{ toolCallId: string; content: string }>,
+): void {
+  runInTransaction(db, () => {
+    const assistantSeq = nextSeq(db, projectId)
+    appendMessage(db, projectId, assistantSeq, 'assistant', content,
+      toolCalls ? JSON.stringify(toolCalls) : undefined)
+
+    if (toolResults) {
+      for (const result of toolResults) {
+        const resultSeq = nextSeq(db, projectId)
+        appendToolResult(db, projectId, resultSeq, result.content, result.toolCallId)
+      }
+    }
+  })
 }

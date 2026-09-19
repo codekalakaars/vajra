@@ -19,6 +19,7 @@ export interface RunOptions {
   verbose: boolean
   projectDir: string
   autoConfirm?: boolean
+  timeout?: number
 }
 
 const DEFAULT_MAX_RETRIES = 2
@@ -152,8 +153,6 @@ async function executeTask(
   const instructionLines = task.instructions.map((inst, i) => `${i + 1}. ${inst}`).join('\n')
   const readFileList = task.readFile.length > 0 ? task.readFile.join(', ') : '(none)'
   const writeFileList = task.writeFile.length > 0 ? task.writeFile.join(', ') : '(none)'
-  const deleteFileList = task.deleteFile.length > 0 ? task.deleteFile.join(', ') : '(none)'
-  const createDirList = task.createDir.length > 0 ? task.createDir.join(', ') : '(none)'
 
   const systemPrompt = [
     'You are a worker agent. Follow the instructions EXACTLY. Do not deviate.',
@@ -166,8 +165,6 @@ async function executeTask(
     '',
     `FILES TO READ: ${readFileList}`,
     `FILES TO WRITE: ${writeFileList}`,
-    task.deleteFile.length > 0 ? `FILES TO DELETE (handled externally): ${deleteFileList}` : '',
-    task.createDir.length > 0 ? `DIRS TO CREATE (handled externally): ${createDirList}` : '',
     '',
     'RULES:',
     '- Execute each instruction step by step',
@@ -272,7 +269,7 @@ async function executeTask(
 }
 
 export async function runCommand(options: RunOptions): Promise<void> {
-  const streamer = new TerminalStreamer(options.verbose)
+  const streamer = new TerminalStreamer(options.verbose, '0.1.0')
 
   if (!options.apiKey) {
     streamer.error('No API key provided. Set OPENROUTER_API_KEY or OPENCODE_API_KEY, or use --api-key')
@@ -301,6 +298,9 @@ export async function runCommand(options: RunOptions): Promise<void> {
 
   const masterAgent = registry.createAgent(sessionId, 'master', 'Orchestrate task execution')
   registry.updateStatus(masterAgent.id, 'running')
+
+  streamer.info(`Model: ${options.model}`)
+  streamer.info(`Timeout: ${options.timeout ?? 300}s per task`)
 
   const dummyHandle: LaunchHandle = {
     callTool: async (tool: string, args: unknown) => {
@@ -395,27 +395,35 @@ export async function runCommand(options: RunOptions): Promise<void> {
     }
   }
 
-  streamer.info(`\n🔍 Scanning project in ${options.projectDir}...`)
+  streamer.info(`\n🔍 Scanning project in ${projectDir}...`)
   streamer.info(`💬 Starting conversation with developer...\n`)
 
   let result: DeveloperTurnResult
   let userMessage = initialMessage
 
-  for (let turn = 0; turn < 20; turn++) {
+  let turn = 0
+  for (turn = 0; turn < 20; turn++) {
     if (interrupted) break
 
-    result = await developerConversationTurn({
-      sessionId,
-      projectDir: options.projectDir,
-      userMessage,
-      model: options.model,
-      apiKey: options.apiKey,
-      handle: dummyHandle,
-      messages,
-      summaryIndex,
-      onTextDelta: text => streamer.onTextDelta(text),
-      onThinkingDelta: text => streamer.onThinkingDelta(text),
-    })
+    try {
+      result = await developerConversationTurn({
+        sessionId,
+        projectDir,
+        userMessage,
+        model: options.model,
+        apiKey: options.apiKey,
+        handle: dummyHandle,
+        messages,
+        summaryIndex,
+        onTextDelta: text => streamer.onTextDelta(text),
+        onThinkingDelta: text => streamer.onThinkingDelta(text),
+        isInterrupted: () => interrupted,
+      })
+    } catch (e) {
+      streamer.error(`API error: ${e instanceof Error ? e.message : String(e)}`)
+      streamer.warning('Check your API key and network connection.')
+      break
+    }
 
     streamer.finishLine()
 
@@ -462,6 +470,10 @@ export async function runCommand(options: RunOptions): Promise<void> {
         if (status.done + status.failed + status.skipped >= status.total) break
 
         const readyTasks = queue.getReadyTasks()
+
+        if (readyTasks.length === 0) {
+          break
+        }
 
         for (const task of readyTasks) {
           if (task.skipIf && task.skipIf.length > 0) {
@@ -520,6 +532,12 @@ export async function runCommand(options: RunOptions): Promise<void> {
 
             if (success) break
 
+            const hasFileChanges = changeHistory.hasChanges(task.id)
+            if (!hasFileChanges) {
+              streamer.warning(`  No changes made - skipping retry for "${task.title}"`)
+              break
+            }
+
             if (retries < maxRetries) {
               await changeHistory.rollback(task.id)
               streamer.warning(`  Retrying (${retries + 1}/${maxRetries})...`)
@@ -575,6 +593,10 @@ export async function runCommand(options: RunOptions): Promise<void> {
       streamer.info('Goodbye!')
       break
     }
+  }
+
+  if (turn >= 20 && !interrupted) {
+    streamer.warning('Reached the 20-turn conversation limit. Starting execution with current progress.')
   }
 
   registry.updateStatus(masterAgent.id, 'done')
