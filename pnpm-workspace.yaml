@@ -1,6 +1,7 @@
 packages:
   - "."
   - "packages/*"
+  - "experimental-packages/*"
 
 # Which dependencies may run install scripts. The three below are transitive
 # deps of hyperframes that have never been built here; pnpm 11 refuses to

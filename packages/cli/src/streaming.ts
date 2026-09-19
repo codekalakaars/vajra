@@ -2,7 +2,7 @@ export class TerminalStreamer {
   private currentLine = ''
   private isThinking = false
 
-  constructor(private verbose = false, private version = '0.1.0') {}
+  constructor(private verbose = false, private version = '0.0.1') {}
 
   onTextDelta(text: string): void {
     this.currentLine += text

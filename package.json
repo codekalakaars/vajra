@@ -1,6 +1,6 @@
 {
   "name": "@codekalakaars/vajra-core",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Cross-platform native operations for Vajra",
   "main": "index.js",
   "types": "index.d.ts",

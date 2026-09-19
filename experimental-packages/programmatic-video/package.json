@@ -1,6 +1,6 @@
 {
   "name": "@codekalakaars/programmatic-video",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Programmatic video generation powered by HyperFrames. Build deterministic HTML compositions from TypeScript.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -38,6 +38,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/codekalakaars/vajra.git",
-    "directory": "packages/programmatic-video"
+    "directory": "experimental-packages/programmatic-video"
   }
 }

@@ -15,11 +15,11 @@ importers:
         specifier: ^2.10.12
         version: 2.10.12
 
-  packages/agent-core:
+  experimental-packages/agent-core:
     dependencies:
       '@codekalakaars/vajra-protocol':
         specifier: workspace:*
-        version: link:../protocol
+        version: link:../../packages/protocol
     devDependencies:
       '@types/node':
         specifier: ^22.5.4
@@ -28,44 +28,7 @@ importers:
         specifier: ^5.5.4
         version: 5.9.3
 
-  packages/cli:
-    dependencies:
-      '@codekalakaars/vajra-core':
-        specifier: workspace:*
-        version: link:../..
-      '@codekalakaars/vajra-protocol':
-        specifier: workspace:*
-        version: link:../protocol
-      '@codekalakaars/vajra-sandbox':
-        specifier: workspace:*
-        version: link:../sandbox
-      commander:
-        specifier: ^12.0.0
-        version: 12.1.0
-      dotenv:
-        specifier: ^16.0.0
-        version: 16.6.1
-      ink:
-        specifier: ^7.1.1
-        version: 7.1.1(@types/react@19.2.18)(react@19.2.8)
-      openai:
-        specifier: ^7.8.0
-        version: 7.8.0(ws@8.21.3)(zod@3.25.76)
-      react:
-        specifier: ^19.2.8
-        version: 19.2.8
-    devDependencies:
-      '@types/node':
-        specifier: ^20.0.0
-        version: 20.19.43
-      '@types/react':
-        specifier: ^19.2.18
-        version: 19.2.18
-      typescript:
-        specifier: ^5.3.0
-        version: 5.9.3
-
-  packages/programmatic-video:
+  experimental-packages/programmatic-video:
     dependencies:
       hyperframes:
         specifier: '>=0.8.0'
@@ -81,33 +44,7 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
 
-  packages/protocol:
-    dependencies:
-      zod:
-        specifier: ^3.23.8
-        version: 3.25.76
-    devDependencies:
-      typescript:
-        specifier: ^5.5.4
-        version: 5.9.3
-
-  packages/sandbox:
-    dependencies:
-      '@codekalakaars/vajra-protocol':
-        specifier: workspace:*
-        version: link:../protocol
-    devDependencies:
-      '@codekalakaars/vajra-core':
-        specifier: workspace:*
-        version: link:../..
-      '@types/node':
-        specifier: ^22.5.4
-        version: 22.20.1
-      typescript:
-        specifier: ^5.5.4
-        version: 5.9.3
-
-  packages/server:
+  experimental-packages/server:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: ^0.39.0
@@ -117,10 +54,10 @@ importers:
         version: link:../..
       '@codekalakaars/vajra-protocol':
         specifier: workspace:*
-        version: link:../protocol
+        version: link:../../packages/protocol
       '@codekalakaars/vajra-sandbox':
         specifier: workspace:*
-        version: link:../sandbox
+        version: link:../../packages/sandbox
       better-sqlite3:
         specifier: ^11.3.0
         version: 11.10.0
@@ -156,11 +93,11 @@ importers:
         specifier: ^5.5.4
         version: 5.9.3
 
-  packages/web:
+  experimental-packages/web:
     dependencies:
       '@codekalakaars/vajra-protocol':
         specifier: workspace:*
-        version: link:../protocol
+        version: link:../../packages/protocol
       dompurify:
         specifier: ^3.4.15
         version: 3.4.15
@@ -207,6 +144,69 @@ importers:
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+
+  packages/cli:
+    dependencies:
+      '@codekalakaars/vajra-core':
+        specifier: workspace:*
+        version: link:../..
+      '@codekalakaars/vajra-protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@codekalakaars/vajra-sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+      commander:
+        specifier: ^12.0.0
+        version: 12.1.0
+      dotenv:
+        specifier: ^16.0.0
+        version: 16.6.1
+      ink:
+        specifier: ^7.1.1
+        version: 7.1.1(@types/react@19.2.18)(react@19.2.8)
+      openai:
+        specifier: ^7.8.0
+        version: 7.8.0(ws@8.21.3)(zod@3.25.76)
+      react:
+        specifier: ^19.2.8
+        version: 19.2.8
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.43
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
+      typescript:
+        specifier: ^5.3.0
+        version: 5.9.3
+
+  packages/protocol:
+    dependencies:
+      zod:
+        specifier: ^3.23.8
+        version: 3.25.76
+    devDependencies:
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+
+  packages/sandbox:
+    dependencies:
+      '@codekalakaars/vajra-protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@codekalakaars/vajra-core':
+        specifier: workspace:*
+        version: link:../..
+      '@types/node':
+        specifier: ^22.5.4
+        version: 22.20.1
       typescript:
         specifier: ^5.5.4
         version: 5.9.3

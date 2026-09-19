@@ -1,6 +1,6 @@
 {
   "name": "@codekalakaars/vajra-sandbox",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "OS-level sandboxing and file-permission enforcement for Vajra AI agents",
   "license": "Apache-2.0",
   "repository": {
