@@ -82,8 +82,32 @@ pub(crate) fn apply_per_file_rules(
         );
     }
 
+    // Collect parent directories that need delete access for files with delete=true
+    let mut parent_needs_delete: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    for (file_path, file_perm) in &perms.files {
+        if file_perm.delete {
+            // The file path is project-relative. Its parent directory needs REMOVE_FILE.
+            if let Some(parent) = Path::new(file_path).parent() {
+                let abs_parent = if parent.as_os_str().is_empty() {
+                    project_dir.to_path_buf()
+                } else {
+                    project_dir.join(parent)
+                };
+                parent_needs_delete.insert(abs_parent);
+            }
+        }
+    }
+
     let root_bits = perms_to_bits(&perms.default, true, supported, &narrowed);
     add_path_rule(ruleset_fd, &project_dir.to_string_lossy(), root_bits)?;
+
+    // Grant REMOVE_FILE on parent directories that need delete access
+    for parent_dir in &parent_needs_delete {
+        if parent_dir.exists() {
+            let parent_bits = perms_to_bits(&perms.default, true, supported, &narrowed) | access::REMOVE_FILE;
+            let _ = add_path_rule(ruleset_fd, &parent_dir.to_string_lossy(), parent_bits);
+        }
+    }
 
     let mut stack: Vec<(std::path::PathBuf, u32)> = vec![(project_dir.to_path_buf(), 0)];
 
@@ -101,24 +125,47 @@ pub(crate) fn apply_per_file_rules(
                 continue;
             };
 
-            if file_type.is_symlink() {
-                continue;
-            }
+            // 9.4: Resolve symlinks instead of skipping them
+            let path = if file_type.is_symlink() {
+                match std::fs::canonicalize(entry.path()) {
+                    Ok(canonical) => canonical,
+                    Err(_) => continue,
+                }
+            } else {
+                entry.path()
+            };
 
-            let path = entry.path();
             let rel = path
                 .strip_prefix(project_dir)
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .replace('\\', "/");
 
-            let is_dir = file_type.is_dir();
+            let is_dir = if file_type.is_symlink() {
+                path.is_dir()
+            } else {
+                file_type.is_dir()
+            };
+
+            // 9.3: Don't skip toolchain directories - they need read-execute
             if is_dir && should_skip_dir(&name) {
+                // Grant read-execute on toolchain directories so workers can access dependencies
+                let toolchain_bits = access::EXECUTE | access::READ_FILE | access::READ_DIR;
+                let _ = add_path_rule(ruleset_fd, &path.to_string_lossy(), toolchain_bits);
+                // Don't recurse into these directories - they're too deep and we only need top-level access
                 continue;
             }
 
             let perm = effective(perms, &rel);
             let bits = perms_to_bits(&perm, is_dir, supported, &narrowed);
+
+            // If this file has delete permission, ensure its directory also gets REMOVE_FILE
+            if !is_dir && perm.delete {
+                if let Some(parent) = path.parent() {
+                    let parent_bits = perms_to_bits(&perms.default, true, supported, &narrowed) | access::REMOVE_FILE;
+                    let _ = add_path_rule(ruleset_fd, &parent.to_string_lossy(), parent_bits);
+                }
+            }
 
             let _ = add_path_rule(ruleset_fd, &path.to_string_lossy(), bits);
 

@@ -3,48 +3,9 @@ import type { ReactNode } from 'react'
 import type { VajraClient } from '../client'
 import { navigate } from '../hooks/useRouter'
 import { X, Folder, File, FileText, FileCode, FileJson, FileSpreadsheet, FileImage, Globe, Lock, Settings, Loader2 } from 'lucide-react'
+import { SHARED_MODELS } from '../lib/models'
 
-const MODELS = [
-  { group: 'Zen Free', options: [
-    { value: 'zen/mimo-v2.5-free', label: 'MiMo V2.5' },
-    { value: 'zen/deepseek-v4-flash-free', label: 'DeepSeek V4 Flash' },
-    { value: 'zen/nemotron-3-ultra-free', label: 'Nemotron 3 Ultra' },
-    { value: 'zen/nemotron-3.5-lightning-free', label: 'Nemotron 3.5 Lightning' },
-    { value: 'zen/nemotron-3-super-free', label: 'Nemotron 3 Super' },
-    { value: 'zen/ling-3.0-flash-fin-free', label: 'Ling 3.0 Flash' },
-  ]},
-  { group: 'Zen Paid', options: [
-    { value: 'zen/gpt-5.5', label: 'GPT 5.5' },
-    { value: 'zen/gpt-5.4-mini', label: 'GPT 5.4 Mini' },
-    { value: 'zen/gpt-5.4', label: 'GPT 5.4' },
-    { value: 'zen/deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
-    { value: 'zen/kimi-k3', label: 'Kimi K3' },
-    { value: 'zen/mimo-v2.5', label: 'MiMo V2.5 (Paid)' },
-  ]},
-  { group: 'Auto (Recommended)', options: [{ value: 'openrouter/free', label: 'Auto-route free models' }] },
-  { group: 'Strong (1M context)', options: [
-    { value: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'Nemotron 3 Ultra 550B' },
-    { value: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'Nemotron 3 Super 120B' },
-    { value: 'minimax/minimax-m3:free', label: 'MiniMax M3' },
-    { value: 'thinkingmachines/inkling:free', label: 'Inkling' },
-  ]},
-  { group: 'Fast', options: [
-    { value: 'nvidia/nemotron-3.5-lightning:free', label: 'Nemotron 3.5 Lightning' },
-    { value: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', label: 'Nemotron 3 Nano 30B' },
-    { value: 'inclusionai/ling-3.0-flash-fin:free', label: 'Ling 3.0 Flash' },
-  ]},
-  { group: 'Coding', options: [
-    { value: 'poolside/laguna-s-2.1:free', label: 'Laguna S 2.1' },
-    { value: 'poolside/laguna-xs-2.1:free', label: 'Laguna XS 2.1' },
-    { value: 'cohere/north-mini-code:free', label: 'North Mini Code' },
-  ]},
-  { group: 'General', options: [
-    { value: 'z-ai/glm-5.2:free', label: 'GLM 5.2' },
-    { value: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B' },
-    { value: 'google/gemma-4-26b-a4b-it:free', label: 'Gemma 4 26B' },
-    { value: 'minimax/minimax-m2.7:free', label: 'MiniMax M2.7' },
-  ]},
-]
+const MODELS = SHARED_MODELS
 
 interface FileEntry { name: string; path: string; isDir: boolean; isMasked: boolean }
 interface TreeNode { entry: FileEntry; children: TreeNode[]; depth: number }
@@ -90,7 +51,7 @@ function getFileIcon(e: FileEntry) {
   return <File size={size} />
 }
 
-const C = { bg: '#0a0a0a', chrome: '#111111', raised: '#1a1a1a', overlay: '#222222', muted: '#141414', border: '#2a2a2a', text: '#e5e5e5', textMuted: '#737373', placeholder: '#525252' }
+import { C } from '../lib/theme'
 
 interface BrowseEntry { name: string; path: string; isDir: boolean }
 
@@ -119,7 +80,8 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
   const [suggestionsLoading, setSuggestionsLoading] = useState(false)
   const [selectedSuggestionIdx, setSelectedSuggestionIdx] = useState(-1)
   const inputRef = useRef<HTMLInputElement>(null)
-  const suggestionsRef = useRef<HTMLDivElement>(null)
+  const suggestionsListRef = useRef<HTMLDivElement>(null)
+  const suggestionsLoadingRef = useRef<HTMLDivElement>(null)
 
   // Model dropdown state
   const [showModelDropdown, setShowModelDropdown] = useState(false)
@@ -169,10 +131,10 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
   useEffect(() => {
     if (!showSuggestions) return
     const handler = (e: MouseEvent) => {
-      if (suggestionsRef.current && !suggestionsRef.current.contains(e.target as Node) &&
-          inputRef.current && !inputRef.current.contains(e.target as Node)) {
-        setShowSuggestions(false)
-      }
+      const target = e.target as Node
+      if (suggestionsListRef.current?.contains(target) || suggestionsLoadingRef.current?.contains(target)) return
+      if (inputRef.current?.contains(target)) return
+      setShowSuggestions(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -273,7 +235,7 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
     if (open) {
       setProjectDir(''); setModel('zen/mimo-v2.5-free'); setPermFilter(''); setPermFiles([]); setPermMap({})
       setPermLoading(false); setPermError(null); setPermLoaded(false); setExpandedDirs(new Set()); setCreating(false)
-      setSuggestions([]); setShowSuggestions(false); setSelectedSuggestionIdx(-1)
+      setSuggestions([]); setShowSuggestions(false); setSelectedSuggestionIdx(-1); setSuggestionsLoading(false)
     }
   }, [open])
 
@@ -343,7 +305,7 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
                     onKeyDown={handleSuggestionKeyDown}
                     placeholder="/path/to/project" className="w-full px-3 py-2 rounded text-sm" style={inputStyle} />
                   {showSuggestions && filteredSuggestions.length > 0 && (
-                    <div ref={suggestionsRef} className="absolute z-10 w-full mt-1 overflow-y-auto rounded shadow-lg" style={{ background: C.raised, border: `1px solid ${C.border}`, maxHeight: '200px' }}>
+                    <div ref={suggestionsListRef} className="absolute z-10 w-full mt-1 overflow-y-auto rounded shadow-lg" style={{ background: C.raised, border: `1px solid ${C.border}`, maxHeight: '200px' }}>
                       {filteredSuggestions.map((entry, idx) => (
                         <div key={entry.path}
                           className="px-3 py-2 cursor-pointer flex items-center gap-2"
@@ -361,7 +323,7 @@ export function NewProjectModal({ client, open, onClose }: NewProjectModalProps)
                     </div>
                   )}
                   {showSuggestions && suggestionsLoading && (
-                    <div ref={suggestionsRef} className="absolute z-10 w-full mt-1 py-3 text-center text-sm" style={{ background: C.raised, border: `1px solid ${C.border}`, color: C.placeholder }}>
+                    <div ref={suggestionsLoadingRef} className="absolute z-10 w-full mt-1 py-3 text-center text-sm" style={{ background: C.raised, border: `1px solid ${C.border}`, color: C.placeholder }}>
                       Loading...
                     </div>
                   )}

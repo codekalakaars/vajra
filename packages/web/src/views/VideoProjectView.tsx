@@ -44,7 +44,7 @@ export function VideoProjectView({ projectDir, client, onClose }: VideoProjectVi
     loadVariables()
     return () => {
       // Cleanup: stop preview on unmount
-      client.call('video.stopPreview', { projectDir })
+      client.call('video.stopPreview', { projectDir }).catch(() => {})
     }
   }, [projectDir])
 

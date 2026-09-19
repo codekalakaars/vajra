@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { useProject } from '../hooks/useProject'
+import { useProject, type ChatMessage } from '../hooks/useProject'
 import { StatusBadge } from '../components/StatusBadge'
 import { ThinkingBlock } from '../components/ThinkingBlock'
 import { MarkdownRenderer } from '../components/MarkdownRenderer'
@@ -10,7 +10,7 @@ import { Square } from 'lucide-react'
 import { ModelSelector } from '../components/ModelSelector'
 import type { PlannedTask } from '@codekalakaars/vajra-protocol'
 
-const C = { bg: '#0a0a0a', raised: '#1a1a1a', overlay: '#222222', border: '#2a2a2a', text: '#e5e5e5', textMuted: '#737373', placeholder: '#525252', muted: '#141414' }
+import { C } from '../lib/theme'
 
 interface ParsedPlan {
   tasks: PlannedTask[]
@@ -28,10 +28,33 @@ function tryParsePlan(content: string): ParsedPlan | null {
   return null
 }
 
-function PlanMessage({ content }: { content: string }) {
+function PlanMessage({ content, taskStates }: { content: string; taskStates?: Map<string, 'pending' | 'running' | 'done' | 'failed' | 'assigned' | 'skipped'> }) {
   const plan = useMemo(() => tryParsePlan(content), [content])
   if (!plan) return <MarkdownRenderer content={content} />
-  return <PlanView tasks={plan.tasks} independentGroups={plan.independentGroups} estimatedWorkers={plan.estimatedWorkers} />
+  return <PlanView tasks={plan.tasks} taskStates={taskStates} independentGroups={plan.independentGroups} estimatedWorkers={plan.estimatedWorkers} />
+}
+
+function WorkerStreams({ streams, agents }: { streams: Map<string, { taskId: string; text: string }>; agents: Array<{ id: string; status: string; taskSummary: string | null }> }) {
+  if (streams.size === 0) return null
+  return (
+    <div className="space-y-3">
+      {Array.from(streams.entries()).map(([agentId, stream]) => {
+        const agent = agents.find(a => a.id === agentId)
+        const label = agent?.taskSummary || stream.taskId || agentId.slice(0, 8)
+        return (
+          <div key={agentId} className="rounded-lg p-4" style={{ border: '1px solid #2a2a2a', background: '#1a1a1a' }}>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="h-2 w-2 rounded-full animate-pulse" style={{ background: '#e5e5e5' }} />
+              <span className="text-xs font-medium" style={{ color: '#a3a3a3' }}>Worker {label}</span>
+            </div>
+            <div className="text-sm" style={{ color: '#e5e5e5' }}>
+              <MarkdownRenderer content={stream.text} />
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 export function ChatView({ connected }: { connected: boolean }) {
@@ -54,7 +77,7 @@ export function ChatView({ connected }: { connected: boolean }) {
   }, [isStreaming, project.stopProject])
 
   useEffect(() => { window.addEventListener('keydown', handleGlobalKeyDown); return () => window.removeEventListener('keydown', handleGlobalKeyDown) }, [handleGlobalKeyDown])
-  useEffect(() => { const el = scrollRef.current; if (!el) return; if (el.scrollHeight - el.scrollTop - el.clientHeight < 100) el.scrollTop = el.scrollHeight }, [project.messages, project._streamingText, project.thinkingText])
+  useEffect(() => { const el = scrollRef.current; if (!el) return; if (el.scrollHeight - el.scrollTop - el.clientHeight < 100) el.scrollTop = el.scrollHeight }, [project.messages, project._streamingText, project.thinkingText, project.workerStreams])
   useEffect(() => { if (!isStreaming && inputRef.current) inputRef.current.focus() }, [project.status])
 
   const handleSend = async () => { const t = inputValue.trim(); if (!t || !project.projectId) return; setInputValue(''); await project.sendMessage(t) }
@@ -94,18 +117,31 @@ export function ChatView({ connected }: { connected: boolean }) {
             {project.planTasks.length > 0 && (
               <PlanView
                 tasks={project.planTasks}
+                taskStates={project.taskStates}
                 independentGroups={project.independentGroups}
                 estimatedWorkers={project.estimatedWorkers}
               />
             )}
             {project.agents.length > 0 && <WorkerStatus agents={project.agents} />}
             {project.conflicts.length > 0 && <ConflictAlert conflicts={project.conflicts} />}
+            {project.workerProgress.length > 0 && (
+              <div className="rounded-lg p-4" style={{ border: '1px solid #2a2a2a', background: '#1a1a1a' }}>
+                <h3 className="mb-2 text-sm font-semibold" style={{ color: '#e5e5e5' }}>Progress</h3>
+                <div className="space-y-1 max-h-40 overflow-y-auto">
+                  {project.workerProgress.slice(-10).map((p, i) => (
+                    <div key={i} className="text-xs" style={{ color: '#a3a3a3' }}>
+                      <span style={{ color: '#737373' }}>[{p.taskId}]</span> {p.detail}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         {project.status === 'idle' && project.messages.length === 0 && <div className="text-center mt-20" style={{ color: C.placeholder }}>Start a conversation to plan your task...</div>}
 
-        {project.messages.map((msg, i) => (
+        {project.messages.map((msg: ChatMessage, i: number) => (
           <div key={i}>
             {msg.role === 'user' ? (
               <div className="flex items-start gap-3 justify-end">
@@ -119,7 +155,7 @@ export function ChatView({ connected }: { connected: boolean }) {
                 <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0" style={{ background: C.overlay, color: C.text }}>V</div>
                 <div className="flex-1 min-w-0">
                   {msg.thinking && <ThinkingBlock text={msg.thinking} />}
-                  <PlanMessage content={msg.content} />
+                   <PlanMessage content={msg.content} taskStates={project.taskStates} />
                 </div>
               </div>
             )}
@@ -127,6 +163,8 @@ export function ChatView({ connected }: { connected: boolean }) {
         ))}
 
         {project.thinkingText && <ThinkingBlock text={project.thinkingText} defaultOpen />}
+
+        <WorkerStreams streams={project.workerStreams} agents={project.agents} />
 
         {project._streamingText && (
           <div className="flex items-start gap-3">

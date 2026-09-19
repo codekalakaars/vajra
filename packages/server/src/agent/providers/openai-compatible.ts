@@ -73,9 +73,15 @@ function retryAfterMs(err: unknown): number {
 export function toSdkMessages(messages: ChatMessage[]): ChatCompletionMessageParam[] {
   return messages.map((m) => {
     if (m.role === 'tool') {
+      if (!m.toolCallId) {
+        throw new Error(
+          'Missing toolCallId on tool result message. ' +
+          'Every tool result must reference the tool call it answers.',
+        )
+      }
       return {
         role: 'tool' as const,
-        tool_call_id: m.toolCallId ?? '',
+        tool_call_id: m.toolCallId,
         content: m.content ?? '',
       }
     }
@@ -133,6 +139,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
       ...(request.tools ? { tools: toSdkTools(request.tools) } : {}),
       ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
       stream: true,
+      stream_options: { include_usage: true },
     }
 
     const { controller, dispose } = requestAbort(request.signal)
@@ -174,6 +181,11 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
     let usage: TokenUsage | undefined
 
+    // Buffer deltas so that on retry the caller can distinguish between
+    // text it has already emitted (from a previous attempt) and new text.
+    const textDeltas: string[] = []
+    const thinkingDeltas: string[] = []
+
     for await (const chunk of stream) {
       if (chunk.usage) {
         usage = {
@@ -191,7 +203,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
 
       if (delta?.content) {
         content += delta.content
-        onTextDelta(delta.content)
+        textDeltas.push(delta.content)
       }
 
       if (onThinkingDelta) {
@@ -200,7 +212,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           | undefined
         for (const detail of details ?? []) {
           if (detail.type === 'reasoning.text' && typeof detail.text === 'string') {
-            onThinkingDelta(detail.text)
+            thinkingDeltas.push(detail.text)
           }
         }
       }
@@ -226,6 +238,12 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         `${this.name} request cancelled: ${reason instanceof Error ? reason.message : String(reason ?? 'aborted')}`,
       )
     }
+
+    // Emit buffered deltas only after the stream completes successfully.
+    // On retry the buffer is discarded and a fresh one starts, so the
+    // caller never sees replayed text from a failed attempt.
+    for (const delta of textDeltas) onTextDelta(delta)
+    for (const delta of thinkingDeltas) onThinkingDelta?.(delta)
 
     const orderedToolCalls: ToolCall[] = [...toolCalls.entries()]
       .sort(([a], [b]) => a - b)

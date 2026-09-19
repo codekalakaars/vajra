@@ -32,10 +32,22 @@ program
   .description('Start an interactive session with the developer agent')
   .argument('[task]', 'Initial task description (optional)')
   .option('-k, --api-key <key>', 'API key (OpenRouter or OpenCode Zen)')
-  .option('-m, --model <model>', 'LLM model to use', process.env.VAJRA_MODEL || 'zen/nemotron-3-ultra-free')
+  .option('-m, --model <model>', 'LLM model to use', process.env.VAJRA_MODEL || 'openai/gpt-4o-mini')
   .option('-v, --verbose', 'Show thinking/reasoning output')
   .option('-d, --dir <directory>', 'Project directory', process.cwd())
   .option('-y, --yes', 'Auto-confirm all plans without prompting')
+  .option('-t, --timeout <seconds>', 'Per-task timeout in seconds', '300')
+  .addHelpText('after', `
+Model recommendations:
+  Fast (1-3s):   openai/gpt-4o-mini, openai/gpt-4o, anthropic/claude-3-haiku
+  Slow (30-90s): nvidia/*:free, google/*:free (free tier, very slow)
+  Zen (blocked):  zen/* (requires OpenCode, not available from CLI)
+
+Examples:
+  $ vajra run "fix the login bug"
+  $ vajra run -m openai/gpt-4o "add dark mode"
+  $ vajra run -t 600 -y "refactor the database layer"
+  `)
   .action(async (task, options) => {
     await runCommand({
       task,
@@ -44,6 +56,7 @@ program
       verbose: options.verbose,
       projectDir: options.dir,
       autoConfirm: options.yes,
+      timeout: parseInt(options.timeout, 10) || 300,
     })
   })
 
@@ -78,8 +91,14 @@ program
         process.exit(1)
       }
 
+      if (!value) {
+        console.error(`Value is required for key '${key}'. Usage: vajra config -s KEY VALUE`)
+        process.exit(1)
+      }
+
       let envContent = envExists ? readFileSync(envPath, 'utf-8') : ''
-      const regex = new RegExp(`^${key}=.*$`, 'm')
+      const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const regex = new RegExp(`^${escapedKey}=.*$`, 'm')
       
       if (regex.test(envContent)) {
         envContent = envContent.replace(regex, `${key}=${value}`)
@@ -148,7 +167,7 @@ program.addCommand(videoCommand)
 // If no command provided, launch TUI
 const args = process.argv.slice(2)
 if (args.length === 0) {
-  startTUI('0.1.0')
+  await startTUI('0.1.0')
 } else {
   program.parse()
 }

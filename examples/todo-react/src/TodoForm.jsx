@@ -5,7 +5,7 @@ function TodoForm({ onAdd }) {
 
   // BUG 1: Not preventing default form submission
   const handleSubmit = (e) => {
-    // BUG: Missing e.preventDefault()
+        e.preventDefault(); // Prevent the default form submission to avoid page reload during adding todos
     // This causes page reload on form submit
     
     // BUG 2: Not validating empty input

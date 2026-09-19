@@ -13,6 +13,22 @@ import { REQUEST_TIMEOUT_MS, requestAbort, withIdleTimeout } from './limits.js'
 const MAX_RETRIES = 5
 const INITIAL_RETRY_DELAY_MS = 1000
 
+// Known output limits per model. Used to set max_tokens instead of hardcoding
+// a single value that truncates some models and wastes budget on others.
+const MODEL_MAX_OUTPUT: Record<string, number> = {
+  'claude-sonnet-4-20250514': 16384,
+  'claude-3-5-sonnet-20241022': 8192,
+  'claude-3-5-haiku-20241022': 8192,
+  'claude-3-opus-20240229': 4096,
+  'claude-3-haiku-20240307': 4096,
+}
+
+// Models that support extended thinking via the `thinking` parameter.
+const THINKING_MODELS = new Set([
+  'claude-sonnet-4-20250514',
+  'claude-3-5-sonnet-20241022',
+])
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -86,9 +102,15 @@ function toAnthropicMessages(messages: ChatMessage[]): { system: string; message
     }
 
     if (m.role === 'tool') {
+      if (!m.toolCallId) {
+        throw new Error(
+          'Missing toolCallId on tool result message. ' +
+          'Every tool result must reference the tool call it answers.',
+        )
+      }
       const toolResultBlock: Anthropic.ToolResultBlockParam = {
         type: 'tool_result',
-        tool_use_id: m.toolCallId ?? '',
+        tool_use_id: m.toolCallId,
         content: m.content ?? '',
       }
       const lastMsg = out[out.length - 1]
@@ -123,12 +145,21 @@ export class AnthropicProvider implements ChatProvider {
     const client = new Anthropic({ apiKey: request.apiKey, maxRetries: 0, timeout: REQUEST_TIMEOUT_MS })
     const { system, messages } = toAnthropicMessages(request.messages)
 
+    // Derive max_tokens from the model's known output limit instead of
+    // hardcoding a single value that truncates some models and wastes
+    // budget on others.
+    const maxOutput = MODEL_MAX_OUTPUT[request.model] ?? 16384
+
+    // Enable extended thinking for models that support it.
+    const supportsThinking = THINKING_MODELS.has(request.model) && onThinkingDelta
+
     const params: Anthropic.MessageCreateParams = {
       model: request.model,
-      max_tokens: 16384,
+      max_tokens: maxOutput,
       messages,
       ...(system ? { system } : {}),
       ...(request.tools ? { tools: toAnthropicTools(request.tools) } : {}),
+      ...(supportsThinking ? { thinking: { type: 'enabled', budget_tokens: maxOutput } } : {}),
       stream: true,
     }
 
@@ -172,6 +203,11 @@ export class AnthropicProvider implements ChatProvider {
     const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
     let usage: TokenUsage | undefined
 
+    // Buffer deltas so that on retry the caller never sees replayed text
+    // from a failed attempt.
+    const textDeltas: string[] = []
+    const thinkingDeltas: string[] = []
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for await (const event of stream as AsyncIterable<any>) {
       if (event.type === 'content_block_start') {
@@ -183,13 +219,13 @@ export class AnthropicProvider implements ChatProvider {
         const delta = event.delta
         if (delta.type === 'text_delta' && delta.text) {
           content += delta.text
-          onTextDelta(delta.text)
+          textDeltas.push(delta.text)
         } else if (delta.type === 'thinking_delta' && delta.thinking && onThinkingDelta) {
-          onThinkingDelta(delta.thinking)
+          thinkingDeltas.push(delta.thinking)
         } else if (delta.type === 'input_json_delta' && delta.partial_json) {
-          const lastToolCall = [...toolCalls.values()].pop()
-          if (lastToolCall) {
-            lastToolCall.arguments += delta.partial_json
+          const existing = toolCalls.get(event.index)
+          if (existing) {
+            existing.arguments += delta.partial_json
           }
         }
       } else if (event.type === 'message_delta') {
@@ -206,6 +242,10 @@ export class AnthropicProvider implements ChatProvider {
         }
       }
     }
+
+    // Emit buffered deltas only after the stream completes successfully.
+    for (const delta of textDeltas) onTextDelta(delta)
+    for (const delta of thinkingDeltas) onThinkingDelta?.(delta)
 
     const toolCallArray: ToolCall[] | undefined = toolCalls.size > 0
       ? [...toolCalls.values()]

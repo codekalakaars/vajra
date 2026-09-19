@@ -10,6 +10,7 @@
 // sandboxed worker via the LaunchHandle, same as the single-agent loop.
 
 import type { SqliteDb } from '../db/client.js'
+import { runInTransaction } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../project/manager.js'
 import type { DeveloperPlan, PlannedTask, ToolName } from '@codekalakaars/vajra-protocol'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
@@ -29,7 +30,6 @@ function buildDeveloperConversationPrompt(
   projectDir: string,
   tree: string,
   summary: string,
-  architecture?: string,
 ): string {
   return [
     'You are the Developer — a software engineering planning agent.',
@@ -100,8 +100,6 @@ function buildDeveloperConversationPrompt(
     '',
     'File summaries (path [lines, imports, exports]: exported symbols):',
     summary,
-    '',
-    ...(architecture ? ['Architecture:', architecture] : []),
   ].join('\n')
 }
 
@@ -159,15 +157,16 @@ async function readTaskContext(
 
 /**
  * Extract relevant lines from a file based on instructions.
- * Looks for line numbers, function names, or class names mentioned in instructions.
+ * Anchors on symbol definitions (function, class, const, let, var declarations)
+ * rather than bare substring occurrences, and extracts the enclosing block.
+ * Falls back to line-number ranges or the head of the file.
  */
 function extractRelevantLines(content: string, instructions: string[]): string {
   const lines = content.split('\n')
   const relevantLineNumbers = new Set<number>()
 
-  // Extract line numbers from instructions (e.g., "line 42", "lines 10-20")
+  // 1. Extract explicit line-number references ("line 42", "lines 10-20")
   for (const instruction of instructions) {
-    // Match "line N" or "lines N-M"
     const lineMatches = instruction.match(/lines?\s+(\d+)(?:\s*-\s*(\d+))?/gi)
     if (lineMatches) {
       for (const match of lineMatches) {
@@ -181,27 +180,60 @@ function extractRelevantLines(content: string, instructions: string[]): string {
         }
       }
     }
+  }
 
-    // Match function/class names from instructions
-    const nameMatches = instruction.match(/\b(?:function|class|const|let|var|async)\s+(\w+)/g)
-    if (nameMatches) {
-      for (const match of nameMatches) {
-        const name = match.replace(/\b(?:function|class|const|let|var|async)\s+/, '')
-        // Find this name in the file
-        for (let i = 0; i < lines.length; i++) {
-          if (lines[i].includes(name)) {
-            relevantLineNumbers.add(i)
-            // Also add surrounding context (2 lines before/after)
-            for (let j = Math.max(0, i - 2); j <= Math.min(lines.length - 1, i + 2); j++) {
-              relevantLineNumbers.add(j)
+  // 2. Extract symbol names from instructions and find their definitions.
+  //    A definition is a line that declares the symbol (not merely references it).
+  const symbolPatterns = [
+    /(?:export\s+)?(?:async\s+)?function\s+(\w+)/g,
+    /(?:export\s+)?(?:abstract\s+)?class\s+(\w+)/g,
+    /(?:export\s+)?(?:const|let|var)\s+(\w+)\s*[=:]/g,
+    /(?:export\s+)?(?:default\s+)?(?:function|class)\s+(\w+)/g,
+  ]
+
+  for (const instruction of instructions) {
+    // Collect symbol names mentioned in this instruction
+    const symbolNames = new Set<string>()
+    for (const pattern of symbolPatterns) {
+      const regex = new RegExp(pattern.source, 'g')
+      let match
+      while ((match = regex.exec(instruction)) !== null) {
+        symbolNames.add(match[1])
+      }
+    }
+
+    for (const name of symbolNames) {
+      // Find the definition line — anchored on a declaration keyword
+      const defRegex = new RegExp(
+        `^(?:export\\s+)?(?:async\\s+)?(?:abstract\\s+)?(?:default\\s+)?` +
+        `(?:function|class|const|let|var)\\s+${name}\\b`,
+      )
+      for (let i = 0; i < lines.length; i++) {
+        if (defRegex.test(lines[i])) {
+          // Extract the enclosing block by counting braces
+          let braceDepth = 0
+          let foundOpen = false
+          let blockEnd = i
+          for (let j = i; j < lines.length; j++) {
+            for (const ch of lines[j]) {
+              if (ch === '{') { braceDepth++; foundOpen = true }
+              if (ch === '}') braceDepth--
+            }
+            if (foundOpen && braceDepth === 0) {
+              blockEnd = j
+              break
             }
           }
+          for (let j = i; j <= blockEnd; j++) {
+            relevantLineNumbers.add(j)
+          }
+          break
         }
       }
     }
   }
 
-  // If no specific lines found, return the head of the file as context
+  // 3. Nothing matched → return the head of the file as context.
   if (relevantLineNumbers.size === 0) {
     return lines.slice(0, MAX_CONTEXT_LINES).join('\n')
   }
@@ -220,83 +252,6 @@ function extractRelevantLines(content: string, instructions: string[]): string {
   }
 
   return result.join('\n')
-}
-
-/**
- * Analyze project architecture from key files.
- * Returns a summary of the project's structure and patterns.
- */
-async function analyzeArchitecture(
-  summaryIndex: SummaryEntry[],
-  handle: LaunchHandle,
-): Promise<string> {
-  // Common entry points and config files
-  const entryPatterns = [
-    /package\.json$/,
-    /tsconfig\.json$/,
-    /src\/index\.(ts|js|tsx|jsx)$/,
-    /src\/main\.(ts|js|tsx|jsx)$/,
-    /src\/app\.(ts|js|tsx|jsx)$/,
-    /src\/App\.(ts|js|tsx|jsx)$/,
-    /src\/routes?\.(ts|js)$/,
-    /src\/server\.(ts|js)$/,
-    /src\/client\.(ts|js)$/,
-    /README\.md$/,
-    /.*config\.(ts|js|json)$/,
-    /.*\.config\.(ts|js|json)$/,
-  ]
-
-  // Find files matching entry patterns
-  const keyFiles: string[] = []
-  for (const entry of summaryIndex) {
-    for (const pattern of entryPatterns) {
-      if (pattern.test(entry.path)) {
-        keyFiles.push(entry.path)
-        break
-      }
-    }
-  }
-
-  // Find files with high export counts (likely architecture-defining)
-  const highExportFiles = summaryIndex
-    .filter(e => e.exportCount >= 3)
-    .sort((a, b) => b.exportCount - a.exportCount)
-    .slice(0, 5)
-    .map(e => e.path)
-
-  keyFiles.push(...highExportFiles)
-
-  // Deduplicate and take top 5
-  const uniqueKeyFiles = [...new Set(keyFiles)].slice(0, 5)
-
-  // Read them together: one round trip each, serially, was five round trips
-  // of latency before the developer could say anything at all.
-  const reads = await Promise.all(
-    uniqueKeyFiles.map(async (filePath) => {
-      try {
-        const result = await handle.callTool('read_file', { path: filePath })
-        return { filePath, content: typeof result === 'string' ? result : JSON.stringify(result) }
-      } catch {
-        return null // Skip unreadable files
-      }
-    }),
-  )
-
-  const architectureParts: string[] = []
-  for (const read of reads) {
-    if (!read) continue
-
-    const lines = read.content.split('\n')
-    const imports = lines.filter(l => l.startsWith('import ')).slice(0, 5)
-    const exports = lines.filter(l => l.startsWith('export ')).slice(0, 5)
-
-    architectureParts.push(`--- ${read.filePath} ---`)
-    if (imports.length > 0) architectureParts.push(`Imports: ${imports.join(', ')}`)
-    if (exports.length > 0) architectureParts.push(`Exports: ${exports.join(', ')}`)
-    architectureParts.push('')
-  }
-
-  return architectureParts.join('\n')
 }
 
 function parseProposePlanArgs(raw: unknown): DeveloperPlan {
@@ -382,45 +337,11 @@ function parseProposePlanArgs(raw: unknown): DeveloperPlan {
   // Optimize task ordering for parallelism
   const optimizedTasks = optimizeTaskOrder(tasks, independentGroups)
 
-  // Estimate task durations
-  const tasksWithDuration = estimateTaskDurations(optimizedTasks)
-
   return {
-    tasks: tasksWithDuration,
+    tasks: optimizedTasks,
     independentGroups,
     estimatedWorkers: Math.max(1, ...independentGroups.map((g) => g.length)),
   }
-}
-
-/**
- * Estimate task duration based on complexity and file count.
- * Returns tasks with estimatedDuration added.
- */
-function estimateTaskDurations(tasks: PlannedTask[]): PlannedTask[] {
-  // Base duration in minutes by complexity
-  const baseDuration: Record<string, number> = {
-    low: 30,    // 30 minutes
-    medium: 120, // 2 hours
-    high: 240,   // 4 hours
-  }
-
-  return tasks.map(task => {
-    const base = baseDuration[task.complexity ?? 'medium'] ?? 120
-
-    // Adjust based on file count
-    const fileCount = task.readFile.length + task.writeFile.length
-    const fileMultiplier = Math.max(1, fileCount / 3) // 3 files = 1x, 6 files = 2x
-
-    // Adjust based on validation count
-    const validationMultiplier = Math.max(1, task.validation.length / 2) // 2 commands = 1x
-
-    const estimatedDuration = Math.round(base * fileMultiplier * validationMultiplier)
-
-    return {
-      ...task,
-      estimatedDuration,
-    }
-  })
 }
 
 /**
@@ -569,25 +490,18 @@ export async function developerConversationTurn(
       summaryIndex.push(...context.summaryIndex)
     }
 
-    // Auto-analyze architecture from key files
-    events.push('projects.workerProgress', projectId, {
-      projectId,
-      agentId: 'developer',
-      taskId: 'master',
-      detail: 'Analyzing project architecture...',
-    })
-    const architecture = await analyzeArchitecture(summaryIndex, handle)
-
     const summaryText = formatSummaryIndexHierarchical(summaryIndex)
     messages.push({
       role: 'system',
-      content: buildDeveloperConversationPrompt(projectDir, tree, summaryText, architecture),
+      content: buildDeveloperConversationPrompt(projectDir, tree, summaryText),
     })
   }
 
   // Persist user message
-  const userSeq = nextSeq(db, projectId)
-  appendMessage(db, projectId, userSeq, 'user', userMessage)
+  runInTransaction(db, () => {
+    const userSeq = nextSeq(db, projectId)
+    appendMessage(db, projectId, userSeq, 'user', userMessage)
+  })
 
   // Add user message to conversation
   messages.push({ role: 'user', content: userMessage })
@@ -612,8 +526,10 @@ export async function developerConversationTurn(
     // No tool calls — text response to user
     if (!result.message.toolCalls || result.message.toolCalls.length === 0) {
       const content = result.message.content ?? ''
-      const seq = nextSeq(db, projectId)
-      appendMessage(db, projectId, seq, 'assistant', content)
+      runInTransaction(db, () => {
+        const seq = nextSeq(db, projectId)
+        appendMessage(db, projectId, seq, 'assistant', content)
+      })
       messages.push(result.message)
       return { type: 'response', response: content }
     }
@@ -696,7 +612,6 @@ export async function developerConversationTurn(
 
       // Inject relevant code context into task instructions
       events.push('projects.workerProgress', projectId, {
-        projectId,
         agentId: 'developer',
         taskId: 'master',
         detail: 'Injecting code context into task instructions...',
@@ -727,15 +642,17 @@ export async function developerConversationTurn(
       )
 
       // Emit plan events
-      events.push('projects.planStarted', projectId, { projectId })
+      events.push('projects.planStarted', projectId, {})
       for (const t of plan.tasks) {
-        events.push('projects.planTask', projectId, { projectId, task: t })
+        events.push('projects.planTask', projectId, { task: t })
       }
-      events.push('projects.planComplete', projectId, { projectId, plan })
+      events.push('projects.planComplete', projectId, { plan })
 
       // Persist the plan as the final assistant message
-      const planSeq = nextSeq(db, projectId)
-      appendMessage(db, projectId, planSeq, 'assistant', JSON.stringify(plan))
+      runInTransaction(db, () => {
+        const planSeq = nextSeq(db, projectId)
+        appendMessage(db, projectId, planSeq, 'assistant', JSON.stringify(plan))
+      })
 
       return { type: 'plan', plan }
     }

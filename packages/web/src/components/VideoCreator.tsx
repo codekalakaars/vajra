@@ -183,12 +183,14 @@ export function VideoCreator({ open, onClose, projectDir, client }: VideoCreator
             Templates ({filteredTemplates.length})
           </button>
           <button
-            onClick={() => setTab('blocks')}
+            onClick={() => projectDir ? setTab('blocks') : null}
             className="flex-1 py-3 text-sm font-medium"
             style={{
-              color: tab === 'blocks' ? '#e5e5e5' : '#737373',
+              color: tab === 'blocks' ? '#e5e5e5' : projectDir ? '#737373' : '#333',
               borderBottom: tab === 'blocks' ? '2px solid #e5e5e5' : '2px solid transparent',
+              cursor: projectDir ? 'pointer' : 'not-allowed',
             }}
+            title={projectDir ? 'Add blocks to current project' : 'Open a video project first to add blocks'}
           >
             Blocks ({filteredBlocks.length})
           </button>

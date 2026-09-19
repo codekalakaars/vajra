@@ -14,6 +14,7 @@ export class VajraSocket {
   private messageHandlers = new Set<MessageHandler>()
   private stateHandlers = new Set<StateHandler>()
   private _state: ConnectionState = 'disconnected'
+  private _intentionalClose = false
 
   constructor(url: string) {
     this.url = url
@@ -26,6 +27,7 @@ export class VajraSocket {
   connect(): void {
     if (this.ws?.readyState === WebSocket.OPEN) return
 
+    this._intentionalClose = false
     this.setState('connecting')
     this.ws = new WebSocket(this.url)
 
@@ -49,7 +51,9 @@ export class VajraSocket {
     this.ws.onclose = () => {
       this.setState('disconnected')
       this.ws = null
-      this.scheduleReconnect()
+      if (!this._intentionalClose) {
+        this.scheduleReconnect()
+      }
     }
 
     this.ws.onerror = () => {
@@ -58,6 +62,7 @@ export class VajraSocket {
   }
 
   disconnect(): void {
+    this._intentionalClose = true
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null

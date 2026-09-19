@@ -1,6 +1,10 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { VajraClient } from '../client'
-import type { PlannedTask, AgentStatePayload, ConflictPayload, PermissionsConfig } from '@codekalakaars/vajra-protocol'
+import type { PlannedTask, AgentStatePayload, ConflictPayload, PermissionsConfig, TaskStatus } from '@codekalakaars/vajra-protocol'
+
+const MAX_AGENTS = 100
+const MAX_CONFLICTS = 50
+const MAX_WORKER_EVENTS = 200
 
 // Singleton client — persists across re-renders
 let clientSingleton: VajraClient | null = null
@@ -37,8 +41,11 @@ export interface ProjectState {
   agents: AgentStatePayload[]
   conflicts: ConflictPayload[]
   _streamingText: string
-  _streamingChunks: string[]
-  _thinkingChunks: string[]
+  taskStates: Map<string, TaskStatus>
+  /** Per-worker streaming text, keyed by agentId. */
+  workerStreams: Map<string, { taskId: string; text: string }>
+  /** Progress events emitted by the master loop. */
+  workerProgress: Array<{ agentId: string; taskId: string; detail: string }>
 }
 
 export function useProject() {
@@ -56,8 +63,9 @@ export function useProject() {
     agents: [],
     conflicts: [],
     _streamingText: '',
-    _streamingChunks: [],
-    _thinkingChunks: [],
+    taskStates: new Map(),
+    workerStreams: new Map(),
+    workerProgress: [],
   })
   const stateRef = useRef(state)
   stateRef.current = state
@@ -65,6 +73,19 @@ export function useProject() {
   // Separate throttle timers for assistant and thinking streaming
   const assistantThrottleRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; pending: string }>({ timer: null, pending: '' })
   const thinkingThrottleRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; pending: string }>({ timer: null, pending: '' })
+  const unsubscribeRef = useRef<(() => void) | null>(null)
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current()
+        unsubscribeRef.current = null
+      }
+      if (assistantThrottleRef.current.timer) { clearTimeout(assistantThrottleRef.current.timer); assistantThrottleRef.current.timer = null }
+      if (thinkingThrottleRef.current.timer) { clearTimeout(thinkingThrottleRef.current.timer); thinkingThrottleRef.current.timer = null }
+    }
+  }, [])
 
   // Subscribe to push events for a project
   const subscribe = useCallback((projectId: string) => {
@@ -74,7 +95,6 @@ export function useProject() {
       client.on('projects.statusChanged', (payload: any) => {
         if (payload.status === undefined) return
         setState((s) => {
-          // Only clear streaming text on terminal statuses — not during streaming itself
           const terminal = payload.status === 'done' || payload.status === 'failed' || payload.status === 'stopped'
           return {
             ...s,
@@ -82,8 +102,6 @@ export function useProject() {
             ...(terminal ? {
               _streamingText: '',
               thinkingText: '',
-              _streamingChunks: [],
-              _thinkingChunks: [],
             } : {}),
           }
         })
@@ -92,7 +110,28 @@ export function useProject() {
 
     unsubs.push(
       client.on('projects.assistantDelta', (payload: any) => {
-        // Append directly to accumulator — no separate chunks buffer
+        // Worker deltas carry agentId — route to per-worker stream
+        if (payload.agentId) {
+          assistantThrottleRef.current.pending += payload.text
+          if (!assistantThrottleRef.current.timer) {
+            assistantThrottleRef.current.timer = setTimeout(() => {
+              const pending = assistantThrottleRef.current.pending
+              assistantThrottleRef.current.pending = ''
+              assistantThrottleRef.current.timer = null
+              if (pending) {
+                const agentId = (stateRef.current.agents.find(a => a.status === 'running')?.id) ?? payload.agentId
+                setState((s) => {
+                  const existing = s.workerStreams.get(agentId) ?? { taskId: payload.taskId ?? '', text: '' }
+                  const next = new Map(s.workerStreams)
+                  next.set(agentId, { taskId: existing.taskId || (payload.taskId ?? ''), text: existing.text + pending })
+                  return { ...s, workerStreams: next }
+                })
+              }
+            }, 50)
+          }
+          return
+        }
+        // Developer delta — no agentId, stream into the main text channel
         assistantThrottleRef.current.pending += payload.text
         if (!assistantThrottleRef.current.timer) {
           assistantThrottleRef.current.timer = setTimeout(() => {
@@ -166,8 +205,6 @@ export function useProject() {
           estimatedWorkers: payload.plan.estimatedWorkers || 1,
           _streamingText: '',
           thinkingText: '',
-          _streamingChunks: [],
-          _thinkingChunks: [],
         }))
       }),
     )
@@ -179,57 +216,103 @@ export function useProject() {
           status: 'executing',
           _streamingText: '',
           thinkingText: '',
-          _streamingChunks: [],
-          _thinkingChunks: [],
         }))
+      }),
+    )
+
+    // Worker progress events (pre-warming, validation, rollback, retry info)
+    unsubs.push(
+      client.on('projects.workerProgress', (payload: any) => {
+        setState((s) => {
+          const newProgress = [...s.workerProgress, { agentId: payload.agentId, taskId: payload.taskId, detail: payload.detail }]
+          if (newProgress.length > MAX_WORKER_EVENTS) newProgress.splice(0, newProgress.length - MAX_WORKER_EVENTS)
+          return { ...s, workerProgress: newProgress }
+        })
       }),
     )
 
     // Worker events
     unsubs.push(
       client.on('projects.workerStarted', (payload: any) => {
-        setState((s) => ({
-          ...s,
-          agents: [...s.agents, { id: payload.agentId, role: 'worker', status: 'running', taskSummary: payload.taskId }],
-        }))
+        setState((s) => {
+          const newTaskStates = new Map(s.taskStates)
+          if (payload.taskId) newTaskStates.set(payload.taskId, 'running')
+          const newAgent = { id: payload.agentId, role: 'worker' as const, status: 'running' as const, taskSummary: payload.taskId }
+          const nextAgents = [...s.agents, newAgent]
+          if (nextAgents.length > MAX_AGENTS) nextAgents.splice(0, nextAgents.length - MAX_AGENTS)
+          return {
+            ...s,
+            agents: nextAgents,
+            taskStates: newTaskStates,
+          }
+        })
       }),
     )
 
     unsubs.push(
       client.on('projects.workerCompleted', (payload: any) => {
-        setState((s) => ({
-          ...s,
-          agents: s.agents.map((a) =>
-            a.id === payload.agentId ? { ...a, status: 'done' as const } : a
-          ),
-        }))
+        setState((s) => {
+          const agent = s.agents.find(a => a.id === payload.agentId)
+          const newTaskStates = new Map(s.taskStates)
+          if (agent?.taskSummary) newTaskStates.set(agent.taskSummary, 'done')
+          // Finalize per-worker stream into a message if there's accumulated text
+          const newMessages = [...s.messages]
+          const workerStream = s.workerStreams.get(payload.agentId)
+          if (workerStream?.text.trim()) {
+            newMessages.push({ role: 'assistant', content: workerStream.text.trim() })
+          }
+          const nextWorkerStreams = new Map(s.workerStreams)
+          nextWorkerStreams.delete(payload.agentId)
+          return {
+            ...s,
+            agents: s.agents.map((a) =>
+              a.id === payload.agentId ? { ...a, status: 'done' as const } : a
+            ),
+            taskStates: newTaskStates,
+            messages: newMessages,
+            workerStreams: nextWorkerStreams,
+          }
+        })
       }),
     )
 
     unsubs.push(
       client.on('projects.workerFailed', (payload: any) => {
-        setState((s) => ({
-          ...s,
-          agents: s.agents.map((a) =>
-            a.id === payload.agentId ? { ...a, status: 'failed' as const } : a
-          ),
-        }))
+        setState((s) => {
+          const agent = s.agents.find(a => a.id === payload.agentId)
+          const newTaskStates = new Map(s.taskStates)
+          if (agent?.taskSummary) newTaskStates.set(agent.taskSummary, 'failed')
+          const nextWorkerStreams = new Map(s.workerStreams)
+          nextWorkerStreams.delete(payload.agentId)
+          return {
+            ...s,
+            agents: s.agents.map((a) =>
+              a.id === payload.agentId ? { ...a, status: 'failed' as const } : a
+            ),
+            taskStates: newTaskStates,
+            workerStreams: nextWorkerStreams,
+          }
+        })
       }),
     )
 
     // Conflict events
     unsubs.push(
       client.on('projects.conflictDetected', (payload: any) => {
-        setState((s) => ({
-          ...s,
-          conflicts: [...s.conflicts, { task1: payload.task1, task2: payload.task2, files: payload.files }],
-        }))
+        setState((s) => {
+          const newConflict = { task1: payload.task1, task2: payload.task2, files: payload.files }
+          // Deduplicate by (task1, task2) pair
+          const exists = s.conflicts.some(c => c.task1 === newConflict.task1 && c.task2 === newConflict.task2)
+          if (exists) return s
+          const next = [...s.conflicts, newConflict]
+          if (next.length > MAX_CONFLICTS) next.splice(0, next.length - MAX_CONFLICTS)
+          return { ...s, conflicts: next }
+        })
       }),
     )
 
     unsubs.push(
       client.on('projects.completed', () => {
-        // Flush any pending throttle text before finalizing
         const pendingAssistant = assistantThrottleRef.current.pending
         const pendingThinking = thinkingThrottleRef.current.pending
         assistantThrottleRef.current.pending = ''
@@ -247,6 +330,12 @@ export function useProject() {
               content: finalStreamText,
               thinking: finalThinkingText || undefined,
             })
+          }
+          // Finalize any remaining per-worker streams
+          for (const [, stream] of s.workerStreams) {
+            if (stream.text.trim()) {
+              newMessages.push({ role: 'assistant', content: stream.text.trim() })
+            }
           }
           return {
             ...s,
@@ -254,8 +343,7 @@ export function useProject() {
             status: 'done',
             thinkingText: '',
             _streamingText: '',
-            _streamingChunks: [],
-            _thinkingChunks: [],
+            workerStreams: new Map(),
           }
         })
       }),
@@ -263,7 +351,6 @@ export function useProject() {
 
     unsubs.push(
       client.on('projects.failed', (payload: any) => {
-        // Flush any pending throttle text before finalizing
         const pendingAssistant = assistantThrottleRef.current.pending
         const pendingThinking = thinkingThrottleRef.current.pending
         assistantThrottleRef.current.pending = ''
@@ -281,6 +368,12 @@ export function useProject() {
               content: finalStreamText,
               thinking: finalThinkingText || undefined,
             })
+          }
+          // Finalize any remaining per-worker streams
+          for (const [, stream] of s.workerStreams) {
+            if (stream.text.trim()) {
+              newMessages.push({ role: 'assistant', content: stream.text.trim() })
+            }
           }
           return {
             ...s,
@@ -289,8 +382,7 @@ export function useProject() {
             error: payload.message,
             thinkingText: '',
             _streamingText: '',
-            _streamingChunks: [],
-            _thinkingChunks: [],
+            workerStreams: new Map(),
           }
         })
       }),
@@ -307,6 +399,12 @@ export function useProject() {
     permissions: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }>
     model: string
   }) => {
+    // Clear any pending throttle timers from previous project
+    assistantThrottleRef.current.pending = ''
+    thinkingThrottleRef.current.pending = ''
+    if (assistantThrottleRef.current.timer) { clearTimeout(assistantThrottleRef.current.timer); assistantThrottleRef.current.timer = null }
+    if (thinkingThrottleRef.current.timer) { clearTimeout(thinkingThrottleRef.current.timer); thinkingThrottleRef.current.timer = null }
+
     setState({
       projectId: null,
       model: params.model,
@@ -320,8 +418,9 @@ export function useProject() {
       agents: [],
       conflicts: [],
       _streamingText: '',
-      _streamingChunks: [],
-      _thinkingChunks: [],
+      taskStates: new Map(),
+      workerStreams: new Map(),
+      workerProgress: [],
     })
 
     try {
@@ -338,7 +437,11 @@ export function useProject() {
         status: 'talking',
       }))
 
-      subscribe(result.projectId)
+      // Cleanup previous subscriptions before subscribing
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current()
+      }
+      unsubscribeRef.current = subscribe(result.projectId)
 
       return result.projectId
     } catch (e) {
@@ -364,8 +467,6 @@ export function useProject() {
       status: 'streaming',
       thinkingText: '',
       _streamingText: '',
-      _streamingChunks: [],
-      _thinkingChunks: [],
     }))
 
     try {
@@ -402,8 +503,6 @@ export function useProject() {
         planTasks: [],
         _streamingText: '',
         thinkingText: '',
-        _streamingChunks: [],
-        _thinkingChunks: [],
       }))
     } catch (e) {
       setState((s) => ({ ...s, status: 'failed', error: String(e) }))
@@ -412,6 +511,12 @@ export function useProject() {
 
   // Attach to existing project
   const attach = useCallback(async (projectId: string) => {
+    // Clear any pending throttle timers from previous project
+    assistantThrottleRef.current.pending = ''
+    thinkingThrottleRef.current.pending = ''
+    if (assistantThrottleRef.current.timer) { clearTimeout(assistantThrottleRef.current.timer); assistantThrottleRef.current.timer = null }
+    if (thinkingThrottleRef.current.timer) { clearTimeout(thinkingThrottleRef.current.timer); thinkingThrottleRef.current.timer = null }
+
     setState({
       projectId,
       model: 'openrouter/free',
@@ -425,8 +530,9 @@ export function useProject() {
       agents: [],
       conflicts: [],
       _streamingText: '',
-      _streamingChunks: [],
-      _thinkingChunks: [],
+      taskStates: new Map(),
+      workerStreams: new Map(),
+      workerProgress: [],
     })
 
     try {
@@ -471,7 +577,11 @@ export function useProject() {
         estimatedWorkers,
       }))
 
-      subscribe(projectId)
+      // Cleanup previous subscriptions before subscribing
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current()
+      }
+      unsubscribeRef.current = subscribe(projectId)
     } catch (e) {
       setState((s) => ({ ...s, status: 'failed', error: String(e) }))
     }
@@ -479,16 +589,26 @@ export function useProject() {
 
   // Load permissions + scan
   const loadPermissions = useCallback(async (projectDir: string) => {
-    const [perms, files] = await Promise.all([
-      client.call('project.loadPermissions', { projectDir }),
-      client.call('project.scan', { projectDir }),
-    ])
-    return { permissions: perms.files || {}, files: files as Array<{ name: string; path: string; isDir: boolean; isMasked: boolean }> }
+    try {
+      const [perms, files] = await Promise.all([
+        client.call('project.loadPermissions', { projectDir }),
+        client.call('project.scan', { projectDir }),
+      ])
+      return { permissions: perms.files || {}, files: files as Array<{ name: string; path: string; isDir: boolean; isMasked: boolean }> }
+    } catch (e) {
+      console.error('[useProject] loadPermissions failed:', e)
+      throw e
+    }
   }, [client])
 
   const savePermissions = useCallback(async (projectDir: string, permissions: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }>) => {
-    const config: PermissionsConfig = { version: 1, default: { read: true, write: false, edit: false, delete: false }, files: permissions }
-    await client.call('project.savePermissions', { projectDir, config })
+    try {
+      const config: PermissionsConfig = { version: 1, default: { read: true, write: false, edit: false, delete: false }, files: permissions }
+      await client.call('project.savePermissions', { projectDir, config })
+    } catch (e) {
+      console.error('[useProject] savePermissions failed:', e)
+      throw e
+    }
   }, [client])
 
   const stopProject = useCallback(async () => {
@@ -512,8 +632,8 @@ export function useProject() {
     }
   }, [client])
 
-  return {
-    ...state,
+  // Memoize stable actions to prevent unnecessary re-renders
+  const actions = useMemo(() => ({
     client,
     createProject,
     sendMessage,
@@ -524,5 +644,7 @@ export function useProject() {
     attach,
     loadPermissions,
     savePermissions,
-  }
+  }), [client, createProject, sendMessage, confirmPlan, rejectPlan, stopProject, setModel, attach, loadPermissions, savePermissions])
+
+  return { ...state, ...actions }
 }

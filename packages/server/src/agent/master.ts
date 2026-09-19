@@ -13,7 +13,8 @@
 
 import type { SqliteDb } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../project/manager.js'
-import type { DeveloperPlan, PlannedTask, PermissionsConfig } from '@codekalakaars/vajra-protocol'
+import type { DeveloperPlan, PlannedTask, PermissionsConfig, FilePermissions } from '@codekalakaars/vajra-protocol'
+import type { FileRule } from '@codekalakaars/vajra-sandbox'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { FileLockManager, ChangeHistory, type ResourceLimits } from '@codekalakaars/vajra-sandbox'
 import { TaskQueue, type TaskState } from './taskqueue.js'
@@ -52,6 +53,12 @@ export interface MasterInput {
   pool?: WorkerPool
   /** Signal to cancel the master loop (e.g. when the project is stopped). */
   signal?: AbortSignal
+  /** Whether the project allows unenforced sandbox mode. */
+  allowUnenforced?: boolean
+  /** Glob-based file rules from the sandbox config. */
+  fileRules?: readonly FileRule[]
+  /** Default file permissions for files with no matching rule. */
+  defaultFilePermissions?: FilePermissions
 }
 
 export interface WorkerJob {
@@ -62,6 +69,12 @@ export interface WorkerJob {
   allowedTools: string[]
   taskId: string
   resourceLimits?: ResourceLimits
+  /** Carry the project's allowUnenforced setting to the worker. */
+  allowUnenforced: boolean
+  /** Glob-based file rules from the sandbox config. */
+  fileRules?: readonly FileRule[]
+  /** Default file permissions for files with no matching rule. */
+  defaultFilePermissions?: FilePermissions
 }
 
 export interface MasterResult {
@@ -120,7 +133,7 @@ export async function evaluateSkipIf(
     }
   }
 
-  return true // All conditions were met
+  return false // No condition was satisfied
 }
 
 async function fileExists(projectDir: string, filePath: string): Promise<boolean> {
@@ -148,7 +161,7 @@ async function commandSucceeds(handle: LaunchHandle, command: string): Promise<b
 }
 
 export async function masterLoop(input: MasterInput): Promise<MasterResult> {
-  const { projectId, projectDir, plan, model, apiKey, provider, events, db, registry, launchWorker, resourceLimits, pool } = input
+  const { projectId, projectDir, plan, model, apiKey, provider, events, db, registry, launchWorker, resourceLimits, pool, allowUnenforced, fileRules, defaultFilePermissions } = input
 
   // Use provided file lock manager or create a new one
   const fileLocks = input.fileLocks ?? new FileLockManager()
@@ -214,7 +227,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
   if (prewarmCount > 0) {
     events.push('projects.workerProgress', projectId, {
-      projectId,
       agentId: masterAgent.id,
       taskId: 'master',
       detail: `Pre-warming ${prewarmCount} workers (max concurrent: ${maxConcurrentWorkers})...`,
@@ -236,6 +248,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
           permissions: computeTaskPermissions(task),
           allowedTools: computeToolPermissions(task),
           taskId: task.id,
+          allowUnenforced: allowUnenforced ?? false,
         })
 
         prewarmedHandles.set(task.id, handle)
@@ -252,7 +265,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     const prewarmFailed = prewarmResults.filter(r => r.status === 'fulfilled' && !r.value.success).length
 
     events.push('projects.workerProgress', projectId, {
-      projectId,
       agentId: masterAgent.id,
       taskId: 'master',
       detail: `Pre-warmed ${prewarmSuccess} workers${prewarmFailed > 0 ? `, ${prewarmFailed} failed` : ''}`,
@@ -291,7 +303,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
           const otherOwner = owners.find((o) => o !== task.id)
           if (otherOwner) {
             events.push('projects.conflictDetected', projectId, {
-              projectId,
               task1: task.id,
               task2: otherOwner,
               files: [file],
@@ -312,7 +323,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
           const otherOwner = owners.find((o) => o !== task.id)
           if (otherOwner) {
             events.push('projects.conflictDetected', projectId, {
-              projectId,
               task1: task.id,
               task2: otherOwner,
               files: [file],
@@ -331,7 +341,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
           queue.skipTask(task.id)
           completedTasks.push(task.id)
           events.push('projects.workerProgress', projectId, {
-            projectId,
             agentId: masterAgent.id,
             taskId: task.id,
             detail: 'Skipped: skipIf condition met',
@@ -365,7 +374,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
         if (confidence >= SPECULATIVE_CONFIDENCE_THRESHOLD) {
           events.push('projects.workerProgress', projectId, {
-            projectId,
             agentId: masterAgent.id,
             taskId: task.id,
             detail: `Speculative execution: confidence ${(confidence * 100).toFixed(0)}%`,
@@ -395,7 +403,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
       // Launch the worker
       events.push('projects.workerStarted', projectId, {
-        projectId,
         agentId: agent.id,
         taskId: task.id,
       })
@@ -408,7 +415,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
           handle = prewarmedHandle
           prewarmedHandles.delete(task.id)
           events.push('projects.workerProgress', projectId, {
-            projectId,
             agentId: agent.id,
             taskId: task.id,
             detail: 'Using pre-warmed worker',
@@ -421,6 +427,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
             permissions,
             allowedTools: toolPermissions,
             taskId: task.id,
+            allowUnenforced: allowUnenforced ?? false,
           })
         }
 
@@ -430,6 +437,134 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         // Start task execution in background, and keep the promise so the
         // loop can await a completion instead of polling for one.
         const running = executeTask(agent.id, task, handle, apiKey, model, provider, events, queue, registry, projectId, db, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, taskSummaries, resourceLimits, pool, totalUsage, signal)
+          .then(async (result) => {
+            totalToolCalls += result.toolCalls
+
+            // If the task already failed inside executeTask (e.g. provider error),
+            // skip validation — it was already counted as failed.
+            const currentTask = queue.getTask(task.id)
+            if (!currentTask || currentTask.status === 'failed') return
+
+            // Run validation in a separate worker with broader permissions
+            let validationPassed = true
+            if (task.validation.length > 0) {
+              let validationHandle: LaunchHandle | null = null
+              try {
+                validationHandle = await launchWorker({
+                  projectId,
+                  projectDir,
+                  role: 'worker',
+                  permissions: computeValidationPermissions(projectDir),
+                  allowedTools: ['read_file', 'list_files', 'search_files', 'run_command'],
+                  taskId: `${task.id}-validation`,
+                  allowUnenforced: allowUnenforced ?? false,
+                })
+
+                for (const cmd of task.validation) {
+                  events.push('projects.workerProgress', projectId, {
+                    agentId: agent.id,
+                    taskId: task.id,
+                    detail: `Running validation: ${cmd}`,
+                  })
+
+                  try {
+                    const taskTimeout = (task.timeout ?? 120)
+                    const validationResult = await validationHandle.callTool('run_command', {
+                      command: cmd,
+                      timeout: taskTimeout,
+                    })
+                    const output = typeof validationResult === 'string' ? validationResult : JSON.stringify(validationResult)
+
+                    let exitCode = 0
+                    try {
+                      const parsed = JSON.parse(output)
+                      exitCode = parsed.exitCode ?? 0
+                    } catch {
+                      exitCode = 0
+                    }
+
+                    if (exitCode !== 0) {
+                      validationPassed = false
+                      queue.recordValidation(task.id, `${cmd}\n${output}`, false)
+                      break
+                    }
+                    queue.recordValidation(task.id, `${cmd}\n${output}`, true)
+                  } catch (e) {
+                    validationPassed = false
+                    queue.recordValidation(task.id, `${cmd}\nError: ${e instanceof Error ? e.message : String(e)}`, false)
+                    break
+                  }
+                }
+              } finally {
+                if (validationHandle) {
+                  validationHandle.stop()
+                }
+              }
+            }
+
+            if (validationPassed) {
+              queue.completeTask(task.id, true)
+              completedTasks.push(task.id)
+              registry.updateStatus(agent.id, 'done')
+              events.push('projects.workerCompleted', projectId, {
+                agentId: agent.id,
+                taskId: task.id,
+                validationPassed: true,
+              })
+            } else {
+              // Validation failed — retry if possible
+              const retries = task.retries ?? 0
+              const maxRetries = task.maxRetries ?? DEFAULT_MAX_RETRIES
+
+              if (retries < maxRetries) {
+                if (changeHistory.hasChanges(task.id)) {
+                  await changeHistory.rollback(task.id)
+                  events.push('projects.workerProgress', projectId, {
+                    agentId: agent.id,
+                    taskId: task.id,
+                    detail: `Rolled back changes before retry ${retries + 1}/${maxRetries}`,
+                  })
+                }
+
+                queue.recordValidation(task.id, `\n[retry ${retries + 1}/${maxRetries}]`, false)
+                queue.retryTask(task.id)
+              } else {
+                events.push('projects.workerProgress', projectId, {
+                  agentId: agent.id,
+                  taskId: task.id,
+                  detail: 'Rolling back changes...',
+                })
+
+                if (changeHistory.hasChanges(task.id)) {
+                  const rollbackResult = await changeHistory.rollback(task.id)
+                  events.push('projects.workerProgress', projectId, {
+                    agentId: agent.id,
+                    taskId: task.id,
+                    detail: `Restored ${rollbackResult.restored.length} files, deleted ${rollbackResult.deleted.length} files`,
+                  })
+                }
+
+                if (task.rollback && task.rollback.length > 0) {
+                  for (const cmd of task.rollback) {
+                    try {
+                      await handle.callTool('run_command', { command: cmd, timeout: 30000 })
+                    } catch {
+                      // Rollback failure is non-fatal
+                    }
+                  }
+                }
+
+                queue.failTask(task.id)
+                failedTasks.push(task.id)
+                registry.updateStatus(agent.id, 'failed')
+                events.push('projects.workerFailed', projectId, {
+                  agentId: agent.id,
+                  taskId: task.id,
+                  error: `Validation failed after ${maxRetries} retries`,
+                })
+              }
+            }
+          })
           .catch((e) => {
             log.error({ agentId: agent.id, error: e }, 'Worker failed')
           })
@@ -447,7 +582,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         fileLocks.release(task.id)
 
         events.push('projects.workerFailed', projectId, {
-          projectId,
           agentId: agent.id,
           taskId: task.id,
           error: e instanceof Error ? e.message : String(e),
@@ -486,7 +620,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
     if (depFailed) {
       events.push('projects.workerProgress', projectId, {
-        projectId,
         agentId: masterAgent.id,
         taskId: specTaskId,
         detail: 'Rolling back speculative execution: dependency failed',
@@ -496,7 +629,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       if (changeHistory.hasChanges(specTaskId)) {
         const result = await changeHistory.rollback(specTaskId)
         events.push('projects.workerProgress', projectId, {
-          projectId,
           agentId: masterAgent.id,
           taskId: specTaskId,
           detail: `Restored ${result.restored.length} files, deleted ${result.deleted.length} files`,
@@ -524,7 +656,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   // pool believing the slot is still checked out.
   for (const [taskId, handle] of prewarmedHandles) {
     events.push('projects.workerProgress', projectId, {
-      projectId,
       agentId: masterAgent.id,
       taskId,
       detail: 'Discarding unused pre-warmed worker',
@@ -617,7 +748,8 @@ async function executeTask(
   pool?: WorkerPool,
   usageAccumulator?: { promptTokens: number; completionTokens: number; totalTokens: number },
   signal?: AbortSignal,
-): Promise<void> {
+  launchWorker?: (job: WorkerJob) => Promise<LaunchHandle>,
+): Promise<{ toolCalls: number }> {
   const MAX_WORKER_TOOL_CALLS = resourceLimits?.maxToolCalls ?? DEFAULT_WORKER_TOOL_CALLS
   let toolCallCount = 0
 
@@ -741,130 +873,13 @@ async function executeTask(
       }
     }
 
-    // Task completed — run validation if specified
-    let validationPassed = true
-    if (task.validation.length > 0) {
-      for (const cmd of task.validation) {
-        events.push('projects.workerProgress', projectId, {
-          projectId,
-          agentId,
-          taskId: task.id,
-          detail: `Running validation: ${cmd}`,
-        })
-
-        // The exit code is the verdict. Scanning output for words like
-        // "error" failed any suite that printed "0 errors" or named a test
-        // after a failure case, and the worker already throws on a non-zero
-        // exit, so there is nothing to scan for.
-        try {
-          const taskTimeout = (task.timeout ?? 120)
-          const validationResult = await handle.callTool('run_command', {
-            command: cmd,
-            timeout: taskTimeout,
-          })
-          const output = typeof validationResult === 'string' ? validationResult : JSON.stringify(validationResult)
-
-          // Use structured exit code if available
-          let exitCode = 0
-          try {
-            const parsed = JSON.parse(output)
-            exitCode = parsed.exitCode ?? 0
-          } catch {
-            exitCode = 0
-          }
-
-          if (exitCode !== 0) {
-            validationPassed = false
-            queue.recordValidation(task.id, `${cmd}\n${output}`, false)
-            break
-          }
-          queue.recordValidation(task.id, `${cmd}\n${output}`, true)
-        } catch (e) {
-          validationPassed = false
-          queue.recordValidation(task.id, `${cmd}\nError: ${e instanceof Error ? e.message : String(e)}`, false)
-          break
-        }
-      }
-    }
-
-    if (validationPassed) {
-      queue.completeTask(task.id, true)
-      completedTasks.push(task.id)
-      registry.updateStatus(agentId, 'done')
-      events.push('projects.workerCompleted', projectId, {
-        projectId,
-        agentId,
-        taskId: task.id,
-        validationPassed: true,
-      })
-    } else {
-      // Validation failed — retry if possible
-      const retries = task.retries ?? 0
-      const maxRetries = task.maxRetries ?? DEFAULT_MAX_RETRIES
-
-      if (retries < maxRetries) {
-        // Rollback changes before retry
-        if (changeHistory.hasChanges(task.id)) {
-          await changeHistory.rollback(task.id)
-          events.push('projects.workerProgress', projectId, {
-            projectId,
-            agentId,
-            taskId: task.id,
-            detail: `Rolled back changes before retry ${retries + 1}/${maxRetries}`,
-          })
-        }
-
-        queue.recordValidation(task.id, `\n[retry ${retries + 1}/${maxRetries}]`, false)
-        // Reset task to pending so it gets retried on the next loop iteration
-        queue.retryTask(task.id)
-      } else {
-        // Rollback using change history (preferred) or manual rollback commands
-        events.push('projects.workerProgress', projectId, {
-          projectId,
-          agentId,
-          taskId: task.id,
-          detail: 'Rolling back changes...',
-        })
-
-        // Try change history rollback first
-        if (changeHistory.hasChanges(task.id)) {
-          const result = await changeHistory.rollback(task.id)
-          events.push('projects.workerProgress', projectId, {
-            projectId,
-            agentId,
-            taskId: task.id,
-            detail: `Restored ${result.restored.length} files, deleted ${result.deleted.length} files`,
-          })
-        }
-
-        // Also run manual rollback commands if provided (for external changes)
-        if (task.rollback && task.rollback.length > 0) {
-          for (const cmd of task.rollback) {
-            try {
-              await handle.callTool('run_command', { command: cmd, timeout: 30000 })
-            } catch {
-              // Rollback failure is non-fatal
-            }
-          }
-        }
-
-        queue.failTask(task.id)
-        failedTasks.push(task.id)
-        registry.updateStatus(agentId, 'failed')
-        events.push('projects.workerFailed', projectId, {
-          projectId,
-          agentId,
-          taskId: task.id,
-          error: `Validation failed after ${maxRetries} retries`,
-        })
-      }
-    }
+    // Task complete — keep the worker's own summary for its dependents.
+    // Validation is handled by masterLoop after this returns.
   } catch (e) {
     queue.failTask(task.id)
     failedTasks.push(task.id)
     registry.updateStatus(agentId, 'failed')
     events.push('projects.workerFailed', projectId, {
-      projectId,
       agentId,
       taskId: task.id,
       error: e instanceof Error ? e.message : String(e),
@@ -886,6 +901,8 @@ async function executeTask(
       activeWorkers.delete(agentId)
     }
   }
+
+  return { toolCalls: toolCallCount }
 }
 
 // Helper to compute permissions from either PlannedTask or TaskState
@@ -971,4 +988,27 @@ function computeToolPermissions(task: PlannedTask | TaskState): string[] {
   // only (granting write access to parent directories).
 
   return tools
+}
+
+/**
+ * Compute permissions for a validation worker.
+ * Validation needs read-write access to the entire project plus cache directories.
+ */
+function computeValidationPermissions(projectDir: string): PermissionsConfig {
+  return {
+    version: 1,
+    default: { read: true, write: true, edit: true, delete: true },
+    files: {
+      // Grant full access to cache directories that validation commands need
+      'node_modules/.cache': { read: true, write: true, edit: true, delete: true },
+      '.next': { read: true, write: true, edit: true, delete: true },
+      'dist': { read: true, write: true, edit: true, delete: true },
+      'build': { read: true, write: true, edit: true, delete: true },
+      '.turbo': { read: true, write: true, edit: true, delete: true },
+      '.cache': { read: true, write: true, edit: true, delete: true },
+      'tmp': { read: true, write: true, edit: true, delete: true },
+      '.pytest_cache': { read: true, write: true, edit: true, delete: true },
+      '__pycache__': { read: true, write: true, edit: true, delete: true },
+    },
+  }
 }

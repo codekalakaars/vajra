@@ -28,7 +28,7 @@ function TodoList({ todos, onToggle, onDelete, onEdit }) {
         // BUG 2: Using index as key when items can be deleted/reordered
         // This causes incorrect component reuse and state bugs
         <TodoItem
-          key={index}
+          key={todo.id}
           todo={todo}
           isEditing={editingId === todo.id}
           editText={editText}

@@ -1,10 +1,8 @@
-import * as readline from 'node:readline'
-
 export class TerminalStreamer {
   private currentLine = ''
   private isThinking = false
 
-  constructor(private verbose = false) {}
+  constructor(private verbose = false, private version = '0.1.0') {}
 
   onTextDelta(text: string): void {
     this.currentLine += text
@@ -56,10 +54,13 @@ export class TerminalStreamer {
   }
 
   banner(): void {
+    const title = `Vajra v${this.version}`
+    const innerWidth = title.length + 2
+    const border = '═'.repeat(innerWidth)
     console.log('')
-    console.log('\x1b[1m\x1b[35m╔══════════════════════════════════════╗\x1b[0m')
-    console.log('\x1b[1m\x1b[35m║         🚀 Vajra CLI v0.1.0         ║\x1b[0m')
-    console.log('\x1b[1m\x1b[35m╚══════════════════════════════════════╝\x1b[0m')
+    console.log(`\x1b[1m\x1b[35m╔${border}╗\x1b[0m`)
+    console.log(`\x1b[1m\x1b[35m║ ${title} ║\x1b[0m`)
+    console.log(`\x1b[1m\x1b[35m╚${border}╝\x1b[0m`)
     console.log('')
   }
 

@@ -5,6 +5,7 @@
 // worker. Streams text and thinking deltas via push events.
 
 import type { SqliteDb } from '../db/client.js'
+import { runInTransaction } from '../db/client.js'
 import type { PushEvents, LaunchHandle } from '../project/manager.js'
 import type { PermissionsConfig, ToolName } from '@codekalakaars/vajra-protocol'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
@@ -143,7 +144,7 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
       events.push('projects.toolCall', project.id, {
         callId: toolCall.id,
         tool: toolCall.name,
-        args: parsed.ok ? parsed.call.args : {},
+        args: (parsed.ok ? parsed.call.args : {}) as Record<string, unknown>,
       })
 
       let resultContent: string
@@ -180,18 +181,20 @@ export async function agentLoop(input: AgentLoopInput): Promise<AgentLoopResult>
         toolCallId: toolCall.id,
       })
 
-      // Persist tool result
-      const toolSeq = nextSeq(db, project.id)
-      appendMessage(
-        db,
-        project.id,
-        toolSeq,
-        'tool',
-        resultContent,
-        undefined,
-        toolCall.id,
-        toolCall.name,
-      )
+      // Persist tool result atomically with its sequence number
+      runInTransaction(db, () => {
+        const toolSeq = nextSeq(db, project.id)
+        appendMessage(
+          db,
+          project.id,
+          toolSeq,
+          'tool',
+          resultContent,
+          undefined,
+          toolCall.id,
+          toolCall.name,
+        )
+      })
     }
   }
 
