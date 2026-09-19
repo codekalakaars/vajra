@@ -358,10 +358,6 @@ function parseProposePlanArgs(raw: unknown): DeveloperPlan {
   tasks = addFileLevelDependencies(tasks)
   tasks = detectAndRemoveCircularDeps(tasks)
 
-  // Detect and remove circular dependencies. Must run AFTER the file-level
-  // pass, which can introduce edges the planner never declared.
-  tasks = detectAndRemoveCircularDeps(tasks)
-
   // Compute parallel execution waves. Level 0 is everything with no
   // dependencies; level N is everything whose dependencies all landed in an
   // earlier level. Tasks sharing a level can genuinely run in parallel — the

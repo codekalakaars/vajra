@@ -210,7 +210,8 @@ test('masterLoop skips tasks when skipIf matches', async () => {
     })
 
     assert.equal(result.totalTasks, 1)
-    assert.equal(result.completedTasks, 1, 'skipped tasks count as completed')
+    assert.equal(result.completedTasks, 0, 'skipped tasks are not counted as completed')
+    assert.equal(result.skippedTasks, 1, 'skipped tasks are tracked separately')
     assert.equal(result.failedTasks, 0)
   } finally {
     db.close()
