@@ -25,7 +25,7 @@ import type { WorkerPool } from '../project/pool.js'
 import { access } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { compressMessages } from './context.js'
-import { DEFAULT_MAX_RETRIES, SPECULATIVE_CONFIDENCE_THRESHOLD, DEFAULT_WORKER_TOOL_CALLS, MAX_DEP_CONTEXT_SIZE } from './constants.js'
+import { DEFAULT_MAX_RETRIES, DEFAULT_WORKER_TOOL_CALLS, MAX_DEP_CONTEXT_SIZE } from './constants.js'
 import { componentLogger } from '../logger.js'
 import { stmt } from '../db/statements.js'
 
@@ -82,6 +82,7 @@ export interface MasterResult {
   totalTasks: number
   completedTasks: number
   failedTasks: number
+  skippedTasks: number
   totalToolCalls: number
   totalUsage?: { promptTokens: number; completionTokens: number; totalTokens: number }
 }
@@ -181,7 +182,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   // One transaction: a failure partway through used to leave the tables
   // referring to rows that no longer existed.
   db.transaction(() => {
-    stmt(db, `DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
     stmt(db, `DELETE FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)`).run(projectId)
     stmt(db, `DELETE FROM tasks WHERE session_id = ?`).run(projectId)
     stmt(db, `DELETE FROM agents WHERE session_id = ?`).run(projectId)
@@ -207,10 +207,8 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
   const taskSummaries = new Map<string, string>()
   const completedTasks: string[] = []
   const failedTasks: string[] = []
+  const skippedTasks: string[] = []
   let totalToolCalls = 0
-
-  // Speculative execution tracking
-  const speculativeTasks = new Map<string, { taskId: string; dependsOn: string[] }>()
 
   // Adaptive concurrency based on system resources
   const adaptiveMax = pool?.stats().adaptiveMax ?? 4
@@ -249,6 +247,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
           allowedTools: computeToolPermissions(task),
           taskId: task.id,
           allowUnenforced: allowUnenforced ?? false,
+          resourceLimits,
         })
 
         prewarmedHandles.set(task.id, handle)
@@ -339,7 +338,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
         if (shouldSkip) {
           fileLocks.releaseAll(task.id)
           queue.skipTask(task.id)
-          completedTasks.push(task.id)
+          skippedTasks.push(task.id)
           events.push('projects.workerProgress', projectId, {
             agentId: masterAgent.id,
             taskId: task.id,
@@ -350,45 +349,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
       }
 
       assignable.push(task)
-    }
-
-    // Speculative execution: start tasks with high-confidence dependencies
-    if (assignable.length === 0 && inFlight.size < maxConcurrentWorkers) {
-      const pendingTasks = queue.getReadyTasks().filter(t =>
-        t.dependsOn.length > 0 &&
-        !speculativeTasks.has(t.id) &&
-        t.dependsOn.some(depId => {
-          const dep = queue.getTask(depId)
-          return dep?.status === 'running' || dep?.status === 'assigned'
-        })
-      )
-
-      for (const task of pendingTasks) {
-        // Calculate confidence based on dependency status
-        const deps = task.dependsOn.map(depId => queue.getTask(depId)).filter(Boolean)
-        const runningDeps = deps.filter(d => d?.status === 'running' || d?.status === 'assigned')
-        const completedDeps = deps.filter(d => d?.status === 'done')
-
-        // Confidence: completed deps are 100%, running deps are ~80% likely to succeed
-        const confidence = (completedDeps.length * 1.0 + runningDeps.length * 0.8) / deps.length
-
-        if (confidence >= SPECULATIVE_CONFIDENCE_THRESHOLD) {
-          events.push('projects.workerProgress', projectId, {
-            agentId: masterAgent.id,
-            taskId: task.id,
-            detail: `Speculative execution: confidence ${(confidence * 100).toFixed(0)}%`,
-          })
-
-          // Mark as speculative
-          speculativeTasks.set(task.id, {
-            taskId: task.id,
-            dependsOn: task.dependsOn,
-          })
-
-          // Add to assignable (will be processed in the assignment loop)
-          assignable.push(task)
-        }
-      }
     }
 
     // Assign ready tasks
@@ -428,6 +388,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
             allowedTools: toolPermissions,
             taskId: task.id,
             allowUnenforced: allowUnenforced ?? false,
+            resourceLimits,
           })
         }
 
@@ -458,6 +419,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
                   allowedTools: ['read_file', 'list_files', 'search_files', 'run_command'],
                   taskId: `${task.id}-validation`,
                   allowUnenforced: allowUnenforced ?? false,
+                  resourceLimits,
                 })
 
                 for (const cmd of task.validation) {
@@ -607,50 +569,6 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     await Promise.allSettled(inFlight.values())
   }
 
-  // Handle speculative task rollbacks if any dependencies failed
-  for (const [specTaskId, specInfo] of speculativeTasks) {
-    const specTask = queue.getTask(specTaskId)
-    if (!specTask || specTask.status === 'done' || specTask.status === 'failed') continue
-
-    // Check if any dependency failed
-    const depFailed = specInfo.dependsOn.some(depId => {
-      const dep = queue.getTask(depId)
-      return dep?.status === 'failed'
-    })
-
-    if (depFailed) {
-      events.push('projects.workerProgress', projectId, {
-        agentId: masterAgent.id,
-        taskId: specTaskId,
-        detail: 'Rolling back speculative execution: dependency failed',
-      })
-
-      // Rollback changes using change history
-      if (changeHistory.hasChanges(specTaskId)) {
-        const result = await changeHistory.rollback(specTaskId)
-        events.push('projects.workerProgress', projectId, {
-          agentId: masterAgent.id,
-          taskId: specTaskId,
-          detail: `Restored ${result.restored.length} files, deleted ${result.deleted.length} files`,
-        })
-      }
-
-      // Mark as failed
-      queue.failTask(specTaskId)
-      failedTasks.push(specTaskId)
-
-      // Stop the worker if it's still running
-      for (const [agentId, worker] of activeWorkers) {
-        if (worker.taskId === specTaskId) {
-          worker.handle.stop()
-          activeWorkers.delete(agentId)
-          registry.updateStatus(agentId, 'failed')
-          break
-        }
-      }
-    }
-  }
-
   // Cleanup any unused prewarmed handles. They were acquired from the pool,
   // so they have to go back through it — calling stop() directly leaves the
   // pool believing the slot is still checked out.
@@ -669,13 +587,14 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
   registry.updateStatus(masterAgent.id, 'done')
 
-  const summary = `Completed ${completedTasks.length} of ${plan.tasks.length} tasks. Failed: ${failedTasks.length}.`
+  const summary = `Completed ${completedTasks.length} of ${plan.tasks.length} tasks. Failed: ${failedTasks.length}. Skipped: ${skippedTasks.length}.`
 
   return {
     summary,
     totalTasks: plan.tasks.length,
     completedTasks: completedTasks.length,
     failedTasks: failedTasks.length,
+    skippedTasks: skippedTasks.length,
     totalToolCalls,
     totalUsage: totalUsage.totalTokens > 0 ? totalUsage : undefined,
   }
@@ -827,8 +746,8 @@ async function executeTask(
 
       const result = await provider.streamChat(
         { apiKey, model, messages: compressedMessages, tools: workerToolSpecs, signal },
-        (text) => events.push('projects.assistantDelta', projectId, { text }),
-        (thinking) => events.push('projects.thinkingDelta', projectId, { text: thinking }),
+        (text) => events.push('projects.assistantDelta', projectId, { text, agentId, taskId: task.id }),
+        (thinking) => events.push('projects.thinkingDelta', projectId, { text: thinking, agentId, taskId: task.id }),
       )
 
       // Accumulate token usage

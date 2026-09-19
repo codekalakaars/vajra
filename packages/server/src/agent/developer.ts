@@ -21,6 +21,9 @@ import { compressMessages } from './context.js'
 import { searchSummary, appendMessage, nextSeq } from './utils.js'
 import { MAX_DEVELOPER_TOOL_CALLS, MAX_TASK_CONTEXT_SIZE, MAX_CONTEXT_LINES } from './constants.js'
 import { componentLogger } from '../logger.js'
+import { resolve, relative, isAbsolute } from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 
 const log = componentLogger('developer')
 
@@ -252,6 +255,54 @@ function extractRelevantLines(content: string, instructions: string[]): string {
   }
 
   return result.join('\n')
+}
+
+const execFileAsync = promisify(execFile)
+
+interface PlanWarning {
+  type: 'path_traversal' | 'command_not_found' | 'cycle_removed'
+  message: string
+}
+
+async function validatePlan(
+  plan: DeveloperPlan,
+  projectDir: string,
+): Promise<PlanWarning[]> {
+  const warnings: PlanWarning[] = []
+  const projectRoot = resolve(projectDir)
+
+  // Check all file paths stay inside the project root
+  for (const task of plan.tasks) {
+    for (const filePath of [...task.readFile, ...task.writeFile, ...task.deleteFile]) {
+      const full = isAbsolute(filePath) ? resolve(filePath) : resolve(projectDir, filePath)
+      const rel = relative(projectRoot, full)
+      if (rel.startsWith('..') || rel === '') {
+        warnings.push({
+          type: 'path_traversal',
+          message: `Task "${task.title}" references "${filePath}" which is outside the project root`,
+        })
+      }
+    }
+  }
+
+  // Check validation commands exist on PATH
+  for (const task of plan.tasks) {
+    for (const cmd of task.validation) {
+      // Extract the base command (first word)
+      const baseCmd = cmd.trim().split(/\s+/)[0]
+      if (!baseCmd) continue
+      try {
+        await execFileAsync('which', [baseCmd])
+      } catch {
+        warnings.push({
+          type: 'command_not_found',
+          message: `Task "${task.title}" validation command "${baseCmd}" not found on PATH`,
+        })
+      }
+    }
+  }
+
+  return warnings
 }
 
 function parseProposePlanArgs(raw: unknown): DeveloperPlan {
@@ -600,13 +651,22 @@ export async function developerConversationTurn(
 
       const plan = parseProposePlanArgs(parsed)
 
+      // Validate plan: check path boundaries and command existence
+      const warnings = await validatePlan(plan, projectDir)
+      for (const w of warnings) {
+        log.warn(`Plan warning: ${w.message}`)
+      }
+
       // Close out the tool call before returning. The assistant message holding
       // this tool_call is already in history, and providers reject a
       // conversation where a tool call has no matching result — without this,
       // the next user turn (rejecting the plan and giving feedback) fails.
+      const warningText = warnings.length > 0
+        ? `\n\nWarnings:\n${warnings.map((w) => `- ${w.message}`).join('\n')}`
+        : ''
       messages.push({
         role: 'tool',
-        content: 'Plan proposed. Awaiting user review.',
+        content: `Plan proposed. Awaiting user review.${warningText}`,
         toolCallId: toolCall.id,
       })
 

@@ -28,6 +28,3 @@ export const MAX_SEARCH_RESULTS = 15
 
 /** Default retry config for master task execution. */
 export const DEFAULT_MAX_RETRIES = 2
-
-/** Speculative execution confidence threshold. */
-export const SPECULATIVE_CONFIDENCE_THRESHOLD = 0.8

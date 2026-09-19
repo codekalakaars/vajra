@@ -95,15 +95,4 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
   PRIMARY KEY (task_id, depends_on)
 );
 
--- Inter-agent message bus (coordination, conflict resolution, progress).
-CREATE TABLE IF NOT EXISTS agent_messages (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT NOT NULL REFERENCES sessions(id),
-  from_agent_id TEXT NOT NULL REFERENCES agents(id),
-  to_agent_id TEXT REFERENCES agents(id),  -- NULL for broadcast
-  message_type TEXT NOT NULL,      -- 'task_assigned' | 'task_completed' | 'conflict_detected' | 'coordination'
-  payload TEXT NOT NULL,           -- JSON
-  created_at INTEGER NOT NULL
-);
 
-CREATE INDEX IF NOT EXISTS idx_agent_messages_session ON agent_messages(session_id);

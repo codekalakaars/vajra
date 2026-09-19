@@ -453,7 +453,6 @@ export class ProjectManager {
 
     this.conversations.delete(projectId)
     const tx = this.db.transaction(() => {
-      stmt(this.db, `DELETE FROM agent_messages WHERE session_id = ?`).run(projectId)
       stmt(this.db, `DELETE FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE session_id = ?)`).run(projectId)
       stmt(this.db, `DELETE FROM tasks WHERE session_id = ?`).run(projectId)
       stmt(this.db, `DELETE FROM agents WHERE session_id = ?`).run(projectId)
