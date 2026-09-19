@@ -4,7 +4,8 @@ import { Command } from 'commander'
 import * as dotenv from 'dotenv'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
+import { DEFAULT_MODEL, getRootDir, readEnvFile, writeEnvKey } from './env.js'
 import { runCommand } from './run.js'
 import { startTUI } from './tui/index.js'
 import { videoCommand } from './video.js'
@@ -12,7 +13,7 @@ import { videoCommand } from './video.js'
 // Find root .env file (go up from dist/ to packages/cli, then to repo root)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-const rootDir = resolve(__dirname, '..', '..', '..')
+const rootDir = getRootDir(__filename)
 
 // Load .env from root directory
 dotenv.config({ path: resolve(rootDir, '.env') })
@@ -25,14 +26,14 @@ const program = new Command()
 program
   .name('vajra')
   .description('Vajra CLI - Multi-agent task execution from the terminal')
-  .version('0.1.0')
+  .version('0.0.1')
 
 program
   .command('run')
   .description('Start an interactive session with the developer agent')
   .argument('[task]', 'Initial task description (optional)')
   .option('-k, --api-key <key>', 'API key (OpenRouter or OpenCode Zen)')
-  .option('-m, --model <model>', 'LLM model to use', process.env.VAJRA_MODEL || 'openai/gpt-4o-mini')
+  .option('-m, --model <model>', 'LLM model to use', DEFAULT_MODEL)
   .option('-v, --verbose', 'Show thinking/reasoning output')
   .option('-d, --dir <directory>', 'Project directory', process.cwd())
   .option('-y, --yes', 'Auto-confirm all plans without prompting')
@@ -96,18 +97,7 @@ program
         process.exit(1)
       }
 
-      let envContent = envExists ? readFileSync(envPath, 'utf-8') : ''
-      const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const regex = new RegExp(`^${escapedKey}=.*$`, 'm')
-      
-      if (regex.test(envContent)) {
-        envContent = envContent.replace(regex, `${key}=${value}`)
-      } else {
-        envContent += envContent.endsWith('\n') ? '' : '\n'
-        envContent += `${key}=${value}\n`
-      }
-
-      writeFileSync(envPath, envContent)
+      writeEnvKey(envPath, key, value)
       console.log(`Set ${key}=${key.includes('KEY') ? '***' : value}`)
       return
     }
@@ -124,20 +114,7 @@ program
       'VAJRA_MODEL',
     ]
 
-    const envFromFile: Record<string, string> = {}
-    if (envExists) {
-      const lines = readFileSync(envPath, 'utf-8').split('\n')
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || trimmed.startsWith('#')) continue
-        const eqIdx = trimmed.indexOf('=')
-        if (eqIdx > 0) {
-          const key = trimmed.slice(0, eqIdx).trim()
-          const value = trimmed.slice(eqIdx + 1).trim()
-          envFromFile[key] = value
-        }
-      }
-    }
+    const envFromFile = readEnvFile(envPath)
 
     const allKeys = [...new Set([...knownKeys, ...Object.keys(envFromFile)])]
 
@@ -167,7 +144,7 @@ program.addCommand(videoCommand)
 // If no command provided, launch TUI
 const args = process.argv.slice(2)
 if (args.length === 0) {
-  await startTUI('0.1.0')
+  await startTUI('0.0.1')
 } else {
   program.parse()
 }
