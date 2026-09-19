@@ -17,6 +17,7 @@ import type { DeveloperPlan, PlannedTask, PermissionsConfig, FilePermissions } f
 import type { FileRule } from '@codekalakaars/vajra-sandbox'
 import type { ChatProvider, ChatMessage } from './providers/types.js'
 import { FileLockManager, ChangeHistory, type ResourceLimits } from '@codekalakaars/vajra-sandbox'
+import { createWorktree, mergeWorktree, discardWorktree, getChangedFiles, cleanupWorktrees, type WorktreeInfo } from '@codekalakaars/vajra-sandbox'
 import { TaskQueue, type TaskState } from './taskqueue.js'
 import { AgentRegistry, type AgentState } from './registry.js'
 import { getToolSpecs } from './tools.js'
@@ -30,6 +31,91 @@ import { componentLogger } from '../logger.js'
 import { stmt } from '../db/statements.js'
 
 const log = componentLogger('master')
+
+// --- Master agent tools ---
+//
+// The master gets a small LLM tool loop for high-level orchestration
+// decisions: retrying, amending, splitting, or aborting tasks after
+// failures. These tools are defined inline (not in the protocol package)
+// because they are master-internal and never dispatched to workers.
+
+const MAX_MASTER_LLM_TURNS = 10
+
+const MASTER_TOOL_SPECS: import('./providers/types.js').ToolSpec[] = [
+  {
+    name: 'get_task_status',
+    description: 'Get the status and details of a specific task, or the overall queue status.',
+    parameters: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'Task ID to query. Omit for overall queue status.' },
+      },
+    },
+  },
+  {
+    name: 'retry_task',
+    description: 'Retry a failed task from the beginning.',
+    parameters: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'Task ID to retry.' },
+      },
+      required: ['taskId'],
+    },
+  },
+  {
+    name: 'amend_task',
+    description: 'Modify a pending or failed task\'s instructions, files, or validation before retrying.',
+    parameters: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'Task ID to amend.' },
+        instructions: { type: 'array', items: { type: 'string' }, description: 'New instructions (replaces existing).' },
+        readFile: { type: 'array', items: { type: 'string' }, description: 'New readFile list (replaces existing).' },
+        writeFile: { type: 'array', items: { type: 'string' }, description: 'New writeFile list (replaces existing).' },
+        validation: { type: 'array', items: { type: 'string' }, description: 'New validation commands (replaces existing).' },
+      },
+      required: ['taskId'],
+    },
+  },
+  {
+    name: 'split_task',
+    description: 'Split a failed task into smaller sub-tasks. The original task is replaced by the sub-tasks, which depend on the original task\'s dependencies.',
+    parameters: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'Task ID to split.' },
+        subTasks: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              instructions: { type: 'array', items: { type: 'string' } },
+              readFile: { type: 'array', items: { type: 'string' } },
+              writeFile: { type: 'array', items: { type: 'string' } },
+              validation: { type: 'array', items: { type: 'string' } },
+              dependsOn: { type: 'array', items: { type: 'string' }, description: 'Indices (0-based) of sub-tasks this one depends on.' },
+            },
+            required: ['title', 'instructions'],
+          },
+          description: 'Sub-tasks to create. First sub-task inherits original dependencies.',
+        },
+      },
+      required: ['taskId', 'subTasks'],
+    },
+  },
+  {
+    name: 'abort_plan',
+    description: 'Abort the entire plan. Stops all running workers and marks remaining tasks as failed.',
+    parameters: {
+      type: 'object',
+      properties: {
+        reason: { type: 'string', description: 'Reason for aborting.' },
+      },
+    },
+  },
+]
 
 export interface MasterInput {
   projectId: string
@@ -59,6 +145,10 @@ export interface MasterInput {
   fileRules?: readonly FileRule[]
   /** Default file permissions for files with no matching rule. */
   defaultFilePermissions?: FilePermissions
+  /** Whether to use worktree isolation for task execution. When true, each task
+   *  gets its own worktree copy. On success, changes are merged back. On failure,
+   *  the worktree is discarded (no complex rollback needed). Default: true. */
+  useWorktrees?: boolean
 }
 
 export interface WorkerJob {
@@ -85,6 +175,223 @@ export interface MasterResult {
   skippedTasks: number
   totalToolCalls: number
   totalUsage?: { promptTokens: number; completionTokens: number; totalTokens: number }
+}
+
+// --- Master tool execution ---
+
+interface MasterToolContext {
+  queue: TaskQueue
+  registry: AgentRegistry
+  taskSummaries: Map<string, string>
+  completedTasks: string[]
+  failedTasks: string[]
+  skippedTasks: string[]
+  projectId: string
+}
+
+function executeMasterTool(
+  tool: import('./providers/types.js').ToolCall,
+  ctx: MasterToolContext,
+): string {
+  let args: Record<string, unknown>
+  try {
+    args = JSON.parse(tool.arguments)
+  } catch {
+    return JSON.stringify({ error: 'Invalid JSON arguments' })
+  }
+
+  switch (tool.name) {
+    case 'get_task_status': {
+      if (args.taskId) {
+        const task = ctx.queue.getTask(args.taskId as string)
+        if (!task) return JSON.stringify({ error: `Task ${args.taskId} not found` })
+        const summary = ctx.taskSummaries.get(task.id) ?? null
+        return JSON.stringify({
+          id: task.id,
+          title: task.title,
+          status: task.status,
+          type: task.type,
+          retries: task.retries,
+          maxRetries: task.maxRetries,
+          validationPassed: task.validationPassed,
+          dependsOn: task.dependsOn,
+          readFile: task.readFile,
+          writeFile: task.writeFile,
+          instructions: task.instructions,
+          summary,
+        })
+      }
+      return JSON.stringify(ctx.queue.getStatus())
+    }
+    case 'retry_task': {
+      const taskId = args.taskId as string
+      const task = ctx.queue.getTask(taskId)
+      if (!task) return JSON.stringify({ error: `Task ${taskId} not found` })
+      if (task.status !== 'failed') return JSON.stringify({ error: `Task ${taskId} is ${task.status}, not failed` })
+      ctx.queue.retryTask(taskId)
+      return JSON.stringify({ ok: true, message: `Task ${taskId} queued for retry` })
+    }
+    case 'amend_task': {
+      const taskId = args.taskId as string
+      const task = ctx.queue.getTask(taskId)
+      if (!task) return JSON.stringify({ error: `Task ${taskId} not found` })
+      if (task.status !== 'failed' && task.status !== 'pending') {
+        return JSON.stringify({ error: `Task ${taskId} is ${task.status}; can only amend failed or pending tasks` })
+      }
+      if (args.instructions) task.instructions = args.instructions as string[]
+      if (args.readFile) task.readFile = args.readFile as string[]
+      if (args.writeFile) task.writeFile = args.writeFile as string[]
+      if (args.validation) task.validation = args.validation as string[]
+      ctx.queue.retryTask(taskId)
+      return JSON.stringify({ ok: true, message: `Task ${taskId} amended and queued for retry` })
+    }
+    case 'split_task': {
+      const taskId = args.taskId as string
+      const task = ctx.queue.getTask(taskId)
+      if (!task) return JSON.stringify({ error: `Task ${taskId} not found` })
+      const subTasks = args.subTasks as Array<{
+        title: string
+        instructions: string[]
+        readFile?: string[]
+        writeFile?: string[]
+        validation?: string[]
+        dependsOn?: number[]
+      }>
+      if (!subTasks || subTasks.length === 0) return JSON.stringify({ error: 'No sub-tasks provided' })
+
+      // Mark original as skipped
+      ctx.queue.skipTask(taskId)
+
+      // Create sub-tasks with proper dependencies
+      const subTaskIds: string[] = []
+      for (let i = 0; i < subTasks.length; i++) {
+        const subId = `${taskId}-split-${i + 1}`
+        subTaskIds.push(subId)
+      }
+
+      for (let i = 0; i < subTasks.length; i++) {
+        const sub = subTasks[i]
+        const subId = subTaskIds[i]
+        // First sub-task inherits original deps; others depend on previous sub-task
+        const dependsOn = i === 0
+          ? [...task.dependsOn]
+          : (sub.dependsOn ?? [i - 1]).map((idx) => subTaskIds[idx] ?? subTaskIds[i - 1])
+
+        ctx.queue.addTask({
+          id: subId,
+          title: sub.title,
+          description: '',
+          instructions: sub.instructions,
+          readFile: sub.readFile ?? [],
+          writeFile: sub.writeFile ?? [],
+          deleteFile: [],
+          createDir: [],
+          validation: sub.validation ?? [],
+          dependsOn,
+          type: task.type,
+          retries: 0,
+          timeout: task.timeout,
+          rollback: [],
+          skipIf: [],
+        })
+      }
+
+      return JSON.stringify({
+        ok: true,
+        message: `Split task ${taskId} into ${subTasks.length} sub-tasks`,
+        subTaskIds,
+      })
+    }
+    case 'abort_plan': {
+      return JSON.stringify({
+        ok: true,
+        message: `Plan aborted: ${args.reason ?? 'No reason given'}`,
+        abort: true,
+      })
+    }
+    default:
+      return JSON.stringify({ error: `Unknown tool: ${tool.name}` })
+  }
+}
+
+/**
+ * Ask the LLM to decide what to do about a task failure.
+ *
+ * Returns the parsed tool calls from the LLM response. If the LLM returns
+ * text instead of tool calls, returns an empty array (caller should skip
+ * the task).
+ */
+async function masterDecide(
+  provider: ChatProvider,
+  apiKey: string,
+  model: string,
+  failedTask: TaskState,
+  validationOutput: string | null,
+  ctx: MasterToolContext,
+  signal?: AbortSignal,
+): Promise<import('./providers/types.js').ToolCall[]> {
+  const statusSummary = ctx.queue.getStatus()
+  const taskSummary = ctx.taskSummaries.get(failedTask.id) ?? '(no summary)'
+
+  const systemPrompt = [
+    'You are the Master agent — an orchestrator that manages task execution.',
+    'A task has failed and you must decide what to do next.',
+    '',
+    'You have these tools:',
+    '- get_task_status: query task or queue status',
+    '- retry_task: retry a failed task from the beginning',
+    '- amend_task: modify a failed task\'s instructions/files and retry',
+    '- split_task: break a failed task into smaller sub-tasks',
+    '- abort_plan: stop all work',
+    '',
+    'Rules:',
+    '- You may call multiple tools in one response.',
+    '- For retry_task and amend_task, the task must be in "failed" status.',
+    '- For split_task, provide sub-tasks with 0-based dependsOn indices.',
+    '- If you cannot fix the problem, abort the plan.',
+  ].join('\n')
+
+  const userMessage = [
+    `Task "${failedTask.title}" (${failedTask.id}) has failed.`,
+    '',
+    `Status: ${failedTask.status}`,
+    `Type: ${failedTask.type}`,
+    `Retries: ${failedTask.retries}/${failedTask.maxRetries}`,
+    `Files read: ${failedTask.readFile.join(', ') || '(none)'}`,
+    `Files write: ${failedTask.writeFile.join(', ') || '(none)'}`,
+    `Instructions: ${failedTask.instructions.join('; ')}`,
+    '',
+    validationOutput ? `Validation output:\n${validationOutput}` : 'No validation output (worker crashed).',
+    '',
+    `Queue: ${statusSummary.done} done, ${statusSummary.failed} failed, ${statusSummary.pending} pending, ${statusSummary.running} running`,
+    '',
+    'What should be done about this failure?',
+  ].join('\n')
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userMessage },
+  ]
+
+  for (let turn = 0; turn < MAX_MASTER_LLM_TURNS; turn++) {
+    const result = await provider.streamChat(
+      { apiKey, model, messages, tools: MASTER_TOOL_SPECS, signal },
+      () => {}, // No text streaming for master decisions
+    )
+
+    if (result.message.toolCalls && result.message.toolCalls.length > 0) {
+      return result.message.toolCalls
+    }
+
+    // LLM returned text instead of tool calls — ask it to use a tool
+    messages.push(result.message)
+    messages.push({
+      role: 'user',
+      content: 'Please use one of your tools to handle this failure.',
+    })
+  }
+
+  return []
 }
 
 /**
@@ -169,6 +476,15 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
   // Use provided change history or create a new one with projectDir for path resolution
   const changeHistory = input.changeHistory ?? new ChangeHistory(projectDir)
+
+  // Worktree isolation: when enabled, each task gets its own copy of the project
+  // directory. On success, changes are merged back. On failure, the worktree is
+  // discarded (no complex rollback needed). This is safer than the current
+  // approach where workers write directly to the live project tree.
+  const useWorktrees = input.useWorktrees ?? true
+
+  // Track worktrees for cleanup at the end
+  const worktrees = new Map<string, WorktreeInfo>()
 
   // Accumulate token usage across all worker calls
   const totalUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
@@ -380,9 +696,37 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
             detail: 'Using pre-warmed worker',
           })
         } else {
+          // Create worktree for isolated execution if enabled
+          let taskProjectDir = projectDir
+          let taskChangeHistory = changeHistory
+
+          if (useWorktrees) {
+            try {
+              const worktree = createWorktree(projectDir, task.id)
+              worktrees.set(task.id, worktree)
+              taskProjectDir = worktree.worktreePath
+              taskChangeHistory = new ChangeHistory(worktree.worktreePath)
+
+              events.push('projects.workerProgress', projectId, {
+                agentId: agent.id,
+                taskId: task.id,
+                detail: `Created worktree for isolated execution`,
+              })
+            } catch (e) {
+              events.push('projects.workerProgress', projectId, {
+                agentId: agent.id,
+                taskId: task.id,
+                detail: `Failed to create worktree, falling back to direct execution: ${e instanceof Error ? e.message : String(e)}`,
+              })
+              // Fall back to direct execution
+              taskProjectDir = projectDir
+              taskChangeHistory = changeHistory
+            }
+          }
+
           handle = await launchWorker({
             projectId,
-            projectDir,
+            projectDir: taskProjectDir,
             role: 'worker',
             permissions,
             allowedTools: toolPermissions,
@@ -397,7 +741,12 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
 
         // Start task execution in background, and keep the promise so the
         // loop can await a completion instead of polling for one.
-        const running = executeTask(agent.id, task, handle, apiKey, model, provider, events, queue, registry, projectId, db, fileLocks, changeHistory, activeWorkers, completedTasks, failedTasks, taskSummaries, resourceLimits, pool, totalUsage, signal)
+        // Use per-task change history for worktree isolation
+        const taskChangeHist = worktrees.has(task.id)
+          ? new ChangeHistory(worktrees.get(task.id)!.worktreePath)
+          : changeHistory
+
+        const running = executeTask(agent.id, task, handle, apiKey, model, provider, events, queue, registry, projectId, db, fileLocks, taskChangeHist, activeWorkers, completedTasks, failedTasks, taskSummaries, resourceLimits, pool, totalUsage, signal)
           .then(async (result) => {
             totalToolCalls += result.toolCalls
 
@@ -407,15 +756,21 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
             if (!currentTask || currentTask.status === 'failed') return
 
             // Run validation in a separate worker with broader permissions
+            // Use worktree path for validation if available
             let validationPassed = true
             if (task.validation.length > 0) {
               let validationHandle: LaunchHandle | null = null
               try {
+                // Use worktree path for validation if available
+                const validationProjectDir = worktrees.has(task.id)
+                  ? worktrees.get(task.id)!.worktreePath
+                  : projectDir
+
                 validationHandle = await launchWorker({
                   projectId,
-                  projectDir,
+                  projectDir: validationProjectDir,
                   role: 'worker',
-                  permissions: computeValidationPermissions(projectDir),
+                  permissions: computeValidationPermissions(validationProjectDir),
                   allowedTools: ['read_file', 'list_files', 'search_files', 'run_command'],
                   taskId: `${task.id}-validation`,
                   allowUnenforced: allowUnenforced ?? false,
@@ -465,6 +820,31 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
             }
 
             if (validationPassed) {
+              // Merge worktree changes back to main directory if using worktrees
+              if (worktrees.has(task.id)) {
+                const worktree = worktrees.get(task.id)!
+                const changedFiles = getChangedFiles(worktree)
+                const mergeResult = mergeWorktree(worktree, changedFiles)
+
+                if (mergeResult.success) {
+                  events.push('projects.workerProgress', projectId, {
+                    agentId: agent.id,
+                    taskId: task.id,
+                    detail: `Merged ${mergeResult.changedFiles.length} files from worktree`,
+                  })
+                } else {
+                  events.push('projects.workerProgress', projectId, {
+                    agentId: agent.id,
+                    taskId: task.id,
+                    detail: `Failed to merge worktree: ${mergeResult.error}`,
+                  })
+                }
+
+                // Clean up worktree
+                discardWorktree(worktree)
+                worktrees.delete(task.id)
+              }
+
               queue.completeTask(task.id, true)
               completedTasks.push(task.id)
               registry.updateStatus(agent.id, 'done')
@@ -474,12 +854,27 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
                 validationPassed: true,
               })
             } else {
+              // Validation failed — discard worktree if using worktrees
+              if (worktrees.has(task.id)) {
+                const worktree = worktrees.get(task.id)!
+                discardWorktree(worktree)
+                worktrees.delete(task.id)
+
+                events.push('projects.workerProgress', projectId, {
+                  agentId: agent.id,
+                  taskId: task.id,
+                  detail: 'Discarded worktree after validation failure',
+                })
+              }
+
               // Validation failed — retry if possible
               const retries = task.retries ?? 0
               const maxRetries = task.maxRetries ?? DEFAULT_MAX_RETRIES
 
               if (retries < maxRetries) {
-                if (changeHistory.hasChanges(task.id)) {
+                // No rollback needed for worktrees — worktree was already discarded
+                // For non-worktree mode, rollback changes
+                if (!worktrees.has(task.id) && changeHistory.hasChanges(task.id)) {
                   await changeHistory.rollback(task.id)
                   events.push('projects.workerProgress', projectId, {
                     agentId: agent.id,
@@ -491,19 +886,22 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
                 queue.recordValidation(task.id, `\n[retry ${retries + 1}/${maxRetries}]`, false)
                 queue.retryTask(task.id)
               } else {
-                events.push('projects.workerProgress', projectId, {
-                  agentId: agent.id,
-                  taskId: task.id,
-                  detail: 'Rolling back changes...',
-                })
-
-                if (changeHistory.hasChanges(task.id)) {
-                  const rollbackResult = await changeHistory.rollback(task.id)
+                // Retries exhausted — roll back (non-worktree) or just fail (worktree)
+                if (!worktrees.has(task.id)) {
                   events.push('projects.workerProgress', projectId, {
                     agentId: agent.id,
                     taskId: task.id,
-                    detail: `Restored ${rollbackResult.restored.length} files, deleted ${rollbackResult.deleted.length} files`,
+                    detail: 'Rolling back changes...',
                   })
+
+                  if (changeHistory.hasChanges(task.id)) {
+                    const rollbackResult = await changeHistory.rollback(task.id)
+                    events.push('projects.workerProgress', projectId, {
+                      agentId: agent.id,
+                      taskId: task.id,
+                      detail: `Restored ${rollbackResult.restored.length} files, deleted ${rollbackResult.deleted.length} files`,
+                    })
+                  }
                 }
 
                 if (task.rollback && task.rollback.length > 0) {
@@ -516,14 +914,58 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
                   }
                 }
 
+                // Mark as failed before LLM decision (tools require this status)
                 queue.failTask(task.id)
                 failedTasks.push(task.id)
                 registry.updateStatus(agent.id, 'failed')
-                events.push('projects.workerFailed', projectId, {
+
+                // Retrieve validation output from DB for LLM context
+                const valRow = db.prepare(
+                  `SELECT validation_output FROM tasks WHERE id = ?`,
+                ).get(task.id) as { validation_output?: string } | undefined
+
+                const masterCtx: MasterToolContext = {
+                  queue, registry, taskSummaries, completedTasks, failedTasks, skippedTasks, projectId,
+                }
+
+                events.push('projects.workerProgress', projectId, {
                   agentId: agent.id,
                   taskId: task.id,
-                  error: `Validation failed after ${maxRetries} retries`,
+                  detail: 'Asking master agent for decision...',
                 })
+
+                try {
+                  const toolCalls = await masterDecide(
+                    provider, apiKey, model, task, valRow?.validation_output ?? null,
+                    masterCtx, signal,
+                  )
+
+                  let shouldAbort = false
+                  for (const tc of toolCalls) {
+                    const result = executeMasterTool(tc, masterCtx)
+                    log.info({ tool: tc.name, taskId: task.id, result }, 'Master tool result')
+
+                    events.push('projects.workerProgress', projectId, {
+                      agentId: agent.id,
+                      taskId: task.id,
+                      detail: `Master decided: ${tc.name}`,
+                    })
+
+                    const parsed = JSON.parse(result)
+                    if (parsed.abort) shouldAbort = true
+                  }
+
+                  if (shouldAbort) {
+                    ownController?.abort()
+                  }
+                } catch (e) {
+                  log.error({ error: e }, 'Master LLM decision failed')
+                  events.push('projects.workerFailed', projectId, {
+                    agentId: agent.id,
+                    taskId: task.id,
+                    error: `Validation failed after ${maxRetries} retries`,
+                  })
+                }
               }
             }
           })
@@ -583,6 +1025,16 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
     } else {
       handle.stop()
     }
+  }
+
+  // Clean up any remaining worktrees (e.g., if aborted or failed)
+  for (const [taskId, worktree] of worktrees) {
+    events.push('projects.workerProgress', projectId, {
+      agentId: masterAgent.id,
+      taskId,
+      detail: 'Cleaning up worktree',
+    })
+    discardWorktree(worktree)
   }
 
   registry.updateStatus(masterAgent.id, 'done')

@@ -18,3 +18,12 @@ export { loadSandboxConfig, loadSandboxEnvironments, saveSandboxConfig, saveSand
 export { FileLockManager, type Lock, type LockMode } from './file-locks.js'
 export { type ResourceLimits, type ConcurrencyConfig, DEFAULT_RESOURCE_LIMITS, DEFAULT_CONCURRENCY, resolveResourceLimits, resolveConcurrencyConfig } from './resources.js'
 export { ChangeHistory, type FileChange, type TaskChanges } from './change-history.js'
+export {
+  createWorktree,
+  mergeWorktree,
+  discardWorktree,
+  getChangedFiles,
+  cleanupWorktrees,
+  type WorktreeInfo,
+  type WorktreeResult,
+} from './worktree.js'
