@@ -18,7 +18,8 @@ function App({ version }: AppProps) {
   const { exit } = useApp()
 
   function runCommand(command: string, args: string[] = []) {
-    const self = resolve(__dirname, '..', '..', 'index.js')
+    // Re-invoke the same entry script (works for both dist/index.js and dev src runs).
+    const self = process.argv[1] ?? resolve(__dirname, '..', 'index.js')
     const child = spawn(process.execPath, [self, command, ...args], {
       stdio: 'inherit',
       cwd: process.cwd(),
