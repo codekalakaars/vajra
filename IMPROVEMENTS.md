@@ -7,105 +7,17 @@ Each group lists the files it touches. No two groups share a file.
 
 ---
 
-## Group 1: Worker Pool
-
-**Files:** `packages/server/src/agent/pool.ts`
-
-### 4.9 Pool slot accounting drifts, and a drained pool is permanently dead
-
-`notifyWaiter` hands an idle worker to a waiter without decrementing
-`availableSlots`. `drain()` sets `availableSlots = 0` with no reset path.
-
-**Fix.** Make slot accounting a single explicit semaphore with acquire/release
-symmetry, and have `drain` return the pool to a constructed state.
-
 ---
 
-## Group 2: Master Loop
-
-**Files:** `packages/server/src/agent/master.ts`
-
-### 3.3 Validation commands inherit the task's narrow sandbox
-
-Child processes inherit Landlock restrictions. A worker confined to `src/api.ts`
-runs `npm test`, which needs write access to caches. Validation fails for reasons
-unrelated to the code change.
-
-**Fix.** Run validation in a separately launched worker whose ruleset grants the
-project root read-write plus cache directories.
-
-### 3.4 Speculative execution bypasses file locking -- and is dead code
-
-The speculative branch pushes tasks straight into `assignable` without ever
-calling `tryAcquire`. It cannot fire (the filter is always empty) but the code
-is misleading.
-
-**Fix.** Delete the feature and its rollback bookkeeping.
-
-### 4.4 Worker resource limits are never applied
-
-`WorkerJob` carries `resourceLimits`, `executeTask` reads
-`resourceLimits?.maxToolCalls`. Nothing populates it.
-
-**Fix.** Resolve limits once from config and thread them through both call sites.
-
-### 5.5 totalToolCalls is always zero, and there is no cost accounting
-
-`MasterResult.totalToolCalls` is declared, returned, and never incremented. No
-token or spend tracking exists anywhere.
-
-**Fix.** Return per-task tool-call and token counts from `executeTask`, aggregate
-them, persist to `tasks`, and add a configurable per-plan budget.
-
-### 5.12 Skipped tasks are counted as completed
-
-`queue.skipTask` is followed by `completedTasks.push(task.id)`, so the final
-summary includes work that was deliberately not done.
-
-**Fix.** Track skipped separately and report all three counts.
+---
 
 ---
 
 ---
 
-## Group 3: Developer Agent
-
-**Files:** `packages/server/src/agent/developer.ts`
-
-### 4.6 Independent groups are not independent
-
-The grouping loop marks tasks as assigned while iterating, so a task whose
-dependency was just assigned joins the same group. Nearly every task lands in
-group 0.
-
-**Fix.** Compute proper topological levels: group n is every task whose
-dependencies all sit in groups less than n.
-
-### 5.4 Task duration estimates are invented
-
-`estimateTaskDurations` multiplies a hardcoded 30/120/240-minute base by file
-count and validation count ratios. These numbers reach the user as estimates.
-
-**Fix.** Remove the field, or derive from recorded historical task durations
-using the `started_at` and `completed_at` columns.
-
 ---
 
-## Group 4: Project Manager
-
-**Files:** `packages/server/src/project/manager.ts`
-
-### 5.11 sendMessage during execution starts a competing agent loop
-
-Status `executing` falls through to the legacy `sendWorkerMessage` path, which
-launches an independent `agentLoop` while the Master is mid-run.
-
-**Fix.** Reject or queue user messages while `executing`, and route them to the
-Master as guidance.
-
----
-
-## Group 5: Database and Schema
+## Group 1: Database and Schema
 
 **Files:** `packages/server/src/db/*`
 
@@ -127,7 +39,7 @@ summaries.
 
 ---
 
-## Group 6: Orchestration Tests
+## Group 2: Orchestration Tests
 
 **Files:** `packages/server/test/*` (new files only)
 
@@ -154,7 +66,7 @@ lives.
 
 ---
 
-## Group 7: Dead Code and CLI Dedup
+## Group 3: Dead Code and CLI Dedup
 
 **Files:** Various (removals only, no overlaps with Groups 1-12)
 
@@ -186,7 +98,7 @@ server versions, already diverged. Every fix must currently be applied twice.
 
 ---
 
-## Group 8: Architectural
+## Group 4: Architectural
 
 **Files:** New files / major restructures
 

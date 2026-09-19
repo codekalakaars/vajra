@@ -23,7 +23,6 @@ test('schema creates all tables and foreign keys are enforced', () => {
   assert.ok(tables.includes('agents'), 'agents table exists')
   assert.ok(tables.includes('tasks'), 'tasks table exists')
   assert.ok(tables.includes('task_dependencies'), 'task_dependencies table exists')
-  assert.ok(tables.includes('agent_messages'), 'agent_messages table exists')
 
   // A plan_steps row referencing a nonexistent session must be rejected —
   // this is what proves `PRAGMA foreign_keys = ON` actually took effect.

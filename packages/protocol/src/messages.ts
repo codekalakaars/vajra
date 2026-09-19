@@ -192,6 +192,8 @@ export interface SandboxStatusPayload {
 
 export interface AssistantDeltaPayload {
   text: string
+  agentId?: string
+  taskId?: string
 }
 
 export interface FailedPayload {
