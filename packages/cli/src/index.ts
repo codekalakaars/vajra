@@ -4,8 +4,14 @@ import { Command } from 'commander'
 import * as dotenv from 'dotenv'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync } from 'node:fs'
-import { DEFAULT_MODEL, getRootDir, readEnvFile, writeEnvKey } from './env.js'
+import { existsSync, readFileSync } from 'node:fs'
+import {
+  findEnvPath,
+  parseSetPair,
+  readEnvFile,
+  resolveDefaultModel,
+  writeEnvKey,
+} from './env.js'
 import { runCommand } from './run.js'
 import { startTUI } from './tui/index.js'
 import { videoCommand } from './video.js'
@@ -13,11 +19,23 @@ import { videoCommand } from './video.js'
 // Find root .env file (go up from dist/ to packages/cli, then to repo root)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-const rootDir = getRootDir(__filename)
 
-// Load .env from root directory
-dotenv.config({ path: resolve(rootDir, '.env') })
+function readPackageVersion(): string {
+  try {
+    const pkgPath = resolve(__dirname, '..', 'package.json')
+    const raw = readFileSync(pkgPath, 'utf-8')
+    const pkg = JSON.parse(raw) as { version?: string }
+    return pkg.version ?? '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
 
+const CLI_VERSION = readPackageVersion()
+const envPath = findEnvPath()
+
+// Load .env from the discovered path (cwd-first when a local .env exists)
+dotenv.config({ path: envPath })
 // Also load from current working directory if different
 dotenv.config()
 
@@ -26,14 +44,14 @@ const program = new Command()
 program
   .name('vajra')
   .description('Vajra CLI - Multi-agent task execution from the terminal')
-  .version('0.0.1')
+  .version(CLI_VERSION)
 
 program
   .command('run')
   .description('Start an interactive session with the developer agent')
   .argument('[task]', 'Initial task description (optional)')
   .option('-k, --api-key <key>', 'API key (OpenRouter or OpenCode Zen)')
-  .option('-m, --model <model>', 'LLM model to use', DEFAULT_MODEL)
+  .option('-m, --model <model>', 'LLM model to use', resolveDefaultModel())
   .option('-v, --verbose', 'Show thinking/reasoning output')
   .option('-d, --dir <directory>', 'Project directory', process.cwd())
   .option('-y, --yes', 'Auto-confirm all plans without prompting')
@@ -65,10 +83,10 @@ program
   .command('config')
   .description('Show or set configuration')
   .option('-g, --get <key>', 'Get a config value')
-  .option('-s, --set <key> <value>', 'Set a config value')
+  .option('-s, --set <key=value>', 'Set a config value (e.g. -s FOO=bar)')
   .option('-l, --list', 'List all config values')
   .action((options) => {
-    const envPath = resolve(rootDir, '.env')
+    const envPath = findEnvPath()
     const envExists = existsSync(envPath)
 
     if (options.get) {
@@ -84,16 +102,14 @@ program
     }
 
     if (options.set) {
-      const [key, ...valueParts] = options.set
-      const value = valueParts.join(' ')
-      
-      if (!key) {
-        console.error('Key is required')
+      const parsed = parseSetPair(options.set)
+      if (!parsed) {
+        console.error(`Invalid --set value '${options.set}'. Usage: vajra config -s KEY=VALUE`)
         process.exit(1)
       }
-
+      const { key, value } = parsed
       if (!value) {
-        console.error(`Value is required for key '${key}'. Usage: vajra config -s KEY VALUE`)
+        console.error(`Value is required for key '${key}'. Usage: vajra config -s KEY=VALUE`)
         process.exit(1)
       }
 
@@ -134,7 +150,7 @@ program
     console.log('  Usage:')
     console.log('    vajra config              Show all config')
     console.log('    vajra config -g KEY       Get a value')
-    console.log('    vajra config -s KEY VAL   Set a value')
+    console.log('    vajra config -s KEY=VAL   Set a value')
     console.log('')
   })
 
@@ -144,7 +160,7 @@ program.addCommand(videoCommand)
 // If no command provided, launch TUI
 const args = process.argv.slice(2)
 if (args.length === 0) {
-  await startTUI('0.0.1')
+  await startTUI(CLI_VERSION)
 } else {
   program.parse()
 }
