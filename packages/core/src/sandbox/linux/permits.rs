@@ -42,7 +42,9 @@ pub fn perms_to_bits(perm: &FilePermissions, is_dir: bool, supported: u64, narro
 
     if is_dir {
         if perm.write {
-            bits |= access::MAKE_DIR | access::MAKE_REG | access::MAKE_SYM;
+            // WRITE_FILE on a directory is kept by add_path_rule (not DIR_ONLY) and
+            // is required alongside MAKE_REG for open(O_WRONLY|O_CREAT) of children.
+            bits |= access::WRITE_FILE | access::MAKE_DIR | access::MAKE_REG | access::MAKE_SYM;
         }
         if perm.delete && !narrowed.delete {
             bits |= access::REMOVE_DIR | access::REMOVE_FILE;

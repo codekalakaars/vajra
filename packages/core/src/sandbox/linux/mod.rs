@@ -227,11 +227,13 @@ mod tests {
     }
 
     #[test]
-    fn directory_write_grants_creation_not_file_write() {
+    fn directory_write_grants_creation_and_child_write() {
+        // WRITE_FILE on a directory rule is required for open(O_WRONLY|O_CREAT)
+        // of children — MAKE_REG alone is not enough on this kernel/Landlock ABI.
         let bits = perms_to_bits(&perms(true, true, false, false), true, u64::MAX, &unnarrowed());
         assert_ne!(bits & acc::MAKE_REG, 0);
         assert_ne!(bits & acc::MAKE_DIR, 0);
-        assert_eq!(bits & acc::WRITE_FILE, 0);
+        assert_ne!(bits & acc::WRITE_FILE, 0);
     }
 
     #[test]
