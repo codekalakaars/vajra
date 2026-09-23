@@ -150,6 +150,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@codekalakaars/vajra-agent-core':
+        specifier: workspace:*
+        version: link:../../experimental-packages/agent-core
       '@codekalakaars/vajra-core':
         specifier: workspace:*
         version: link:../..

@@ -1,128 +1,169 @@
 // Summary index types and pure functions.
 //
-// These are shared between CLI and server. The async I/O layer
-// (buildSummaryIndex) stays in each consumer.
+// Shared between CLI and server. The I/O layer (buildSummaryIndex) stays in
+// each consumer — this package is zero-I/O.
+
+import type { ProjectFileEntry } from '@codekalakaars/vajra-protocol'
 
 export interface SummaryEntry {
   path: string
-  lines: number
+  symbols: string[]
   preview: string
-  imports: string[]
-  exports: string[]
+  lineCount: number
   importCount: number
   exportCount: number
 }
 
-export const SYMBOL_PATTERNS = [
-  /\bexport\s+(?:default\s+)?(?:function|class|const|let|var|interface|type|enum)\s+(\w+)/g,
-  /\bexport\s+\{([^}]+)\}/g,
-]
-
 export const SKIP_DIRS = new Set([
-  'node_modules', '.git', 'target', 'dist', 'build',
-  '.next', '.turbo', '.cache', '__pycache__',
+  'node_modules', '.git', 'target', '.next', 'dist', 'build', '__pycache__',
+  '.turbo', '.cache',
 ])
 
 export const SKIP_EXTENSIONS = new Set([
-  '.json', '.lock', '.map', '.min.js', '.min.css',
-  '.d.ts', '.svg', '.png', '.jpg', '.gif', '.ico',
-  '.woff', '.woff2', '.ttf', '.eot',
+  '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.woff', '.woff2', '.ttf', '.eot',
+  '.map', '.lock', '.wasm', '.exe', '.bin', '.db', '.db-shm', '.db-wal',
 ])
 
-export const MAX_FILE_BYTES = 512 * 1024 // 512KB
+/** Suffixes the extension check cannot see: it only looks after the last dot. */
+export const SKIP_SUFFIXES = ['.min.js', '.min.css']
+
+const SYMBOL_PATTERNS: RegExp[] = [
+  /\b(?:export\s+)?(?:async\s+)?function\s+(\w+)/g,
+  /\b(?:export\s+)?class\s+(\w+)/g,
+  /\b(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=/g,
+  /\b(?:export\s+)?(?:type|interface)\s+(\w+)\s+/g,
+  /\b(?:pub\s+)?(?:fn|struct|enum|trait|impl)\s+(\w+)/g,
+  /\b(?:export\s+)?(?:default\s+)?(?:function|class)\s+(\w+)/g,
+  /\bmodule\.exports\s*=\s*(\w+)/g,
+  /\b(?:pub\s+)?static\s+(\w+)/g,
+]
 
 export function extractSymbols(content: string): string[] {
-  const symbols: string[] = []
+  const symbols = new Set<string>()
   for (const pattern of SYMBOL_PATTERNS) {
-    const regex = new RegExp(pattern.source, pattern.flags)
+    pattern.lastIndex = 0
     let match
-    while ((match = regex.exec(content)) !== null) {
-      if (match[1]) {
-        // Named export: export { foo, bar }
-        const names = match[1].split(',').map(s => s.trim().split(/\s+as\s+/).pop()!.trim())
-        symbols.push(...names)
-      } else {
-        symbols.push(match[1])
+    while ((match = pattern.exec(content)) !== null) {
+      if (match[1] && match[1] !== 'if' && match[1] !== 'for' && match[1] !== 'while') {
+        symbols.add(match[1])
       }
     }
   }
-  return [...new Set(symbols)]
+  return [...symbols].slice(0, 15)
 }
 
 export function countImports(content: string): number {
-  return (content.match(/^import\s/gm) || []).length
+  const lines = content.split('\n')
+  return lines.filter(l => /^\s*import\s/.test(l) || /^\s*from\s+['"].*['"]\s+import/.test(l)).length
 }
 
 export function countExports(content: string): number {
-  return (content.match(/^export\s/gm) || []).length
+  return (content.match(/\bexport\b/g) || []).length
 }
 
 export function getPreview(content: string, maxLines = 3): string {
-  const lines = content.split('\n').slice(0, maxLines)
-  return lines.join('\n').slice(0, 200)
+  const lines = content.split('\n').filter(l => l.trim().length > 0)
+  return lines.slice(0, maxLines).join(' ').slice(0, 150)
 }
 
-export function shouldSkipFile(filePath: string): boolean {
-  const parts = filePath.split('/')
-  // Check directory components
-  for (const part of parts.slice(0, -1)) {
-    if (SKIP_DIRS.has(part)) return true
-  }
-  // Check extension
-  const ext = filePath.slice(filePath.lastIndexOf('.'))
+export function shouldSkipFile(entry: ProjectFileEntry): boolean {
+  if (entry.isDir) return true
+  if (entry.isMasked) return true
+
+  const path = entry.path.toLowerCase()
+  const ext = '.' + path.split('.').pop()
   if (SKIP_EXTENSIONS.has(ext)) return true
-  return false
+  if (SKIP_SUFFIXES.some((suffix) => path.endsWith(suffix))) return true
+
+  return path.split('/').some((segment) => SKIP_DIRS.has(segment))
 }
 
-export function formatSummaryIndexHierarchical(summary: SummaryEntry[]): string {
-  if (summary.length === 0) return '(no files)'
+/**
+ * Format summary index with hierarchical compression.
+ * Groups files by directory and provides different levels of detail.
+ */
+export function formatSummaryIndexHierarchical(
+  summary: SummaryEntry[],
+  maxTokens: number = 4000,
+): string {
+  if (summary.length === 0) return '(no files indexed)'
 
-  // Group by directory
-  const byDir = new Map<string, SummaryEntry[]>()
+  const dirMap = new Map<string, SummaryEntry[]>()
   for (const entry of summary) {
     const parts = entry.path.split('/')
     const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '.'
-    if (!byDir.has(dir)) byDir.set(dir, [])
-    byDir.get(dir)!.push(entry)
+    const entries = dirMap.get(dir) || []
+    entries.push(entry)
+    dirMap.set(dir, entries)
   }
 
-  const lines: string[] = []
-  for (const [dir, entries] of byDir) {
-    if (dir !== '.') lines.push(`${dir}/`)
-    for (const entry of entries) {
-      const name = entry.path.split('/').pop()!
-      const symbols = entry.exports.length > 0 ? ` [${entry.exports.join(', ')}]` : ''
-      lines.push(`  ${name} (${entry.lines}L, ${entry.importCount}i, ${entry.exportCount}e)${symbols}`)
+  const result: string[] = []
+  let currentSize = 0
+
+  const sortedDirs = [...dirMap.entries()].sort((a, b) => b[1].length - a[1].length)
+
+  for (const [dir, entries] of sortedDirs) {
+    if (currentSize >= maxTokens) break
+
+    const dirHeader = `\n${dir}/ (${entries.length} files)`
+    result.push(dirHeader)
+    currentSize += dirHeader.length
+
+    const sortedEntries = entries.sort((a, b) => {
+      if (a.exportCount !== b.exportCount) return b.exportCount - a.exportCount
+      if (a.importCount !== b.importCount) return b.importCount - a.importCount
+      return b.lineCount - a.lineCount
+    })
+
+    for (const entry of sortedEntries) {
+      if (currentSize >= maxTokens) break
+
+      const fileName = entry.path.split('/').pop() || entry.path
+      const symbols = entry.symbols.length > 0 ? entry.symbols.slice(0, 5).join(', ') : ''
+
+      let line: string
+      if (entry.exportCount > 3) {
+        line = `  ${fileName} [${entry.lineCount}L, ${entry.exportCount} exports]: ${symbols}`
+      } else if (entry.exportCount > 0 || entry.importCount > 2) {
+        line = `  ${fileName} [${entry.lineCount}L]: ${symbols}`
+      } else {
+        line = `  ${fileName} (${entry.lineCount}L)`
+      }
+
+      result.push(line)
+      currentSize += line.length
     }
   }
-  return lines.join('\n')
+
+  return result.join('\n')
 }
 
-export function searchSummary(summary: SummaryEntry[], query: string, maxResults = 15): string {
-  const lower = query.toLowerCase()
+export function searchSummary(summary: SummaryEntry[], query: string): string {
+  const terms = query.toLowerCase().split(/[\s,;]+/).filter(t => t.length > 0)
+  if (terms.length === 0) return 'No search terms provided.'
+
   const scored = summary
     .map(entry => {
+      const text = `${entry.path} ${entry.symbols.join(' ')} ${entry.preview}`.toLowerCase()
       let score = 0
-      const pathLower = entry.path.toLowerCase()
-      if (pathLower.includes(lower)) score += 10
-      for (const exp of entry.exports) {
-        if (exp.toLowerCase().includes(lower)) score += 5
-      }
-      for (const imp of entry.imports) {
-        if (imp.toLowerCase().includes(lower)) score += 2
+      for (const t of terms) {
+        if (text.includes(t)) score++
       }
       return { entry, score }
     })
     .filter(s => s.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, maxResults)
+    .sort((a, b) => b.score - a.score || b.entry.exportCount - a.entry.exportCount)
+    .slice(0, 15)
 
   if (scored.length === 0) return 'No matching files found.'
 
   return scored
     .map(({ entry }) => {
-      const symbols = entry.exports.length > 0 ? ` [${entry.exports.join(', ')}]` : ''
-      return `${entry.path} (${entry.lines}L)${symbols}`
+      const symbols = entry.symbols.length > 0 ? entry.symbols.join(', ') : '(no symbols)'
+      const meta = `${entry.lineCount}L`
+      const imports = entry.importCount > 0 ? `, ${entry.importCount} imports` : ''
+      const exports = entry.exportCount > 0 ? `, ${entry.exportCount} exports` : ''
+      return `${entry.path} [${meta}${imports}${exports}]\n  Symbols: ${symbols}\n  Preview: ${entry.preview}`
     })
-    .join('\n')
+    .join('\n\n')
 }
