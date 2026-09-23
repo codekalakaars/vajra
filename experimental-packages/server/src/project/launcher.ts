@@ -29,7 +29,8 @@ const DEFAULT_CALL_TIMEOUT_MS = Number(process.env.VAJRA_TOOL_TIMEOUT_MS) || 300
 const CALL_TIMEOUT_GRACE_MS = Number(process.env.VAJRA_TOOL_TIMEOUT_GRACE_MS) || 30_000
 
 function callTimeoutMs(args: unknown): number {
-  const requested = (args as { timeout?: unknown } | null | undefined)?.timeout
+  const bag = args as { timeoutMs?: unknown; timeout?: unknown } | null | undefined
+  const requested = typeof bag?.timeoutMs === 'number' ? bag.timeoutMs : bag?.timeout
   if (typeof requested === 'number' && Number.isFinite(requested) && requested > 0) {
     return requested + CALL_TIMEOUT_GRACE_MS
   }

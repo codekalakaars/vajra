@@ -1,73 +1,54 @@
-// Bridges the provider-agnostic tool call format to the {tool, args} shape
-// the sandboxed worker's dispatch loop expects.
+// Provider tool-spec adapters + tool-call validation.
 //
-// This validation is deliberately separate from — and does not replace —
-// the worker's own re-validation in worker/sandboxed-worker.mjs. That
-// process is the actual security boundary and never trusts this layer's
-// output. This layer exists so a malformed model response (an unknown tool
-// name, non-JSON arguments, a schema mismatch) produces an immediate,
-// cheap tool-result error the model can see and react to, without spending
-// an IPC round trip to the worker on something already known to be invalid.
+// Parsing lives in @codekalakaars/vajra-agent-core (Group N). This layer only
+// maps the protocol's OpenAI/Anthropic shapes onto the server's ToolSpec and
+// ToolCall types. Worker dispatch re-validates independently — this is a
+// cheap pre-check for malformed model output, not the security boundary.
 
-import { toolDefinitions, toOpenAiToolSpecs, toAnthropicToolSpecs, roleTools, type ToolName } from '@codekalakaars/vajra-protocol'
+import {
+  toOpenAiToolSpecs,
+  toAnthropicToolSpecs,
+  roleTools,
+} from '@codekalakaars/vajra-protocol'
+import {
+  parseToolCall as parseRawToolCall,
+  type ParsedToolCall,
+  type ParseToolCallResult,
+} from '@codekalakaars/vajra-agent-core'
 import type { ToolCall, ToolSpec } from './providers/types.js'
 
-export function getToolSpecs(provider: 'openai' | 'anthropic' = 'openai'): ToolSpec[] {
-  const raw = provider === 'anthropic' ? toAnthropicToolSpecs() : toOpenAiToolSpecs()
+function toToolSpecs(provider: 'openai' | 'anthropic', tools?: Parameters<typeof toOpenAiToolSpecs>[0]): ToolSpec[] {
+  const raw = provider === 'anthropic' ? toAnthropicToolSpecs(tools) : toOpenAiToolSpecs(tools)
   return raw.map((s) => {
     if ('function' in s) {
-      return { name: s.function.name, description: s.function.description, parameters: s.function.parameters as unknown as Record<string, unknown> }
+      return {
+        name: s.function.name,
+        description: s.function.description,
+        parameters: s.function.parameters as unknown as Record<string, unknown>,
+      }
     }
-    return { name: s.name, description: s.description, parameters: s.input_schema as unknown as Record<string, unknown> }
+    return {
+      name: s.name,
+      description: s.description,
+      parameters: s.input_schema as unknown as Record<string, unknown>,
+    }
   })
+}
+
+export function getToolSpecs(provider: 'openai' | 'anthropic' = 'openai'): ToolSpec[] {
+  return toToolSpecs(provider)
 }
 
 /** Tool specs for the Developer role (read-only + propose_plan). */
 export function getDeveloperToolSpecs(provider: 'openai' | 'anthropic' = 'openai'): ToolSpec[] {
-  const raw = provider === 'anthropic' ? toAnthropicToolSpecs(roleTools.developer) : toOpenAiToolSpecs(roleTools.developer)
-  return raw.map((s) => {
-    if ('function' in s) {
-      return { name: s.function.name, description: s.function.description, parameters: s.function.parameters as unknown as Record<string, unknown> }
-    }
-    return { name: s.name, description: s.description, parameters: s.input_schema as unknown as Record<string, unknown> }
-  })
+  return toToolSpecs(provider, roleTools.developer)
 }
 
-export interface ParsedToolCall {
-  callId: string
-  tool: ToolName
-  args: unknown
-}
-
-export type ParseToolCallResult =
-  | { ok: true; call: ParsedToolCall }
-  | { ok: false; callId: string; error: string }
+export type { ParsedToolCall, ParseToolCallResult }
 
 export function parseToolCall(raw: ToolCall): ParseToolCallResult {
-  const def = toolDefinitions[raw.name as ToolName]
-  if (!def) {
-    return { ok: false, callId: raw.id, error: `Unknown tool '${raw.name}'` }
-  }
-
-  let rawArgs: unknown
-  try {
-    rawArgs = JSON.parse(raw.arguments)
-  } catch (e) {
-    return {
-      ok: false,
-      callId: raw.id,
-      error: `Tool arguments were not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
-    }
-  }
-
-  const parsed = def.schema.safeParse(rawArgs)
-  if (!parsed.success) {
-    return {
-      ok: false,
-      callId: raw.id,
-      error: `Invalid arguments for '${raw.name}': ${parsed.error.message}`,
-    }
-  }
-
-  return { ok: true, call: { callId: raw.id, tool: raw.name as ToolName, args: parsed.data } }
+  return parseRawToolCall({
+    id: raw.id,
+    function: { name: raw.name, arguments: raw.arguments },
+  })
 }

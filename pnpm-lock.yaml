@@ -49,6 +49,9 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.39.0
         version: 0.39.0
+      '@codekalakaars/vajra-agent-core':
+        specifier: workspace:*
+        version: link:../agent-core
       '@codekalakaars/vajra-core':
         specifier: workspace:*
         version: link:../..

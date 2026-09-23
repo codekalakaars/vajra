@@ -290,7 +290,7 @@ function executeMasterTool(
           dependsOn,
           type: task.type,
           retries: 0,
-          timeout: task.timeout,
+          timeoutSeconds: task.timeout,
           rollback: [],
           skipIf: [],
         })
@@ -461,7 +461,7 @@ async function fileExists(projectDir: string, filePath: string): Promise<boolean
  */
 async function commandSucceeds(handle: LaunchHandle, command: string): Promise<boolean> {
   try {
-    await handle.callTool('run_command', { command: command.trim(), timeout: 30000 })
+    await handle.callTool('run_command', { command: command.trim(), timeoutMs: 30000 })
     return true
   } catch {
     return false
@@ -788,7 +788,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
                     const taskTimeout = (task.timeout ?? 120)
                     const validationResult = await validationHandle.callTool('run_command', {
                       command: cmd,
-                      timeout: taskTimeout,
+                      timeoutMs: taskTimeout * 1000,
                     })
                     const output = typeof validationResult === 'string' ? validationResult : JSON.stringify(validationResult)
 
@@ -907,7 +907,7 @@ export async function masterLoop(input: MasterInput): Promise<MasterResult> {
                 if (task.rollback && task.rollback.length > 0) {
                   for (const cmd of task.rollback) {
                     try {
-                      await handle.callTool('run_command', { command: cmd, timeout: 30000 })
+                      await handle.callTool('run_command', { command: cmd, timeoutMs: 30000 })
                     } catch {
                       // Rollback failure is non-fatal
                     }

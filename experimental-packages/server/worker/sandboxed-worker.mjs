@@ -42,7 +42,7 @@ const dispatchTable = {
     const { execSync } = require('child_process')
     const cmd = args.command
     const cwd = args.cwd || process.env.VAJRA_PROJECT_DIR || process.cwd()
-    const timeout = args.timeout || 30000
+    const timeout = args.timeoutMs || args.timeout || 30000
     try {
       const stdout = execSync(cmd, { cwd, timeout, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] })
       return stdout || '(command completed successfully)'
