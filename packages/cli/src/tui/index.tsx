@@ -3,7 +3,7 @@ import { render, Box, Text, useInput, useApp } from 'ink'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { DEFAULT_MODEL, MODEL_PRESETS, normalizeModelId } from '../env.js'
+import { MODEL_PRESETS, normalizeModelId, resolveDefaultModel } from '../env.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -267,7 +267,7 @@ export async function startTUI(version: string): Promise<void> {
   // Loop so subcommands (config, help, ...) return to the menu when they finish.
   // Only 'Exit' (or q / Ctrl+C) leaves the TUI.
   // The model is session-scoped: picked in the Model screen, passed to `run` via -m.
-  let sessionModel = DEFAULT_MODEL
+  let sessionModel = resolveDefaultModel()
   while (true) {
     let selection: SpawnAction | 'exit' = 'exit'
     const instance = render(

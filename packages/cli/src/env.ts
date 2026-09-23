@@ -9,6 +9,12 @@ export const MODEL_PRESETS: Array<{ id: string; hint: string }> = [
   { id: 'anthropic/claude-3-haiku', hint: 'Fast' },
 ]
 
+/** Resolve the default model from env (VAJRA_MODEL wins over DEFAULT_MODEL). */
+export function resolveDefaultModel(env: NodeJS.ProcessEnv = process.env): string {
+  const fromEnv = env.VAJRA_MODEL || env.DEFAULT_MODEL
+  return fromEnv && fromEnv.trim() ? fromEnv.trim() : DEFAULT_MODEL
+}
+
 /** Trim and validate a model id (OpenRouter ids contain no whitespace or '='). */
 export function normalizeModelId(model: string): string {
   const cleaned = model.trim()
@@ -31,17 +37,14 @@ export function getRootDir(entryScript?: string): string {
 }
 
 /**
- * Locate the .env file. Prefers the entry-anchored repo root (matches how the
- * CLI loads dotenv), then walks up from cwd. Falls back to the repo root path
- * for writing when nothing exists yet.
+ * Locate the .env file. Walks up from cwd first so a project-local .env
+ * takes precedence over the install/repo-root .env (G2). Falls back to the
+ * entry-anchored repo root path for writing when nothing exists yet.
  */
 export function findEnvPath(): string {
   const candidates: string[] = []
   const push = (p: string) => {
     if (!candidates.includes(p)) candidates.push(p)
-  }
-  if (process.argv[1]) {
-    push(resolve(getRootDir(), '.env'))
   }
   let dir = process.cwd()
   for (let i = 0; i < 6; i++) {
@@ -49,6 +52,9 @@ export function findEnvPath(): string {
     const parent = dirname(dir)
     if (parent === dir) break
     dir = parent
+  }
+  if (process.argv[1]) {
+    push(resolve(getRootDir(), '.env'))
   }
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate
@@ -92,4 +98,14 @@ export function writeEnvKey(envPath: string, key: string, value: string): void {
     envContent += `${key}=${value}\n`
   }
   writeFileSync(envPath, envContent)
+}
+
+/** Parse `KEY=VALUE` for `vajra config -s`. Returns null if malformed. */
+export function parseSetPair(pair: string): { key: string; value: string } | null {
+  const eqIdx = pair.indexOf('=')
+  if (eqIdx <= 0) return null
+  const key = pair.slice(0, eqIdx).trim()
+  const value = pair.slice(eqIdx + 1)
+  if (!key) return null
+  return { key, value }
 }
