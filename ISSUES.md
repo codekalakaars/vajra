@@ -11,10 +11,6 @@ from source with the exact call path cited.
 `tsc --noEmit` passes clean in every package, so none of these are type errors —
 they are runtime, contract, and packaging problems.
 
-> **Fixing these?** See [TASKS.md](TASKS.md) — the same findings as actionable
-> tasks, grouped by file ownership so multiple agents can work in parallel
-> without conflicting. This document stays the evidence; TASKS.md is the plan.
-
 ---
 
 ## Contents
