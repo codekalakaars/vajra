@@ -10,17 +10,20 @@ so they can work on your code without reading your secrets.
 | `@codekalakaars/vajra-core` | Rust napi-rs addon — file/process/env/path primitives, sandbox enforcement |
 | `@codekalakaars/vajra-sandbox` | Standalone TypeScript sandbox — file locks, permissions, daemon, CLI |
 | `@codekalakaars/vajra-protocol` | Shared RPC types, tool definitions, push event shapes |
-| `@codekalakaars/vajra-server` | WebSocket + SQLite backend, agent loop, session management |
-| `@codekalakaars/vajra-web` | React SPA — chat UI, session management, real-time streaming |
+| `@codekalakaars/vajra-cli` | Shipping product — multi-agent task execution from the terminal |
+| `@codekalakaars/vajra-agent-core` | Shared pure agent helpers (summary/tree/tools) used by the CLI and server |
+| `@codekalakaars/vajra-server` | *(experimental)* WebSocket + SQLite backend, agent loop, session management |
+| `@codekalakaars/vajra-web` | *(experimental)* React SPA — chat UI, session management, real-time streaming |
 
 ## Status
 
 | Layer | State |
 | --- | --- |
 | File / process / env / path primitives | Implemented, tested on Linux/macOS/Windows in CI |
-| Env-file parsing, sample generation, redaction | Implemented |
+| Env-file parsing, sample generation, redaction | Implemented; project `.env` entries are masked out of the file index |
 | Per-file permission config | Implemented |
-| Sandbox enforcement | Linux (Landlock) and macOS (Seatbelt); **none on Windows** |
+| Sandbox enforcement (CLI `vajra run`) | Confined worker calls `applySandbox` — Linux (Landlock) and macOS (Seatbelt); **none on Windows** |
+| Sandbox enforcement (server path) | Experimental worker only; not the shipping path |
 | Multi-agent orchestration | Developer/master/worker roles with plan confirmation |
 | TypeScript harness | Implemented |
 
@@ -62,12 +65,18 @@ Key behaviors:
 
 Requires Rust (stable) and Node 22+ with pnpm.
 
+A fresh clone cannot run the CLI until the native binary is built: `*.node` is
+gitignored while the generated `index.js` / `index.d.ts` loader is committed, so
+`@codekalakaars/vajra-core` throws on import until `pnpm build` has produced the
+addon.
+
 ```bash
 pnpm install
-pnpm build        # napi build --platform --release
+pnpm build        # napi build --platform --release — required first
 pnpm test         # Node smoke tests against the built addon
 cargo test --manifest-path packages/core/Cargo.toml
 cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnings
+pnpm cli          # build the CLI and run it (vajra --help)
 ```
 
 CI runs on ubuntu, macos and windows.
@@ -78,15 +87,18 @@ Vajra protects against an agent accidentally or casually reading secrets. It
 does not defend against one that deliberately writes exfiltration code. Network
 access is unrestricted since agents need their LLM APIs.
 
-Enforced today:
+Enforced today on the CLI path (`vajra run`):
 
-- **Filesystem confinement** — Landlock on Linux, Seatbelt on macOS.
+- **Filesystem confinement** — Landlock on Linux, Seatbelt on macOS. Tools run
+  in a forked worker that calls `applySandbox` before touching anything.
 - **Output redaction** — `redact` replaces secret values with `[REDACTED:KEY]`.
+- **Secret masking** — project `.env` files are excluded from `listFiles` and
+  the summary index, so their contents are not handed to the model.
 
 Not enforced yet:
 
 - **Nothing on Windows.** `applySandbox` refuses rather than pretending.
-- **`.env` files are not masked.** An agent can still read the project's `.env`.
+- The experimental server/web path is not the shipping product; see Status above.
 
 Confinement is process-wide and irreversible.
 
