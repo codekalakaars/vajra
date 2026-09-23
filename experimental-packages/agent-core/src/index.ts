@@ -8,10 +8,9 @@ export { buildNestedTree } from './tree.js'
 
 export {
   type SummaryEntry,
-  SYMBOL_PATTERNS,
   SKIP_DIRS,
   SKIP_EXTENSIONS,
-  MAX_FILE_BYTES,
+  SKIP_SUFFIXES,
   extractSymbols,
   countImports,
   countExports,
@@ -39,5 +38,9 @@ export {
   type ParsedToolCall,
   type ParseToolCallResult,
   type RawToolCall,
+  type OpenAiToolSpec,
   parseToolCall,
+  getToolSpecs,
+  getDeveloperToolSpecs,
+  getWorkerToolSpecs,
 } from './tools.js'

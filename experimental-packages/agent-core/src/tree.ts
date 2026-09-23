@@ -1,48 +1,74 @@
-// Build a nested tree string from a list of file paths.
+// Build a nested tree string from ProjectFileEntry paths.
 //
-// Produces output like:
-//   src/
-//     api.ts
-//     utils.ts
-//   README.md
+// Depth-capped so a large monorepo doesn't flood the system prompt.
 
-export function buildNestedTree(files: string[]): string {
-  const root: Record<string, unknown> = {}
+import type { ProjectFileEntry } from '@codekalakaars/vajra-protocol'
 
-  for (const file of files) {
-    const parts = file.split('/')
+const MAX_DEPTH = 3
+
+interface TreeNode {
+  name: string
+  isDir: boolean
+  children: Map<string, TreeNode>
+}
+
+function buildTree(entries: ProjectFileEntry[]): TreeNode {
+  const root: TreeNode = { name: '', isDir: true, children: new Map() }
+
+  for (const entry of entries) {
+    const parts = entry.path.split('/')
     let current = root
+
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i]
-      if (i === parts.length - 1) {
-        current[part] = null // leaf = file
-      } else {
-        if (!current[part]) current[part] = {}
-        current[part] = current[part] as Record<string, unknown>
-        current = current[part] as Record<string, unknown>
+      const isLast = i === parts.length - 1
+      const isDir = isLast ? entry.isDir : true
+
+      if (!current.children.has(part)) {
+        current.children.set(part, { name: part, isDir, children: new Map() })
       }
+      current = current.children.get(part)!
+      if (!isDir) break
     }
   }
 
-  function render(node: Record<string, unknown>, prefix: string): string {
-    const lines: string[] = []
-    const entries = Object.keys(node).sort()
-    for (let i = 0; i < entries.length; i++) {
-      const key = entries[i]
-      const isLast = i === entries.length - 1
-      const connector = isLast ? '└── ' : '├── '
-      if (node[key] === null) {
-        // File
-        lines.push(prefix + connector + key)
-      } else {
-        // Directory
-        lines.push(prefix + connector + key + '/')
-        const childPrefix = prefix + (isLast ? '    ' : '│   ')
-        lines.push(render(node[key] as Record<string, unknown>, childPrefix))
-      }
-    }
-    return lines.join('\n')
-  }
+  return root
+}
 
-  return render(root, '')
+function renderNode(node: TreeNode, depth: number, prefix: string, lines: string[]): void {
+  if (depth > MAX_DEPTH) return
+
+  const sorted = [...node.children.entries()].sort(([a, aNode], [b, bNode]) => {
+    if (aNode.isDir !== bNode.isDir) return aNode.isDir ? -1 : 1
+    return a.localeCompare(b)
+  })
+
+  for (let i = 0; i < sorted.length; i++) {
+    const [name, child] = sorted[i]
+    const isLast = i === sorted.length - 1
+    const connector = isLast ? '└─ ' : '├─ '
+    const childPrefix = isLast ? '   ' : '│  '
+
+    if (child.isDir) {
+      lines.push(`${prefix}${connector}${name}/`)
+      if (depth < MAX_DEPTH) {
+        renderNode(child, depth + 1, prefix + childPrefix, lines)
+      } else {
+        lines.push(`${prefix}${childPrefix}...`)
+      }
+    } else {
+      lines.push(`${prefix}${connector}${name}`)
+    }
+  }
+}
+
+export function buildNestedTree(entries: ProjectFileEntry[]): string {
+  if (entries.length === 0) return '(empty project)'
+
+  const tree = buildTree(entries)
+  const lines: string[] = []
+
+  renderNode(tree, 0, '', lines)
+
+  return lines.join('\n')
 }
