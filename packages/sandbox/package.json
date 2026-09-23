@@ -14,7 +14,7 @@
     "dist"
   ],
   "bin": {
-    "vajra": "dist/cli.js"
+    "vajra-sandbox": "dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
