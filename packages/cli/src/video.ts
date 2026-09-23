@@ -15,8 +15,28 @@ interface RegistryItem {
 
 async function fetchRegistry(): Promise<RegistryItem[]> {
   const response = await fetch(`${REGISTRY_BASE}/registry.json`)
-  const data = (await response.json()) as { items: RegistryItem[] }
+  if (!response.ok) {
+    throw new Error(`Registry request failed with status ${response.status}`)
+  }
+  const data = (await response.json()) as { items?: RegistryItem[] }
+  if (!Array.isArray(data.items)) {
+    throw new Error('Registry response did not include an items array')
+  }
   return data.items
+}
+
+/** Platform-correct npx binary (Windows needs npx.cmd). */
+function npxCommand(): string {
+  return process.platform === 'win32' ? 'npx.cmd' : 'npx'
+}
+
+function runNpx(args: string[]): void {
+  execFileSync(npxCommand(), args, { stdio: 'inherit', shell: process.platform === 'win32' })
+}
+
+export function isValidFps(fps: string): boolean {
+  const n = Number(fps)
+  return Number.isFinite(n) && n > 0 && Number.isInteger(n)
 }
 
 function handleError(label: string, error: unknown): never {
@@ -58,7 +78,7 @@ videoCommand
 
     try {
       const args = [
-        'npx', 'hyperframes', 'init', name,
+        'hyperframes', 'init', name,
         '--example', options.template,
         '--non-interactive',
         '--resolution', options.resolution,
@@ -68,7 +88,7 @@ videoCommand
         args.push('--tailwind')
       }
 
-      execFileSync('npx', args.slice(1), { stdio: 'inherit' })
+      runNpx(args)
       console.log(`\n\x1b[32m✓ Project "${name}" initialized successfully!\x1b[0m`)
       console.log(`\nNext steps:`)
       console.log(`  cd ${name}`)
@@ -89,12 +109,10 @@ Run 'vajra video list' to see available blocks.`)
     console.log(`Adding block "${block}"...`)
 
     try {
-      execFileSync('npx', ['hyperframes', 'add', block, '--dir', options.dir, '--no-clipboard'], {
-        stdio: 'inherit',
-      })
+      runNpx(['hyperframes', 'add', block, '--dir', options.dir, '--no-clipboard'])
       console.log(`\n\x1b[32m✓ Block "${block}" added successfully!\x1b[0m`)
     } catch (error) {
-      handleError(`Failed to add block "${block}"`, error)
+      handleError(`Failed to add "${block}"`, error)
     }
   })
 
@@ -177,10 +195,14 @@ Format options:
       console.error(`\x1b[31m✗ Invalid format '${options.format}'. Valid options: ${VALID_FORMATS.join(', ')}\x1b[0m`)
       process.exit(1)
     }
+    if (!isValidFps(options.fps)) {
+      console.error(`\x1b[31m✗ Invalid fps '${options.fps}'. Must be a positive integer.\x1b[0m`)
+      process.exit(1)
+    }
 
     console.log('Rendering video...\n')
 
-    const args = ['npx', 'hyperframes', 'render', dir]
+    const args = ['hyperframes', 'render', dir]
 
     if (options.output) args.push('--output', options.output)
     if (options.quality) args.push('--quality', options.quality)
@@ -189,8 +211,8 @@ Format options:
     if (options.strict) args.push('--strict')
 
     try {
-      execFileSync('npx', args.slice(1), { stdio: 'inherit' })
-      console.log('\n\x1b[32m✓ Render complete!\x1b[0m')
+      runNpx(args)
+      console.log(`\n\x1b[32m✓ Render complete!\x1b[0m`)
     } catch (error) {
       handleError('Render failed', error)
     }
@@ -207,9 +229,7 @@ Opens a local dev server to preview your video in the browser.`)
     console.log('Starting preview server...\n')
 
     try {
-      execFileSync('npx', ['hyperframes', 'preview', dir, '--port', options.port], {
-        stdio: 'inherit',
-      })
+      runNpx(['hyperframes', 'preview', dir, '--port', options.port])
     } catch (error) {
       handleError('Preview failed', error)
     }
