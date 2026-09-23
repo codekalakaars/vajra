@@ -4,13 +4,16 @@ import { TerminalStreamer } from './streaming.js'
 import { developerConversationTurn, type LaunchHandle, type DeveloperTurnResult } from './agent/developer.js'
 import { AgentRegistry } from './agent/registry.js'
 import { TaskQueue } from './agent/taskqueue.js'
-import { streamChatCompletion, type OpenRouterMessage } from './agent/openrouter.js'
-import { getWorkerToolSpecs, parseToolCall } from './agent/tools.js'
-import { readFile, writeFile, editFile, listFiles } from './native.js'
-import { FileLockManager, ChangeHistory, type ResourceLimits } from '@codekalakaars/vajra-sandbox'
+import type { OpenRouterMessage } from './agent/openrouter.js'
+import { FileLockManager, ChangeHistory } from '@codekalakaars/vajra-sandbox'
 import { randomUUID } from 'node:crypto'
-import { access } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { evaluateSkipIf } from './tasks/skip.js'
+import { computeTaskPermissions, normalizeProjectPath } from './tasks/permissions.js'
+import { executeTask } from './tasks/execute.js'
+import { createToolHandle } from './tools/handle.js'
+import { finalReport } from './tasks/report.js'
+import { launchSandboxSession, type SandboxSession } from './sandbox/launch.js'
 
 export interface RunOptions {
   task?: string
@@ -24,248 +27,9 @@ export interface RunOptions {
 
 const DEFAULT_MAX_RETRIES = 2
 
-async function evaluateSkipIf(conditions: string[], projectDir: string): Promise<boolean> {
-  if (conditions.length === 0) return false
-
-  for (const condition of conditions) {
-    const trimmed = condition.trim()
-
-    if (trimmed.toLowerCase().startsWith('file exists:')) {
-      const filePath = trimmed.slice('file exists:'.length).trim()
-      const fullPath = resolve(projectDir, filePath)
-      try {
-        await access(fullPath)
-      } catch {
-        return false
-      }
-      continue
-    }
-
-    if (trimmed.toLowerCase().startsWith('file missing:')) {
-      const filePath = trimmed.slice('file missing:'.length).trim()
-      const fullPath = resolve(projectDir, filePath)
-      try {
-        await access(fullPath)
-        return false
-      } catch {
-        continue
-      }
-    }
-  }
-
-  return true
-}
-
-const SERVER_REQUIRED_PATTERNS = [
-  /\bnpm\s+test\b/,
-  /\bjest\b/,
-  /\bmocha\b/,
-  /\bvitest\b/,
-  /\bcurl\s+.*localhost/,
-  /\bcurl\s+.*127\.0\.0\.1/,
-  /\bwget\s+.*localhost/,
-  /\bwget\s+.*127\.0\.0\.1/,
-  /\bapi[_-]?test/,
-  /\bintegration[_-]?test/,
-]
-
-function needsServer(validationCommands: string[]): boolean {
-  return validationCommands.some(cmd =>
-    SERVER_REQUIRED_PATTERNS.some(pattern => pattern.test(cmd))
-  )
-}
-
-async function findServerEntry(projectDir: string): Promise<string | null> {
-  const candidates = ['src/index.js', 'src/server.js', 'src/app.js', 'index.js', 'server.js', 'app.js']
-  for (const candidate of candidates) {
-    const fullPath = resolve(projectDir, candidate)
-    try {
-      await access(fullPath)
-      return fullPath
-    } catch {
-      continue
-    }
-  }
-  return null
-}
-
-function computeTaskPermissions(task: { readFile: string[]; writeFile: string[]; deleteFile: string[] }): Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> {
-  const files: Record<string, { read: boolean; write: boolean; edit: boolean; delete: boolean }> = {}
-
-  for (const file of task.readFile) {
-    files[file] = { read: true, write: false, edit: false, delete: false }
-  }
-  for (const file of task.writeFile) {
-    files[file] = { read: true, write: true, edit: true, delete: false }
-  }
-  for (const file of task.deleteFile) {
-    files[file] = { read: true, write: false, edit: false, delete: true }
-  }
-
-  const allFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
-  const dirs = new Set(allFiles.map(f => {
-    const parts = f.split('/')
-    parts.pop()
-    return parts.join('/')
-  }).filter(Boolean))
-
-  for (const dir of dirs) {
-    if (!files[dir]) {
-      // Grant write on parent dirs of writeFile entries so workers can create
-      // new files in those directories.
-      const isWriteParent = task.writeFile.some(f => {
-        const parent = f.split('/').slice(0, -1).join('/')
-        return parent === dir || dir.startsWith(parent + '/')
-      })
-      const isDeleteParent = task.deleteFile.some(f => {
-        const parent = f.split('/').slice(0, -1).join('/')
-        return parent === dir || dir.startsWith(parent + '/')
-      })
-      files[dir] = {
-        read: true,
-        write: isWriteParent,
-        edit: isWriteParent,
-        delete: isDeleteParent,
-      }
-    }
-  }
-
-  return files
-}
-
-async function executeTask(
-  agentId: string,
-  task: { id: string; title: string; description: string | null; instructions: string[]; readFile: string[]; writeFile: string[]; deleteFile: string[]; createDir: string[]; validation: string[]; timeout: number; maxRetries: number; rollback: string[]; skipIf: string[] },
-  handle: LaunchHandle,
-  apiKey: string,
-  model: string,
-  streamer: TerminalStreamer,
-  changeHistory: ChangeHistory,
-  queue: TaskQueue,
-  registry: AgentRegistry,
-  sessionId: string,
-  fileLocks: FileLockManager,
-  projectDir: string,
-): Promise<boolean> {
-  const MAX_WORKER_TOOL_CALLS = 100
-  let toolCallCount = 0
-
-  const instructionLines = task.instructions.map((inst, i) => `${i + 1}. ${inst}`).join('\n')
-  const readFileList = task.readFile.length > 0 ? task.readFile.join(', ') : '(none)'
-  const writeFileList = task.writeFile.length > 0 ? task.writeFile.join(', ') : '(none)'
-
-  const systemPrompt = [
-    'You are a worker agent. Follow the instructions EXACTLY. Do not deviate.',
-    '',
-    `TASK: ${task.title}`,
-    task.description ? `WHY: ${task.description}` : '',
-    '',
-    'INSTRUCTIONS (follow in order):',
-    instructionLines,
-    '',
-    `FILES TO READ: ${readFileList}`,
-    `FILES TO WRITE: ${writeFileList}`,
-    '',
-    'RULES:',
-    '- Execute each instruction step by step',
-    '- Read each readFile first to understand the current code',
-    '- Make precise edits using edit_file (not write_file for existing files)',
-    '- Use write_file only for new files',
-    '- Use run_command to execute shell commands (npm install, npm test, git, etc.)',
-    '- After completing all instructions, respond with a brief summary',
-  ].filter(Boolean).join('\n')
-
-  const messages: OpenRouterMessage[] = [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: 'Execute the task now.' },
-  ]
-
-  const toolSpecs = getWorkerToolSpecs()
-
-  try {
-    while (toolCallCount < MAX_WORKER_TOOL_CALLS) {
-      const result = await streamChatCompletion(
-        { apiKey, model, messages, tools: toolSpecs },
-        text => streamer.onTextDelta(text),
-      )
-
-      if (!result.message.tool_calls || result.message.tool_calls.length === 0) {
-        streamer.finishLine()
-        break
-      }
-
-      messages.push(result.message)
-
-      for (const toolCall of result.message.tool_calls) {
-        toolCallCount++
-        if (toolCallCount > MAX_WORKER_TOOL_CALLS) break
-
-        let resultContent: string
-        try {
-          const result = await handle.callTool(toolCall.function.name, JSON.parse(toolCall.function.arguments))
-          resultContent = typeof result === 'string' ? result : JSON.stringify(result)
-        } catch (e) {
-          resultContent = `Error: ${e instanceof Error ? e.message : String(e)}`
-        }
-
-        messages.push({
-          role: 'tool',
-          content: resultContent,
-          tool_call_id: toolCall.id,
-        })
-      }
-    }
-
-    if (task.validation.length > 0) {
-      let serverProcess: ReturnType<typeof import('node:child_process').spawn> | null = null
-
-      if (needsServer(task.validation)) {
-        const serverEntry = await findServerEntry(projectDir)
-        if (serverEntry) {
-          const { spawn } = await import('node:child_process')
-          serverProcess = spawn('node', [serverEntry], {
-            cwd: projectDir,
-            stdio: 'pipe',
-            detached: true,
-          })
-          // Wait for server to start
-          await new Promise(resolve => setTimeout(resolve, 2000))
-        }
-      }
-
-      try {
-        for (const cmd of task.validation) {
-          try {
-            const result = await handle.callTool('run_command', { command: cmd, timeout: task.timeout })
-            const output = typeof result === 'string' ? result : JSON.stringify(result)
-
-            let exitCode = 0
-            try {
-              const parsed = JSON.parse(output)
-              exitCode = parsed.exitCode ?? 0
-            } catch {
-              exitCode = 0
-            }
-
-            if (exitCode !== 0) {
-              return false
-            }
-          } catch {
-            return false
-          }
-        }
-      } finally {
-        if (serverProcess) {
-          serverProcess.kill('SIGTERM')
-        }
-      }
-    }
-
-    return true
-  } catch (e) {
-    streamer.error(`Worker failed: ${e instanceof Error ? e.message : String(e)}`)
-    return false
-  }
+function isExitCommand(message: string): boolean {
+  const lower = message.trim().toLowerCase()
+  return lower === 'exit' || lower === 'quit' || lower === '/exit' || lower === '/quit'
 }
 
 export async function runCommand(options: RunOptions): Promise<void> {
@@ -282,10 +46,22 @@ export async function runCommand(options: RunOptions): Promise<void> {
     process.exit(1)
   }
 
+  // D6: first SIGINT aborts in-flight work; second exits immediately with 130.
+  const abortController = new AbortController()
   let interrupted = false
+  let sigintCount = 0
+  // Declared early so the SIGINT handler can close the worker if it fires
+  // before launchSandboxSession resolves.
+  let sandbox: SandboxSession | null = null
   const onSigInt = () => {
+    sigintCount++
+    if (sigintCount >= 2) {
+      sandbox?.close()
+      process.exit(130)
+    }
     interrupted = true
-    streamer.warning('\nInterrupted. Cleaning up...')
+    abortController.abort()
+    streamer.warning('\nInterrupted. Finishing current step — press Ctrl-C again to force quit.')
   }
   process.on('SIGINT', onSigInt)
 
@@ -294,7 +70,8 @@ export async function runCommand(options: RunOptions): Promise<void> {
   const sessionId = randomUUID()
   const registry = new AgentRegistry()
   const fileLocks = new FileLockManager()
-  const changeHistory = new ChangeHistory()
+  // D1: ChangeHistory always records against the resolved projectDir.
+  const changeHistory = new ChangeHistory(projectDir)
 
   const masterAgent = registry.createAgent(sessionId, 'master', 'Orchestrate task execution')
   registry.updateStatus(masterAgent.id, 'running')
@@ -302,70 +79,26 @@ export async function runCommand(options: RunOptions): Promise<void> {
   streamer.info(`Model: ${options.model}`)
   streamer.info(`Timeout: ${options.timeout ?? 300}s per task`)
 
-  const dummyHandle: LaunchHandle = {
-    callTool: async (tool: string, args: unknown) => {
-      const a = args as Record<string, unknown>
-      switch (tool) {
-        case 'read_file':
-          return readFile(a.path as string)
-        case 'write_file':
-          writeFile(a.path as string, a.content as string)
-          return 'ok'
-        case 'edit_file':
-          editFile(a.path as string, a.oldString as string, a.newString as string, a.replaceAll as boolean | undefined)
-          return 'ok'
-        case 'list_files':
-          return JSON.stringify(listFiles(a.path as string))
-        case 'run_command': {
-          const command = (a.command as string).trim()
-          const cmdParts = command.split(/\s+/)
-          const cmdName = cmdParts[0]?.split('/').pop() ?? ''
-
-          const ALLOWED_PREFIXES = [
-            'npm', 'npx', 'node', 'yarn', 'pnpm',
-            'git', 'python', 'python3', 'pip', 'pip3',
-            'cargo', 'rustc', 'go', 'make', 'cmake',
-            'tsc', 'eslint', 'prettier', 'jest', 'mocha',
-            'curl', 'wget', 'cat', 'ls', 'find', 'grep',
-            'mkdir', 'cp', 'mv', 'rm', 'touch', 'chmod',
-            'docker', 'docker-compose',
-          ]
-
-          if (!ALLOWED_PREFIXES.includes(cmdName)) {
-            return `Error: Command '${cmdName}' is not allowed. Allowed: ${ALLOWED_PREFIXES.join(', ')}`
-          }
-
-          const { spawn } = await import('node:child_process')
-          const timeoutMs = (a.timeout as number) || 30000
-          return await new Promise<string>((resolve) => {
-            const proc = spawn(cmdName, cmdParts.slice(1), {
-              cwd: a.cwd as string | undefined,
-              timeout: timeoutMs,
-              stdio: ['ignore', 'pipe', 'pipe'],
-              shell: false,
-            })
-            let stdout = ''
-            let stderr = ''
-            proc.stdout?.on('data', (data: Buffer) => { stdout += data.toString() })
-            proc.stderr?.on('data', (data: Buffer) => { stderr += data.toString() })
-            proc.on('close', (code) => {
-              const exitCode = code ?? 0
-              if (exitCode === 0) {
-                resolve(stdout || '(no output)')
-              } else {
-                resolve(JSON.stringify({ exitCode, stdout, stderr }))
-              }
-            })
-            proc.on('error', (err) => {
-              resolve(JSON.stringify({ exitCode: -1, stdout: '', stderr: err.message }))
-            })
-          })
-        }
-        default:
-          return `Unknown tool: ${tool}`
-      }
-    },
+  // Q: fork a confined worker for tool execution. Parent never calls
+  // applySandbox itself. Fall back to in-process handles if the worker
+  // cannot start (e.g. platform refuses and allowUnenforced is off).
+  try {
+    sandbox = await launchSandboxSession(projectDir, sessionId, { allowUnenforced: true })
+    if (sandbox.report.enforced) {
+      streamer.info(`Sandbox: ${sandbox.report.mechanism}`)
+    } else {
+      streamer.warning(
+        `Sandbox not enforced (${sandbox.report.mechanism}) — tools run with app-level permissions only`,
+      )
+    }
+    for (const w of sandbox.report.warnings) streamer.warning(w)
+  } catch (e) {
+    streamer.warning(
+      `Sandbox unavailable: ${e instanceof Error ? e.message : String(e)} — falling back to in-process tools`,
+    )
   }
+
+  const developerHandle: LaunchHandle = sandbox?.handle ?? createToolHandle(projectDir)
 
   const messages: OpenRouterMessage[] = []
   const summaryIndex: Array<{ path: string; symbols: string[]; preview: string; lineCount: number; importCount: number; exportCount: number }> = []
@@ -381,6 +114,14 @@ export async function runCommand(options: RunOptions): Promise<void> {
     })
   }
 
+  // D7: honour exit/quit at the first prompt, not only on later turns.
+  if (initialMessage && isExitCommand(initialMessage)) {
+    streamer.info('Goodbye!')
+    process.removeListener('SIGINT', onSigInt)
+    sandbox?.close()
+    process.exit(0)
+  }
+
   while (!initialMessage) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
     initialMessage = await new Promise<string>(resolve => {
@@ -389,8 +130,10 @@ export async function runCommand(options: RunOptions): Promise<void> {
         resolve(answer.trim())
       })
     })
-    if (initialMessage.toLowerCase() === 'exit' || initialMessage.toLowerCase() === 'quit') {
+    if (initialMessage && isExitCommand(initialMessage)) {
       streamer.info('Goodbye!')
+      process.removeListener('SIGINT', onSigInt)
+      sandbox?.close()
       process.exit(0)
     }
   }
@@ -398,7 +141,7 @@ export async function runCommand(options: RunOptions): Promise<void> {
   streamer.info(`\n🔍 Scanning project in ${projectDir}...`)
   streamer.info(`💬 Starting conversation with developer...\n`)
 
-  let result: DeveloperTurnResult
+  let result: DeveloperTurnResult | undefined
   let userMessage = initialMessage
 
   let turn = 0
@@ -412,14 +155,16 @@ export async function runCommand(options: RunOptions): Promise<void> {
         userMessage,
         model: options.model,
         apiKey: options.apiKey,
-        handle: dummyHandle,
+        handle: developerHandle,
         messages,
         summaryIndex,
         onTextDelta: text => streamer.onTextDelta(text),
         onThinkingDelta: text => streamer.onThinkingDelta(text),
         isInterrupted: () => interrupted,
+        signal: abortController.signal,
       })
     } catch (e) {
+      if (abortController.signal.aborted || interrupted) break
       streamer.error(`API error: ${e instanceof Error ? e.message : String(e)}`)
       streamer.warning('Check your API key and network connection.')
       break
@@ -433,15 +178,16 @@ export async function runCommand(options: RunOptions): Promise<void> {
       if (options.autoConfirm) {
         streamer.info('Auto-confirming plan (--yes flag)\n')
       } else {
+        // D8: confirmation is [y/N] — anything other than yes rejects.
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
         const confirm = await new Promise<string>(resolve => {
-          rl.question('\x1b[1m? Confirm plan? \x1b[0m', answer => {
+          rl.question('\x1b[1m? Confirm plan? [y/N] \x1b[0m', answer => {
             rl.close()
             resolve(answer.trim().toLowerCase())
           })
         })
 
-        if (confirm === 'n' || confirm === 'no') {
+        if (confirm !== 'y' && confirm !== 'yes') {
           streamer.warning('Plan rejected. What would you like to change?')
           userMessage = await new Promise<string>(resolve => {
             const rl2 = readline.createInterface({ input: process.stdin, output: process.stdout })
@@ -450,13 +196,15 @@ export async function runCommand(options: RunOptions): Promise<void> {
               resolve(answer.trim())
             })
           })
+          if (userMessage && isExitCommand(userMessage)) break
           continue
         }
       }
 
       streamer.info('\n🚀 Executing tasks...\n')
 
-      const queue = new TaskQueue(sessionId)
+      // D3: queue default timeout comes from the CLI -t flag (seconds).
+      const queue = new TaskQueue(sessionId, options.timeout ?? 300)
       for (const task of result.plan.tasks) {
         queue.addTask(task)
       }
@@ -471,13 +219,17 @@ export async function runCommand(options: RunOptions): Promise<void> {
 
         const readyTasks = queue.getReadyTasks()
 
+        // No ready tasks but unfinished work remains (unresolvable deps) —
+        // break so the final report surfaces them as pending (D5/§27).
         if (readyTasks.length === 0) {
           break
         }
 
         for (const task of readyTasks) {
+          if (interrupted) break
+
           if (task.skipIf && task.skipIf.length > 0) {
-            const shouldSkip = await evaluateSkipIf(task.skipIf, options.projectDir)
+            const shouldSkip = await evaluateSkipIf(task.skipIf, projectDir)
             if (shouldSkip) {
               queue.skipTask(task.id)
               completedCount++
@@ -487,13 +239,8 @@ export async function runCommand(options: RunOptions): Promise<void> {
           }
 
           const allTaskFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
-          if (!fileLocks.tryAcquire(allTaskFiles, task.id, 'write')) {
-            fileLocks.release(task.id)
-            streamer.warning(`  Skipping "${task.title}" - files locked by another task`)
-            queue.skipTask(task.id)
-            completedCount++
-            continue
-          }
+          // D4: wait for locks instead of permanently skipping on conflict.
+          await fileLocks.acquireOrWait(allTaskFiles, task.id, 'write')
 
           const agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
           queue.assignTask(task.id, agent.id)
@@ -502,21 +249,31 @@ export async function runCommand(options: RunOptions): Promise<void> {
 
           streamer.info(`\n⏳ [${completedCount + 1}/${totalCount}] ${task.title}`)
 
-          const taskHandle: LaunchHandle = {
-            callTool: async (tool: string, args: unknown) => {
-              const a = args as Record<string, unknown>
-              const permissions = computeTaskPermissions(task)
-              const filePermission = permissions[a.path as string]
+          // D2: track dirty-set via onMutate rather than changeHistory.hasChanges
+          // alone (baseline records can make hasChanges unreliable across rollbacks).
+          const permissions = computeTaskPermissions(task, projectDir)
+          let dirty = false
+          const permissionLookup = (path: string) =>
+            permissions[normalizeProjectPath(projectDir, path)] ??
+            null
 
-              if (tool === 'read_file' && !filePermission?.read) {
-                throw new Error(`Access denied: ${a.path}`)
-              }
-              if ((tool === 'write_file' || tool === 'edit_file') && !filePermission?.write) {
-                throw new Error(`Access denied: ${a.path}`)
-              }
-
-              return dummyHandle.callTool(tool, args)
-            },
+          let taskHandle: LaunchHandle
+          if (sandbox) {
+            sandbox.setTaskPermissions(permissionLookup)
+            sandbox.setOnMutate(() => {
+              dirty = true
+            })
+            taskHandle = sandbox.handle
+          } else {
+            taskHandle = createToolHandle(projectDir, {
+              permissions: path => {
+                const key = normalizeProjectPath(projectDir, path)
+                return permissions[key] ?? { read: false, write: false, edit: false, delete: false }
+              },
+              onMutate: () => {
+                dirty = true
+              },
+            })
           }
 
           for (const filePath of allTaskFiles) {
@@ -528,18 +285,38 @@ export async function runCommand(options: RunOptions): Promise<void> {
           const maxRetries = task.maxRetries ?? DEFAULT_MAX_RETRIES
 
           while (retries <= maxRetries) {
-            success = await executeTask(agent.id, task, taskHandle, options.apiKey, options.model, streamer, changeHistory, queue, registry, sessionId, fileLocks, options.projectDir)
+            dirty = false
+            success = await executeTask(
+              agent.id,
+              task,
+              taskHandle,
+              options.apiKey,
+              options.model,
+              streamer,
+              changeHistory,
+              queue,
+              registry,
+              sessionId,
+              fileLocks,
+              projectDir,
+              abortController.signal,
+            )
 
             if (success) break
 
-            const hasFileChanges = changeHistory.hasChanges(task.id)
-            if (!hasFileChanges) {
+            if (!dirty && !changeHistory.hasChanges(task.id)) {
               streamer.warning(`  No changes made - skipping retry for "${task.title}"`)
               break
             }
 
             if (retries < maxRetries) {
+              // rollback already drops the task's change set; re-baseline so
+              // the next attempt starts from the restored files.
               await changeHistory.rollback(task.id)
+              for (const filePath of allTaskFiles) {
+                await changeHistory.recordBefore(task.id, filePath)
+              }
+              dirty = false
               streamer.warning(`  Retrying (${retries + 1}/${maxRetries})...`)
               retries++
             } else {
@@ -552,7 +329,7 @@ export async function runCommand(options: RunOptions): Promise<void> {
             registry.updateStatus(agent.id, 'done')
             streamer.success(`Done: ${task.title}`)
           } else {
-            if (changeHistory.hasChanges(task.id)) {
+            if (dirty || changeHistory.hasChanges(task.id)) {
               await changeHistory.rollback(task.id)
             }
             queue.failTask(task.id)
@@ -568,11 +345,18 @@ export async function runCommand(options: RunOptions): Promise<void> {
       const finalStatus = queue.getStatus()
       console.log('')
       streamer.info('📊 Results:')
-      streamer.success(`  Completed: ${finalStatus.done}`)
-      if (finalStatus.failed > 0) streamer.error(`  Failed: ${finalStatus.failed}`)
-      if (finalStatus.skipped > 0) streamer.warning(`  Skipped: ${finalStatus.skipped}`)
+      const report = finalReport(finalStatus)
+      for (const line of report.lines) {
+        if (report.exitCode === 0) streamer.success(line)
+        else streamer.warning(line)
+      }
       console.log('')
-      streamer.success('✅ Done!')
+      if (report.exitCode === 0) {
+        streamer.success('✅ Done!')
+      } else {
+        streamer.error('Completed with failures or pending tasks.')
+      }
+      process.exitCode = report.exitCode
       break
     }
 
@@ -589,19 +373,24 @@ export async function runCommand(options: RunOptions): Promise<void> {
       userMessage = 'exit'
     }
 
-    if (userMessage.toLowerCase() === 'exit' || userMessage.toLowerCase() === 'quit') {
+    if (isExitCommand(userMessage)) {
       streamer.info('Goodbye!')
       break
     }
   }
 
-  if (turn >= 20 && !interrupted) {
-    streamer.warning('Reached the 20-turn conversation limit. Starting execution with current progress.')
+  if (turn >= 20 && !interrupted && result?.type !== 'plan') {
+    // D9: we did not start execution after the turn cap — don't claim we did.
+    streamer.warning('Reached the 20-turn conversation limit. Continuing may be limited.')
   }
 
-  registry.updateStatus(masterAgent.id, 'done')
+  registry.updateStatus(masterAgent.id, interrupted ? 'failed' : 'done')
   process.removeListener('SIGINT', onSigInt)
+  sandbox?.close()
   if (interrupted) {
     streamer.warning('Session interrupted. Progress has been saved.')
+    if (process.exitCode === undefined || process.exitCode === 0) {
+      process.exitCode = 130
+    }
   }
 }
