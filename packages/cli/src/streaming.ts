@@ -1,8 +1,23 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+function readPackageVersion(): string {
+  try {
+    const dir = dirname(fileURLToPath(import.meta.url))
+    const pkgPath = resolve(dir, '..', 'package.json')
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: string }
+    return pkg.version ?? '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+}
+
 export class TerminalStreamer {
   private currentLine = ''
   private isThinking = false
 
-  constructor(private verbose = false, private version = '0.0.1') {}
+  constructor(private verbose = false, private version = readPackageVersion()) {}
 
   onTextDelta(text: string): void {
     this.currentLine += text

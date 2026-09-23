@@ -33,7 +33,7 @@ function isExitCommand(message: string): boolean {
 }
 
 export async function runCommand(options: RunOptions): Promise<void> {
-  const streamer = new TerminalStreamer(options.verbose, '0.0.1')
+  const streamer = new TerminalStreamer(options.verbose)
 
   if (!options.apiKey) {
     streamer.error('No API key provided. Set OPENROUTER_API_KEY or OPENCODE_API_KEY, or use --api-key')
