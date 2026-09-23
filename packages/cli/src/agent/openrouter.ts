@@ -31,6 +31,8 @@ export interface ChatCompletionRequest {
   messages: OpenRouterMessage[]
   tools?: OpenAiToolSpec[]
   toolChoice?: 'auto' | 'required' | 'none'
+  /** Abort mid-request / mid-stream (contract C6). */
+  signal?: AbortSignal
 }
 
 export interface ChatCompletionResult {
@@ -43,6 +45,8 @@ const ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
 const ZEN_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
 const MAX_RETRIES = 5
 const INITIAL_RETRY_DELAY_MS = 1000
+const MAX_RETRY_DELAY_MS = 30_000
+const REQUEST_TIMEOUT_MS = 120_000
 
 function resolveBaseURL(model: string): string {
   if (model.startsWith('go/')) return ZEN_GO_BASE_URL
@@ -74,8 +78,36 @@ function createClient(apiKey: string, baseURL: string): OpenAI {
   })
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'))
+      return
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+function isAbortError(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === 'AbortError') return true
+  if (err instanceof Error && err.name === 'AbortError') return true
+  return false
+}
+
+function isRetryableNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const code = (err as { code?: string }).code
+  if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ECONNREFUSED') return true
+  const msg = err.message?.toLowerCase() ?? ''
+  return msg.includes('connection reset') || msg.includes('socket hang up') || msg.includes('timed out')
 }
 
 function isRateLimitError(err: unknown): boolean {
@@ -90,6 +122,10 @@ function isRateLimitError(err: unknown): boolean {
   const msg = err.message?.toLowerCase() ?? ''
   if (msg.includes('overloaded') || msg.includes('rate limit') || msg.includes('too many requests')) return true
   return false
+}
+
+function isRetryable(err: unknown): boolean {
+  return isRateLimitError(err) || isRetryableNetworkError(err)
 }
 
 function extractErrorMessage(err: unknown): string {
@@ -108,16 +144,36 @@ function extractErrorMessage(err: unknown): string {
   return String(err)
 }
 
-function retryAfterMs(err: unknown): number {
-  const e = err as { headers?: Record<string, string>; error?: { metadata?: { retry_after_seconds?: number } } }
-  const headerVal = e.headers?.['retry-after']
+/** Header value from either a plain object or a Headers-like object. */
+function readHeader(headers: unknown, name: string): string | undefined {
+  if (!headers || typeof headers !== 'object') return undefined
+  const h = headers as Record<string, unknown> | { get?: (k: string) => string | null }
+  if (typeof (h as { get?: unknown }).get === 'function') {
+    const val = (h as { get: (k: string) => string | null }).get(name)
+    if (val) return val
+    const lower = (h as { get: (k: string) => string | null }).get(name.toLowerCase())
+    if (lower) return lower
+    return undefined
+  }
+  const obj = h as Record<string, unknown>
+  const direct = obj[name] ?? obj[name.toLowerCase()] ?? obj[name.toUpperCase()]
+  if (typeof direct === 'string') return direct
+  return undefined
+}
+
+/** Explicit retry-after, else exponential backoff with full jitter. */
+export function computeRetryDelayMs(err: unknown, attempt: number): number {
+  const e = err as { headers?: unknown; error?: { metadata?: { retry_after_seconds?: number } } }
+  const headerVal = readHeader(e.headers, 'retry-after')
   if (headerVal) {
     const parsed = parseInt(headerVal, 10)
-    if (!isNaN(parsed)) return parsed * 1000
+    if (!isNaN(parsed) && parsed >= 0) return parsed * 1000
   }
   const metaVal = e.error?.metadata?.retry_after_seconds
-  if (metaVal) return metaVal * 1000
-  return INITIAL_RETRY_DELAY_MS
+  if (typeof metaVal === 'number' && metaVal >= 0) return metaVal * 1000
+
+  const base = Math.min(INITIAL_RETRY_DELAY_MS * 2 ** attempt, MAX_RETRY_DELAY_MS)
+  return Math.floor(Math.random() * base) + 1
 }
 
 function toSdkMessages(messages: OpenRouterMessage[]): ChatCompletionMessageParam[] {
@@ -182,6 +238,12 @@ function toResult(completion: ChatCompletion): ChatCompletionResult {
   return { message, finishReason: choice.finish_reason ?? null }
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError')
+  }
+}
+
 export async function chatCompletion(
   request: ChatCompletionRequest,
 ): Promise<ChatCompletionResult> {
@@ -193,16 +255,20 @@ export async function chatCompletion(
     messages: toSdkMessages(request.messages),
     ...(request.tools ? { tools: toSdkTools(request.tools) } : {}),
     ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
+    timeout: REQUEST_TIMEOUT_MS,
+    ...(request.signal ? { signal: request.signal } : {}),
   }
 
   for (let attempt = 0; ; attempt++) {
+    throwIfAborted(request.signal)
     try {
       const completion = await client.chat.completions.create(params)
       return toResult(completion)
     } catch (err) {
-      if (isRateLimitError(err) && attempt < MAX_RETRIES) {
-        const delay = retryAfterMs(err)
-        await sleep(delay)
+      if (isAbortError(err)) throw err
+      if (isRetryable(err) && attempt < MAX_RETRIES) {
+        const delay = computeRetryDelayMs(err, attempt)
+        await sleep(delay, request.signal)
         continue
       }
       throw new Error(extractErrorMessage(err))
@@ -224,17 +290,25 @@ export async function streamChatCompletion(
     ...(request.tools ? { tools: toSdkTools(request.tools) } : {}),
     ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
     stream: true,
+    timeout: REQUEST_TIMEOUT_MS,
+    ...(request.signal ? { signal: request.signal } : {}),
   }
 
+  // Characters already shown to the UI — never re-emit them on retry (F4).
+  let emitted = 0
+  let content = ''
+
   for (let attempt = 0; ; attempt++) {
+    throwIfAborted(request.signal)
     try {
       const stream = await client.chat.completions.create(params) as AsyncIterable<ChatCompletionChunk>
 
-      let content = ''
+      content = ''
       let finishReason: string | null = null
       const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
 
       for await (const chunk of stream) {
+        throwIfAborted(request.signal)
         const choice = chunk.choices[0]
         if (!choice) continue
 
@@ -242,7 +316,10 @@ export async function streamChatCompletion(
 
         if (delta?.content) {
           content += delta.content
-          onTextDelta(delta.content)
+          if (content.length > emitted) {
+            onTextDelta(content.slice(emitted))
+            emitted = content.length
+          }
         }
 
         if (onThinkingDelta) {
@@ -287,9 +364,13 @@ export async function streamChatCompletion(
 
       return { message, finishReason }
     } catch (err) {
-      if (isRateLimitError(err) && attempt < MAX_RETRIES) {
-        const delay = retryAfterMs(err)
-        await sleep(delay)
+      if (isAbortError(err)) throw err
+      if (isRetryable(err) && attempt < MAX_RETRIES) {
+        // Partial content from the failed attempt is discarded; only emit
+        // text that was already shown (emitted) is never re-sent.
+        content = ''
+        const delay = computeRetryDelayMs(err, attempt)
+        await sleep(delay, request.signal)
         continue
       }
       throw new Error(extractErrorMessage(err))
