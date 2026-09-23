@@ -64,13 +64,31 @@ export class TerminalStreamer {
     console.log('')
   }
 
-  planSummary(plan: { tasks: Array<{ title: string; type: string; timeout?: number }> }): void {
+  planSummary(plan: {
+    tasks: Array<{
+      title: string
+      type: string
+      timeoutSeconds?: number
+      writeFile?: string[]
+      validation?: string[]
+      dependsOn?: string[]
+    }>
+  }): void {
     console.log('')
     console.log('\x1b[1m📋 Plan:\x1b[0m')
     console.log('')
     plan.tasks.forEach((task, i) => {
-      const timeout = task.timeout ? ` (${task.timeout}s)` : ''
+      const timeout = task.timeoutSeconds ? ` (${task.timeoutSeconds}s)` : ''
       console.log(`  \x1b[36m${i + 1}.\x1b[0m ${task.title} \x1b[90m[${task.type}]${timeout}\x1b[0m`)
+      if (task.writeFile && task.writeFile.length > 0) {
+        console.log(`      \x1b[90mwrites: ${task.writeFile.join(', ')}\x1b[0m`)
+      }
+      if (task.validation && task.validation.length > 0) {
+        console.log(`      \x1b[90mvalidation: ${task.validation.join(' && ')}\x1b[0m`)
+      }
+      if (task.dependsOn && task.dependsOn.length > 0) {
+        console.log(`      \x1b[90mdepends on: ${task.dependsOn.join(', ')}\x1b[0m`)
+      }
     })
     console.log('')
   }
