@@ -26,6 +26,10 @@ export interface LaunchJob {
   defaultFilePermissions: FilePermissions
   allowUnenforced: boolean
   allowedTools?: string[]
+  /** Extra paths granted read+execute (toolchains, interpreters). */
+  readExecutePaths: readonly string[]
+  /** Extra paths granted read+write (agent state, logs). */
+  readWritePaths: readonly string[]
   /** Resource limits for this worker. */
   resourceLimits: Required<ResourceLimits>
 }
@@ -34,7 +38,8 @@ export interface LaunchJob {
  * Build a LaunchJob from a SandboxConfig.
  *
  * The worker receives this object as its initial IPC message and uses it to:
- *  1. Apply the native sandbox (via vajra-core's applySandbox)
+ *  1. Apply the native sandbox (via vajra-core's applySandbox), including
+ *     readExecutePaths / readWritePaths (K1)
  *  2. Filter tool calls (via the allowedTools list)
  *  3. Evaluate file rules per tool call (via fileRules + defaultFilePermissions)
  */
@@ -55,6 +60,8 @@ export function buildLaunchJob(
     defaultFilePermissions: config.defaultPermissions,
     allowUnenforced: config.allowUnenforced,
     allowedTools,
+    readExecutePaths: config.readExecutePaths,
+    readWritePaths: config.readWritePaths,
     resourceLimits: resolveResourceLimits(),
   }
 }
