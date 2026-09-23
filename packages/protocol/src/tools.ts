@@ -25,8 +25,7 @@ export interface JsonSchema {
 export interface ToolDefinition<Args = unknown> {
   name: string
   description: string
-  nativeFn: string
-  schema: z.ZodType<Args>
+  schema: z.ZodType<Args, z.ZodTypeDef, unknown>
   jsonSchema: JsonSchema
 }
 
@@ -37,7 +36,6 @@ function defineTool<Args>(def: ToolDefinition<Args>): ToolDefinition<Args> {
 export const readFileTool = defineTool({
   name: 'read_file',
   description: 'Read a UTF-8 text file and return its contents.',
-  nativeFn: 'readFile',
   schema: z.object({ path: z.string() }),
   jsonSchema: {
     type: 'object',
@@ -50,7 +48,6 @@ export const readFileTool = defineTool({
 export const listFilesTool = defineTool({
   name: 'list_files',
   description: 'List directory contents, optionally recursively.',
-  nativeFn: 'listFiles',
   schema: z.object({ path: z.string(), recursive: z.boolean().optional() }),
   jsonSchema: {
     type: 'object',
@@ -69,7 +66,6 @@ export const searchFilesTool = defineTool({
     'Search the project summary index for files matching a query. ' +
     'Returns file paths, their exported symbols, and a brief preview. ' +
     'Use this to find relevant files before reading them.',
-  nativeFn: 'searchSummary',
   schema: z.object({ query: z.string() }),
   jsonSchema: {
     type: 'object',
@@ -86,18 +82,17 @@ export const runCommandTool = defineTool({
   description:
     'Execute a command (argv-based, no shell parsing). Returns stdout and stderr. ' +
     'Use this for running tests, linters, build commands, or any validation.',
-  nativeFn: 'runCommand',
   schema: z.object({
     command: z.string(),
     cwd: z.string().optional(),
-    timeout: z.number().optional(),
+    timeoutMs: z.number().optional(),
   }),
   jsonSchema: {
     type: 'object',
     properties: {
       command: { type: 'string', description: 'The command to execute (space-separated argv).' },
       cwd: { type: 'string', description: 'Working directory (defaults to project root).' },
-      timeout: { type: 'number', description: 'Timeout in milliseconds (default: 30000).' },
+      timeoutMs: { type: 'number', description: 'Timeout in milliseconds (default: 30000).' },
     },
     required: ['command'],
     additionalProperties: false,
@@ -107,7 +102,6 @@ export const runCommandTool = defineTool({
 export const writeFileTool = defineTool({
   name: 'write_file',
   description: 'Write content to a file, creating it if it does not exist.',
-  nativeFn: 'writeFile',
   schema: z.object({ path: z.string(), content: z.string() }),
   jsonSchema: {
     type: 'object',
@@ -124,7 +118,6 @@ export const editFileTool = defineTool({
   name: 'edit_file',
   description:
     'Replace old_string with new_string in a file. Fails on absent or ambiguous match.',
-  nativeFn: 'editFile',
   schema: z.object({
     path: z.string(),
     oldString: z.string(),
@@ -145,28 +138,30 @@ export const editFileTool = defineTool({
 })
 
 export interface PlannedTaskInput {
+  /** Stable task id. Other tasks reference it from dependsOn. */
+  id: string
   title: string
   description: string
   /** Step-by-step instructions — exactly what the worker should do. */
-  instructions: string[]
+  instructions?: string[]
   /** Files to read (read-only access). */
-  readFile: string[]
+  readFile?: string[]
   /** Files to write/edit (read-write access). */
-  writeFile: string[]
+  writeFile?: string[]
   /** Files to delete. */
-  deleteFile: string[]
+  deleteFile?: string[]
   /** Directories to create. */
-  createDir: string[]
-  /** Validation commands to run after completion. */
-  validation: string[]
+  createDir?: string[]
+  /** Validation commands to run after completion (string or list). */
+  validation?: string | string[]
   /** Task IDs this depends on. */
-  dependsOn: string[]
-  /** Task type. */
-  type: 'create' | 'modify' | 'delete' | 'refactor'
+  dependsOn?: string[]
+  /** Task type. Defaults to 'modify'. */
+  type?: 'create' | 'modify' | 'delete' | 'refactor'
   /** Tools this worker can use. Omit for task-type defaults. */
   allowedTools?: string[]
   /** Timeout in seconds for this task. Default: 120. */
-  timeout?: number
+  timeoutSeconds?: number
   /** Max retries for this task. Default: 2. Set to 0 for no retries. */
   retries?: number
   /** Rollback instructions if validation fails (e.g. "git checkout src/file.ts"). */
@@ -180,6 +175,20 @@ export interface ProposePlanArgs {
   summary: string
 }
 
+const stringArray = z.preprocess(
+  (value) => (value === undefined ? [] : value),
+  z.array(z.string()),
+)
+
+const validationArray = z.preprocess(
+  (value) => {
+    if (value === undefined) return []
+    if (typeof value === 'string') return [value]
+    return value
+  },
+  z.array(z.string()),
+)
+
 export const proposePlanTool = defineTool<ProposePlanArgs>({
   name: 'propose_plan',
   description:
@@ -187,21 +196,21 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
     'gathered enough context through conversation. Do NOT call on the first message — ' +
     'gather context first by asking clarifying questions and exploring the codebase. ' +
     'Each task must have EXACT instructions for the worker — no ambiguity.',
-  nativeFn: '',
   schema: z.object({
     tasks: z.array(z.object({
+      id: z.string().min(1),
       title: z.string(),
       description: z.string(),
-      instructions: z.array(z.string()),
-      readFile: z.array(z.string()),
-      writeFile: z.array(z.string()),
-      deleteFile: z.array(z.string()),
-      createDir: z.array(z.string()),
-      validation: z.array(z.string()),
-      dependsOn: z.array(z.string()),
-      type: z.enum(['create', 'modify', 'delete', 'refactor']),
+      instructions: stringArray,
+      readFile: stringArray,
+      writeFile: stringArray,
+      deleteFile: stringArray,
+      createDir: stringArray,
+      validation: validationArray,
+      dependsOn: stringArray,
+      type: z.enum(['create', 'modify', 'delete', 'refactor']).default('modify'),
       allowedTools: z.array(z.string()).optional(),
-      timeout: z.number().optional(),
+      timeoutSeconds: z.number().optional(),
       retries: z.number().optional(),
       rollback: z.array(z.string()).optional(),
       skipIf: z.array(z.string()).optional(),
@@ -216,6 +225,10 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
         items: {
           type: 'object',
           properties: {
+            id: {
+              type: 'string',
+              description: 'Stable unique id for this task (e.g. "auth-middleware"). Other tasks that depend on it must list this id in dependsOn.',
+            },
             title: { type: 'string', description: 'Short title for the task.' },
             description: { type: 'string', description: 'What needs to be done and why.' },
             instructions: {
@@ -246,20 +259,20 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
             validation: {
               type: 'array',
               items: { type: 'string' },
-              description: 'Commands to run after completion. Pass if ALL exit 0. Example: ["cargo test", "cargo clippy -- -D warnings"]',
+              description: 'Commands to run after completion. Pass if ALL exit 0. A single string is also accepted. Example: ["cargo test", "cargo clippy -- -D warnings"]',
             },
             dependsOn: {
               type: 'array',
               items: { type: 'string' },
-              description: 'Task IDs this depends on (empty if independent).',
+              description: 'ids of tasks this depends on (empty if independent).',
             },
-            type: { type: 'string', description: 'Task type: create, modify, delete, or refactor.' },
+            type: { type: 'string', description: 'Task type: create, modify, delete, or refactor. Defaults to modify.' },
             allowedTools: {
               type: 'array',
               items: { type: 'string' },
               description: 'Tools this worker can use. Omit for defaults: create/modify get read+write+edit, delete gets read+delete.',
             },
-            timeout: {
+            timeoutSeconds: {
               type: 'number',
               description: 'Timeout in seconds for this task. Default: 120. Use longer timeouts for slow builds.',
             },
@@ -278,7 +291,7 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
               description: 'Conditions to skip this task. Example: ["file exists: src/config.json", "command passes: npm test"].',
             },
           },
-          required: ['title', 'description', 'instructions', 'readFile', 'writeFile', 'deleteFile', 'createDir', 'validation', 'dependsOn', 'type'],
+          required: ['id', 'title', 'description'],
           additionalProperties: false,
         },
       },
@@ -301,6 +314,10 @@ export const toolDefinitions = {
 
 export type ToolName = keyof typeof toolDefinitions
 
+/**
+ * Canonical role → tool table (contract C2). The sandbox's ROLE_DEFAULTS
+ * is deleted in favour of this map — do not reintroduce a rival table.
+ */
 export const roleTools: Record<string, ToolName[]> = {
   developer: ['read_file', 'list_files', 'search_files', 'propose_plan'],
   master: ['read_file', 'list_files', 'search_files', 'run_command'],

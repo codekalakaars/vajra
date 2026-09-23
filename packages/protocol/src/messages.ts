@@ -52,7 +52,7 @@ export interface PlannedTask {
   /** Tools this worker can use. If omitted, defaults to task-type defaults. */
   allowedTools?: string[]
   /** Timeout in seconds for this task. Default: 120. */
-  timeout?: number
+  timeoutSeconds?: number
   /** Max retries for this task. Default: 2. Set to 0 for no retries. */
   retries?: number
   /** Rollback instructions if validation fails (e.g. "git checkout src/file.ts"). */
@@ -122,8 +122,9 @@ export interface SessionCreateParams {
   /** Must originate from an explicit user confirmation in the UI. */
   allowUnenforced?: boolean
 }
+/** What the server actually returns on projects.create. */
 export interface SessionCreateResult {
-  sessionId: string
+  projectId: string
 }
 
 export type SessionListResult = Array<{
@@ -150,8 +151,16 @@ export interface AttachMessage {
   createdAt: number
 }
 
+/** What the server actually returns on projects.attach. */
 export interface SessionAttachResult {
-  session: SessionListResult[number]
+  project: {
+    id: string
+    projectDir: string
+    task: string
+    model: string
+    status: SessionStatus
+    createdAt: number
+  }
   sandbox: SandboxStatusPayload | null
   messages: AttachMessage[]
 }
