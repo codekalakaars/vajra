@@ -22,8 +22,9 @@ export interface TaskState {
   filePermissions: string | null
   toolPermissions: string | null
   retries: number
+  /** Limit from protocol `retries` (C4: wire field is `retries`, not maxRetries). */
   maxRetries: number
-  timeout: number
+  timeoutSeconds: number
   rollback: string[]
   skipIf: string[]
   createdAt: number
@@ -47,10 +48,22 @@ export class TaskQueue {
   private dependencies = new Map<string, Set<string>>()
   private fileToTask = new Map<string, string>()
 
-  constructor(private sessionId: string) {}
+  constructor(
+    private sessionId: string,
+    /** Default task timeout in seconds when the planner omits `timeoutSeconds` (D3). */
+    private defaultTimeoutSeconds: number = 300,
+  ) {
+    if (!Number.isFinite(defaultTimeoutSeconds) || defaultTimeoutSeconds <= 0) {
+      this.defaultTimeoutSeconds = 300
+    }
+  }
 
   addTask(task: ProtocolPlannedTask, filePermissions?: string, toolPermissions?: string): TaskState {
     const now = Date.now()
+    const timeoutSeconds =
+      typeof task.timeoutSeconds === 'number' && task.timeoutSeconds > 0
+        ? task.timeoutSeconds
+        : this.defaultTimeoutSeconds
 
     const state: TaskState = {
       id: task.id,
@@ -71,8 +84,9 @@ export class TaskQueue {
       filePermissions: filePermissions ?? null,
       toolPermissions: toolPermissions ?? null,
       retries: 0,
-      maxRetries: task.retries ?? 2,
-      timeout: task.timeout ?? 120,
+      // C4: wire field is `retries`; `maxRetries` is the internal limit only.
+      maxRetries: typeof task.retries === 'number' ? task.retries : 2,
+      timeoutSeconds,
       rollback: task.rollback ?? [],
       skipIf: task.skipIf ?? [],
       validationPassed: null,
@@ -99,6 +113,11 @@ export class TaskQueue {
       if (task.status !== 'pending') continue
 
       const deps = this.dependencies.get(id) ?? new Set()
+      // Unknown dependsOn ids never become done/skipped — leave the task
+      // pending so it is reported at the end (D5/§27), not silently dropped.
+      const hasUnknownDep = [...deps].some(depId => !this.tasks.has(depId))
+      if (hasUnknownDep) continue
+
       const allDepsComplete = [...deps].every(depId => {
         const dep = this.tasks.get(depId)
         return dep?.status === 'done' || dep?.status === 'skipped'
