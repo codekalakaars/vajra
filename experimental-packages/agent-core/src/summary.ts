@@ -138,6 +138,20 @@ export function formatSummaryIndexHierarchical(
   return result.join('\n')
 }
 
+export function formatSummaryIndex(summary: SummaryEntry[]): string {
+  if (summary.length === 0) return '(no files indexed)'
+
+  return summary
+    .map(entry => {
+      const symbols = entry.symbols.length > 0 ? entry.symbols.join(', ') : '(no symbols)'
+      const meta = `${entry.lineCount}L`
+      const imports = entry.importCount > 0 ? `, ${entry.importCount} imports` : ''
+      const exports = entry.exportCount > 0 ? `, ${entry.exportCount} exports` : ''
+      return `${entry.path} [${meta}${imports}${exports}]: ${symbols}`
+    })
+    .join('\n')
+}
+
 export function searchSummary(summary: SummaryEntry[], query: string): string {
   const terms = query.toLowerCase().split(/[\s,;]+/).filter(t => t.length > 0)
   if (terms.length === 0) return 'No search terms provided.'

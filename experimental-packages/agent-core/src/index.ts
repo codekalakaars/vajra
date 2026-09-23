@@ -16,6 +16,7 @@ export {
   countExports,
   getPreview,
   shouldSkipFile,
+  formatSummaryIndex,
   formatSummaryIndexHierarchical,
   searchSummary,
 } from './summary.js'
