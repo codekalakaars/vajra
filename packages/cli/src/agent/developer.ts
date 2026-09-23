@@ -49,74 +49,97 @@ function estimateTokens(message: OpenRouterMessage): number {
   return tokens
 }
 
-function compressMessages(messages: OpenRouterMessage[], model: string, reserveTokens: number = 2000): OpenRouterMessage[] {
+/**
+ * Compress history to fit the model context window (E5).
+ *
+ * Walks complete assistant(+tool_calls) + tool-result units so a pruned
+ * tool result never leaves its parent assistant dangling, and vice versa.
+ * Incomplete units (assistant tool_calls with missing results) are always
+ * dropped, even when the history fits without compression.
+ */
+export function compressMessages(
+  messages: OpenRouterMessage[],
+  model: string,
+  reserveTokens: number = 2000,
+): OpenRouterMessage[] {
   const maxTokens = getModelLimit(model) - reserveTokens
-  const totalTokens = messages.reduce((sum, msg) => sum + estimateTokens(msg), 0)
 
-  // If under limit, return as-is
-  if (totalTokens <= maxTokens) return messages
+  // Split into units: system alone; assistant with tool_calls + its tool results;
+  // other messages as single-message units. Incomplete units are dropped here.
+  const units: OpenRouterMessage[][] = []
+  let i = 0
+  while (i < messages.length) {
+    const msg = messages[i]
+    if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+      const unit: OpenRouterMessage[] = [msg]
+      const toolIds = new Set(msg.tool_calls.map(tc => tc.id))
+      let j = i + 1
+      while (j < messages.length && messages[j].role === 'tool') {
+        unit.push(messages[j])
+        toolIds.delete(messages[j].tool_call_id ?? '')
+        j++
+      }
+      // Drop incomplete units (missing tool results) rather than emit dangling
+      // tool_calls that providers reject.
+      if (toolIds.size === 0) {
+        units.push(unit)
+        i = j
+        continue
+      }
+      i++
+      continue
+    }
+    units.push([msg])
+    i++
+  }
+
+  const systemUnits = units.filter(u => u[0]?.role === 'system')
+  const rest = units.filter(u => u[0]?.role !== 'system')
+
+  const all: OpenRouterMessage[] = [...systemUnits, ...rest].flat()
+  const totalTokens = all.reduce((sum, msg) => sum + estimateTokens(msg), 0)
+  if (totalTokens <= maxTokens) return all
 
   const compressed: OpenRouterMessage[] = []
   let currentTokens = 0
 
-  // Find system prompt (usually first message)
-  const systemIdx = messages.findIndex(m => m.role === 'system')
-  if (systemIdx >= 0) {
-    compressed.push(messages[systemIdx])
-    currentTokens += estimateTokens(messages[systemIdx])
-  }
-
-  // Keep last 6 messages for recent context — but ensure tool-call pairs stay
-  // together. Walk backwards from the end and collect complete units (assistant
-  // with tool_calls + all following tool results).
-  const recentCount = 6
-  const recentStart = Math.max(0, messages.length - recentCount)
-  const recentMessages = messages.slice(recentStart)
-
-  for (const msg of recentMessages) {
-    if (compressed.includes(msg)) continue
-    const msgTokens = estimateTokens(msg)
-    if (currentTokens + msgTokens <= maxTokens) {
+  for (const unit of systemUnits) {
+    for (const msg of unit) {
       compressed.push(msg)
-      currentTokens += msgTokens
+      currentTokens += estimateTokens(msg)
     }
   }
 
-  // Ensure every tool result in compressed has its parent assistant tool_call
-  // message. If a tool result was included but its assistant was not, drop the
-  // orphaned tool result.
-  const toolCallIds = new Set<string>()
-  for (const msg of compressed) {
-    if (msg.role === 'assistant' && msg.tool_calls) {
-      for (const tc of msg.tool_calls) {
-        toolCallIds.add(tc.id)
-      }
-    }
+  // Keep whole units from the end (most recent context).
+  const keptUnits: OpenRouterMessage[][] = []
+  for (let k = rest.length - 1; k >= 0; k--) {
+    const unit = rest[k]
+    const unitTokens = unit.reduce((s, m) => s + estimateTokens(m), 0)
+    if (currentTokens + unitTokens > maxTokens) break
+    keptUnits.unshift(unit)
+    currentTokens += unitTokens
   }
-  const pruned = compressed.filter(msg => {
-    if (msg.role === 'tool' && msg.tool_call_id && !toolCallIds.has(msg.tool_call_id)) {
-      currentTokens -= estimateTokens(msg)
-      return false
-    }
-    return true
-  })
 
-  // If still over limit, truncate tool result payloads (each) rather than
-  // dropping entire turns.
+  for (const unit of keptUnits) {
+    for (const msg of unit) compressed.push(msg)
+  }
+
+  // Still over budget (e.g. huge system or one huge tool result): truncate
+  // tool payloads rather than break units.
   if (currentTokens > maxTokens) {
-    for (let i = 0; i < pruned.length; i++) {
-      const msg = pruned[i]
+    for (let idx = 0; idx < compressed.length; idx++) {
+      const msg = compressed[idx]
       if (msg.role === 'tool' && msg.content && msg.content.length > 500) {
         const truncated = msg.content.slice(0, 500) + '\n... (truncated)'
         const savedTokens = estimateTokens(msg) - estimateTokens({ ...msg, content: truncated })
-        pruned[i] = { ...msg, content: truncated }
+        compressed[idx] = { ...msg, content: truncated }
         currentTokens -= savedTokens
         if (currentTokens <= maxTokens) break
       }
     }
   }
 
-  return pruned
+  return compressed
 }
 
 function buildDeveloperConversationPrompt(
@@ -187,23 +210,35 @@ function buildDeveloperConversationPrompt(
   ].join('\n')
 }
 
-function parseProposePlanArgs(raw: unknown): DeveloperPlan {
+export type ParsePlanResult =
+  | { ok: true; plan: DeveloperPlan }
+  | { ok: false; error: string }
+
+/**
+ * Parse and validate `propose_plan` arguments (E1).
+ * - Requires model-supplied unique task `id`s (falls back to `task-N` only when absent).
+ * - Unknown `dependsOn` ids are a tool error (not silently filtered).
+ */
+export function parseProposePlanArgs(raw: unknown): ParsePlanResult {
   const args = raw as {
     tasks?: Array<{
+      id?: string
       title: string
       description: string
-      instructions: string[]
-      readFile: string[]
-      writeFile: string[]
-      validation: string[]
-      dependsOn: string[]
-      type: string
+      instructions?: string[]
+      readFile?: string[]
+      writeFile?: string[]
+      deleteFile?: string[]
+      createDir?: string[]
+      validation?: string[] | string
+      dependsOn?: string[]
+      type?: string
       complexity?: string
       validationStrategy?: string
       alternativeApproaches?: string[]
       estimatedDuration?: string
       allowedTools?: string[]
-      timeout?: number
+      timeoutSeconds?: number
       retries?: number
       rollback?: string[]
       skipIf?: string[]
@@ -211,39 +246,57 @@ function parseProposePlanArgs(raw: unknown): DeveloperPlan {
     summary: string
   }
 
-  const tasks: PlannedTask[] = (args.tasks ?? []).map((t, i) => ({
-    id: `task-${i + 1}`,
+  if (!Array.isArray(args?.tasks) || args.tasks.length === 0) {
+    return { ok: false, error: 'Plan has no tasks. Please propose a plan with at least one task.' }
+  }
+
+  const tasks: PlannedTask[] = args.tasks.map((t, i) => ({
+    id: t.id?.trim() || `task-${i + 1}`,
     title: t.title,
     description: t.description,
     instructions: t.instructions ?? [],
     readFile: t.readFile ?? [],
     writeFile: t.writeFile ?? [],
-    deleteFile: [],
-    createDir: [],
-    validation: t.validation ?? [],
+    deleteFile: t.deleteFile ?? [],
+    createDir: t.createDir ?? [],
+    validation: Array.isArray(t.validation) ? t.validation : t.validation ? [t.validation] : [],
     dependsOn: t.dependsOn ?? [],
-    type: (['create', 'modify', 'refactor'].includes(t.type) ? t.type : 'modify') as PlannedTask['type'],
+    type: (['create', 'modify', 'delete', 'refactor'].includes(t.type ?? '') ? t.type : 'modify') as PlannedTask['type'],
     complexity: (['low', 'medium', 'high'].includes(t.complexity ?? '') ? t.complexity : 'medium') as PlannedTask['complexity'],
-    validationStrategy: (['hierarchical', 'targeted', 'full', 'skip'].includes(t.validationStrategy ?? '') ? t.validationStrategy : 'hierarchical') as PlannedTask['validationStrategy'],
+    validationStrategy: (['hierarchical', 'incremental', 'contextAware'].includes(t.validationStrategy ?? '')
+      ? t.validationStrategy
+      : 'hierarchical') as PlannedTask['validationStrategy'],
     alternativeApproaches: t.alternativeApproaches ?? [],
     estimatedDuration: t.estimatedDuration ? parseInt(t.estimatedDuration, 10) : undefined,
     allowedTools: t.allowedTools,
-    timeout: t.timeout,
-    maxRetries: t.retries,
+    timeoutSeconds: t.timeoutSeconds,
+    retries: t.retries,
     rollback: t.rollback,
     skipIf: t.skipIf,
   }))
 
-  const taskIds = new Set(tasks.map(t => t.id))
+  const seen = new Set<string>()
   for (const task of tasks) {
-    task.dependsOn = task.dependsOn.filter(dep => taskIds.has(dep))
+    if (seen.has(task.id)) {
+      return { ok: false, error: `Duplicate task id '${task.id}'. Every task must have a unique id.` }
+    }
+    seen.add(task.id)
+  }
+
+  for (const task of tasks) {
+    for (const dep of task.dependsOn) {
+      if (!seen.has(dep)) {
+        return {
+          ok: false,
+          error: `Task '${task.id}' depends on unknown task '${dep}'. Only reference ids defined in this plan.`,
+        }
+      }
+    }
   }
 
   // Compute parallel execution waves. Level 0 is everything with no
   // dependencies; level N is everything whose dependencies all landed in an
-  // earlier level. Tasks sharing a level can genuinely run in parallel — the
-  // previous greedy pass put a task in the same group as its own dependency,
-  // so "independent group" did not mean independent.
+  // earlier level.
   const independentGroups: string[][] = []
   const placed = new Set<string>()
   while (placed.size < tasks.length) {
@@ -251,8 +304,6 @@ function parseProposePlanArgs(raw: unknown): DeveloperPlan {
       .filter((t) => !placed.has(t.id) && t.dependsOn.every((dep) => placed.has(dep)))
       .map((t) => t.id)
 
-    // Nothing can advance — whatever is left is unresolvable (e.g. a cycle
-    // that survived cleanup). Emit it as a final wave instead of spinning.
     if (wave.length === 0) {
       independentGroups.push(tasks.filter((t) => !placed.has(t.id)).map((t) => t.id))
       break
@@ -263,9 +314,12 @@ function parseProposePlanArgs(raw: unknown): DeveloperPlan {
   }
 
   return {
-    tasks,
-    independentGroups,
-    estimatedWorkers: Math.max(1, ...independentGroups.map(g => g.length)),
+    ok: true,
+    plan: {
+      tasks,
+      independentGroups,
+      estimatedWorkers: Math.max(1, ...independentGroups.map(g => g.length)),
+    },
   }
 }
 
@@ -349,6 +403,7 @@ export interface DeveloperTurnInput {
   onTextDelta?: (text: string) => void
   onThinkingDelta?: (text: string) => void
   isInterrupted?: () => boolean
+  signal?: AbortSignal
 }
 
 export type DeveloperTurnResult =
@@ -358,7 +413,7 @@ export type DeveloperTurnResult =
 export async function developerConversationTurn(
   input: DeveloperTurnInput,
 ): Promise<DeveloperTurnResult> {
-  const { sessionId, projectDir, userMessage, model, apiKey, handle, messages, summaryIndex, onTextDelta, onThinkingDelta, isInterrupted } = input
+  const { sessionId, projectDir, userMessage, model, apiKey, handle, messages, summaryIndex, onTextDelta, onThinkingDelta, isInterrupted, signal } = input
 
   if (messages.length === 0) {
     let tree = ''
@@ -385,9 +440,19 @@ export async function developerConversationTurn(
   const toolSpecs = getDeveloperToolSpecs()
   let toolCallCount = 0
   const MAX_TOOL_CALLS = 30
+  // E4: wall-clock + total iteration bounds. Free tools count toward total
+  // iterations (they can still run forever) but not toward the tool budget.
+  const MAX_WALL_MS = 5 * 60 * 1000
+  const MAX_TOTAL_ITERATIONS = 60
+  const startedAt = Date.now()
+  let totalIterations = 0
 
   while (toolCallCount < MAX_TOOL_CALLS) {
-    if (isInterrupted?.()) {
+    if (isInterrupted?.() || signal?.aborted) {
+      break
+    }
+    totalIterations++
+    if (totalIterations > MAX_TOTAL_ITERATIONS || Date.now() - startedAt > MAX_WALL_MS) {
       break
     }
 
@@ -395,7 +460,7 @@ export async function developerConversationTurn(
     const compressedMessages = compressMessages(messages, model)
 
     const result = await streamChatCompletion(
-      { apiKey, model, messages: compressedMessages, tools: toolSpecs },
+      { apiKey, model, messages: compressedMessages, tools: toolSpecs, signal },
       text => onTextDelta?.(text),
       thinking => onThinkingDelta?.(thinking),
     )
@@ -422,15 +487,16 @@ export async function developerConversationTurn(
           continue
         }
 
-        const plan = parseProposePlanArgs(parsed)
-        if (plan.tasks.length === 0) {
+        const parsedPlan = parseProposePlanArgs(parsed)
+        if (!parsedPlan.ok) {
           messages.push({
             role: 'tool',
-            content: 'Error: Plan has no tasks. Please propose a plan with at least one task.',
+            content: `Error: ${parsedPlan.error}`,
             tool_call_id: toolCall.id,
           })
           continue
         }
+        const plan = parsedPlan.plan
         plan.tasks = addFileLevelDependencies(plan.tasks)
         // Must run AFTER the file-level pass, which can introduce edges the
         // planner never declared.
