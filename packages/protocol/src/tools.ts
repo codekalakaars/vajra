@@ -137,6 +137,34 @@ export const editFileTool = defineTool({
   },
 })
 
+export const deleteFileTool = defineTool({
+  name: 'delete_file',
+  description: 'Delete a file. Fails if the path is a directory.',
+  schema: z.object({ path: z.string() }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'Project-relative or absolute path.' },
+    },
+    required: ['path'],
+    additionalProperties: false,
+  },
+})
+
+export const createDirTool = defineTool({
+  name: 'create_dir',
+  description: 'Create a directory, including missing parent directories.',
+  schema: z.object({ path: z.string() }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'Project-relative or absolute path.' },
+    },
+    required: ['path'],
+    additionalProperties: false,
+  },
+})
+
 export interface PlannedTaskInput {
   /** Stable task id. Other tasks reference it from dependsOn. */
   id: string
@@ -309,6 +337,8 @@ export const toolDefinitions = {
   run_command: runCommandTool,
   write_file: writeFileTool,
   edit_file: editFileTool,
+  delete_file: deleteFileTool,
+  create_dir: createDirTool,
   propose_plan: proposePlanTool,
 } as const satisfies Record<string, ToolDefinition>
 
@@ -321,7 +351,16 @@ export type ToolName = keyof typeof toolDefinitions
 export const roleTools: Record<string, ToolName[]> = {
   developer: ['read_file', 'list_files', 'search_files', 'propose_plan'],
   master: ['read_file', 'list_files', 'search_files', 'run_command'],
-  worker: ['read_file', 'list_files', 'search_files', 'write_file', 'edit_file', 'run_command'],
+  worker: [
+    'read_file',
+    'list_files',
+    'search_files',
+    'write_file',
+    'edit_file',
+    'delete_file',
+    'create_dir',
+    'run_command',
+  ],
 }
 
 export function toOpenAiToolSpecs(tools?: ToolName[]) {

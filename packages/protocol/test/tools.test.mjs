@@ -10,6 +10,8 @@ test('every tool schema validates its own well-formed example', () => {
     run_command: { command: 'cargo test', cwd: '.', timeoutMs: 30000 },
     write_file: { path: 'a.txt', content: 'hello' },
     edit_file: { path: 'a.txt', oldString: 'foo', newString: 'bar' },
+    delete_file: { path: 'old.txt' },
+    create_dir: { path: 'src/new' },
     propose_plan: {
       tasks: [
         {

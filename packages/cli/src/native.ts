@@ -21,9 +21,27 @@ export interface EnvVar {
   value: string
 }
 
-/** Basename masking rule — mirrors permissions.rs is_masked (.env, .env.local). */
+/** Public template suffixes that must remain readable. */
+const PUBLIC_ENV_SUFFIXES = new Set([
+  'example',
+  'sample',
+  'template',
+  'defaults',
+  'default',
+  'dist',
+])
+
+/**
+ * Basename masking rule — mirrors permissions.rs is_masked.
+ * Masks `.env` and environment-specific variants such as `.env.local`,
+ * `.env.production`, and `.env.development`, while leaving public templates
+ * like `.env.example` readable.
+ */
 export function isMaskedName(name: string): boolean {
-  return name === '.env' || name === '.env.local'
+  if (name === '.env') return true
+  if (!name.startsWith('.env.')) return false
+  const segments = name.slice('.env.'.length).split('.')
+  return !segments.some((segment) => PUBLIC_ENV_SUFFIXES.has(segment.toLowerCase()))
 }
 
 export function scanProject(projectDir: string): ProjectFileEntry[] {

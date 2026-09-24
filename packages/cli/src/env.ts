@@ -15,6 +15,24 @@ export function resolveDefaultModel(env: NodeJS.ProcessEnv = process.env): strin
   return fromEnv && fromEnv.trim() ? fromEnv.trim() : DEFAULT_MODEL
 }
 
+/**
+ * Pick the credential that matches the model's transport.
+ * zen/* and go/* go to OpenCode; everything else goes through OpenRouter.
+ * An explicit --api-key always wins.
+ */
+export function resolveApiKeyForModel(
+  model: string,
+  explicitKey?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const trimmed = explicitKey?.trim()
+  if (trimmed) return trimmed
+  if (model.startsWith('zen/') || model.startsWith('go/')) {
+    return env.OPENCODE_API_KEY || undefined
+  }
+  return env.OPENROUTER_API_KEY || undefined
+}
+
 /** Trim and validate a model id (OpenRouter ids contain no whitespace or '='). */
 export function normalizeModelId(model: string): string {
   const cleaned = model.trim()

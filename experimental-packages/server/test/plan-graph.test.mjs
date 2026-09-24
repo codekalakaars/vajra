@@ -1,4 +1,4 @@
-// Tests for the plan post-processing in agent/manager.ts.
+// Tests for the plan post-processing in agent/developer.ts.
 //
 // The dependency graph handed to the master must be acyclic: TaskQueue only
 // releases a task once every dependency is done, so a cycle strands every
@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { parseProposePlanArgs } from '../dist/agent/manager.js'
+import { parseProposePlanArgs } from '../dist/agent/developer.js'
 
 function task(overrides) {
   return {

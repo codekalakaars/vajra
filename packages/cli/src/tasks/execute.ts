@@ -133,6 +133,8 @@ export async function executeTask(
   const instructionLines = task.instructions.map((inst, i) => `${i + 1}. ${inst}`).join('\n')
   const readFileList = task.readFile.length > 0 ? task.readFile.join(', ') : '(none)'
   const writeFileList = task.writeFile.length > 0 ? task.writeFile.join(', ') : '(none)'
+  const deleteFileList = task.deleteFile.length > 0 ? task.deleteFile.join(', ') : '(none)'
+  const createDirList = task.createDir.length > 0 ? task.createDir.join(', ') : '(none)'
 
   const systemPrompt = [
     'You are a worker agent. Follow the instructions EXACTLY. Do not deviate.',
@@ -145,12 +147,16 @@ export async function executeTask(
     '',
     `FILES TO READ: ${readFileList}`,
     `FILES TO WRITE: ${writeFileList}`,
+    `FILES TO DELETE: ${deleteFileList}`,
+    `DIRS TO CREATE: ${createDirList}`,
     '',
     'RULES:',
     '- Execute each instruction step by step',
     '- Read each readFile first to understand the current code',
     '- Make precise edits using edit_file (not write_file for existing files)',
     '- Use write_file only for new files',
+    '- Use delete_file only for files listed under FILES TO DELETE',
+    '- Use create_dir only for directories listed under DIRS TO CREATE',
     '- Use run_command to execute shell commands (npm install, npm test, git, etc.)',
     '- After completing all instructions, respond with a brief summary',
   ].filter(Boolean).join('\n')

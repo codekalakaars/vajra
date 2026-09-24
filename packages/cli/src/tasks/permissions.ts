@@ -20,7 +20,7 @@ export function normalizeProjectPath(projectDir: string, filePath: string): stri
 }
 
 export function computeTaskPermissions(
-  task: { readFile: string[]; writeFile: string[]; deleteFile: string[] },
+  task: { readFile: string[]; writeFile: string[]; deleteFile: string[]; createDir?: string[] },
   projectDir?: string,
 ): Record<string, TaskFilePermissions> {
   const norm = (p: string) => (projectDir ? normalizeProjectPath(projectDir, p) : p.split(sep).join('/'))
@@ -35,8 +35,11 @@ export function computeTaskPermissions(
   for (const file of task.deleteFile) {
     files[norm(file)] = { read: true, write: false, edit: false, delete: true }
   }
+  for (const dir of task.createDir ?? []) {
+    files[norm(dir)] = { read: true, write: true, edit: true, delete: false }
+  }
 
-  const allFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
+  const allFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile, ...(task.createDir ?? [])]
   const dirs = new Set(allFiles.map(f => {
     const parts = norm(f).split('/')
     parts.pop()
@@ -47,10 +50,10 @@ export function computeTaskPermissions(
     if (!files[dir]) {
       // Grant write on parent dirs of writeFile entries so workers can create
       // new files in those directories.
-      const isWriteParent = task.writeFile.some(f => {
+      const isWriteParent = [...task.writeFile, ...(task.createDir ?? [])].some(f => {
         const parent = norm(f).split('/').slice(0, -1).join('/')
         return parent === dir || dir.startsWith(parent + '/')
-      })
+      }) || (task.createDir ?? []).some(d => norm(d) === dir || dir.startsWith(norm(d) + '/'))
       const isDeleteParent = task.deleteFile.some(f => {
         const parent = norm(f).split('/').slice(0, -1).join('/')
         return parent === dir || dir.startsWith(parent + '/')

@@ -1354,9 +1354,12 @@ function computeToolPermissions(task: PlannedTask | TaskState): string[] {
   if (task.type === 'create' || task.type === 'modify' || task.type === 'refactor') {
     tools.push('write_file', 'edit_file')
   }
-  // Note: delete_file and create_dir tools are not implemented yet.
-  // deleteFile/createDir fields in the plan are used for permission computation
-  // only (granting write access to parent directories).
+  if (task.type === 'delete' || ('deleteFile' in task && task.deleteFile.length > 0)) {
+    tools.push('delete_file')
+  }
+  if ('createDir' in task && task.createDir.length > 0) {
+    tools.push('create_dir')
+  }
 
   return tools
 }

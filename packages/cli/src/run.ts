@@ -23,6 +23,8 @@ export interface RunOptions {
   projectDir: string
   autoConfirm?: boolean
   timeout?: number
+  /** Explicit opt-in to run without OS sandbox enforcement. */
+  allowUnenforced?: boolean
 }
 
 const DEFAULT_MAX_RETRIES = 2
@@ -36,7 +38,10 @@ export async function runCommand(options: RunOptions): Promise<void> {
   const streamer = new TerminalStreamer(options.verbose)
 
   if (!options.apiKey) {
-    streamer.error('No API key provided. Set OPENROUTER_API_KEY or OPENCODE_API_KEY, or use --api-key')
+    const requiredKey = options.model.startsWith('zen/') || options.model.startsWith('go/')
+      ? 'OPENCODE_API_KEY'
+      : 'OPENROUTER_API_KEY'
+    streamer.error(`No API key provided for model '${options.model}'. Set ${requiredKey} or use --api-key`)
     process.exit(1)
   }
 
@@ -80,10 +85,14 @@ export async function runCommand(options: RunOptions): Promise<void> {
   streamer.info(`Timeout: ${options.timeout ?? 300}s per task`)
 
   // Q: fork a confined worker for tool execution. Parent never calls
-  // applySandbox itself. Fall back to in-process handles if the worker
-  // cannot start (e.g. platform refuses and allowUnenforced is off).
+  // applySandbox itself. Fail closed unless the user explicitly opted into
+  // unenforced mode; only that explicit mode may fall back in-process.
+  const allowUnenforced = options.allowUnenforced ?? false
   try {
-    sandbox = await launchSandboxSession(projectDir, sessionId, { allowUnenforced: true })
+    sandbox = await launchSandboxSession(projectDir, sessionId, {
+      allowUnenforced,
+      requireEnforced: !allowUnenforced,
+    })
     if (sandbox.report.enforced) {
       streamer.info(`Sandbox: ${sandbox.report.mechanism}`)
     } else {
@@ -93,8 +102,14 @@ export async function runCommand(options: RunOptions): Promise<void> {
     }
     for (const w of sandbox.report.warnings) streamer.warning(w)
   } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    if (!allowUnenforced) {
+      streamer.error(`Sandbox unavailable: ${message}`)
+      streamer.error('Re-run with --allow-unenforced to continue without OS sandbox enforcement.')
+      process.exit(1)
+    }
     streamer.warning(
-      `Sandbox unavailable: ${e instanceof Error ? e.message : String(e)} — falling back to in-process tools`,
+      `Sandbox unavailable: ${message} — falling back to in-process tools (explicit --allow-unenforced)`,
     )
   }
 
@@ -239,8 +254,9 @@ export async function runCommand(options: RunOptions): Promise<void> {
           }
 
           const allTaskFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
+          const allTaskPaths = [...allTaskFiles, ...task.createDir]
           // D4: wait for locks instead of permanently skipping on conflict.
-          await fileLocks.acquireOrWait(allTaskFiles, task.id, 'write')
+          await fileLocks.acquireOrWait(allTaskPaths, task.id, 'write')
 
           const agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
           queue.assignTask(task.id, agent.id)
