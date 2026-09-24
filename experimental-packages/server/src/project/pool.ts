@@ -248,6 +248,9 @@ export class WorkerPool {
       this.updateSystemMetrics()
       this.adjustConcurrency()
     }, 5000)
+    // Background metrics must not keep a process alive on their own —
+    // an idle server or a finished test file would never exit otherwise.
+    this.adaptiveTimer.unref?.()
   }
 
   /** Previous CPU info for delta calculation */
@@ -337,6 +340,9 @@ export class WorkerPool {
     this.healthCheckTimer = setInterval(() => {
       this.checkWorkerHealth()
     }, 10000)
+    // Same as adaptive monitoring: fire while the process is otherwise
+    // busy, but never pin the event loop open by themselves.
+    this.healthCheckTimer.unref?.()
   }
 
   /**

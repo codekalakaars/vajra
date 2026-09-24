@@ -11,11 +11,16 @@ function scratchDbPath() {
   return { dbPath: join(dir, 'test.db'), dir }
 }
 
-async function connect(port) {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`)
+async function connect(port, authToken) {
+  const url = authToken
+    ? `ws://127.0.0.1:${port}?token=${encodeURIComponent(authToken)}`
+    : `ws://127.0.0.1:${port}`
+  const ws = new WebSocket(url)
   await new Promise((resolve, reject) => {
     ws.once('open', resolve)
     ws.once('error', reject)
+    // Unauthorized close (4001) arrives as an unexpected close, not an error
+    ws.once('close', (code) => reject(new Error(`WS closed before open (code ${code})`)))
   })
   return ws
 }
@@ -54,7 +59,7 @@ test('permissions round-trip over a real WS connection', async () => {
   writeFileSync(join(projectDir, 'app.js'), '')
 
   const server = await startServer({ dbPath })
-  const ws = await connect(server.port)
+  const ws = await connect(server.port, server.authToken)
 
   try {
     const defaults = await call(ws, 'project.loadPermissions', { projectDir })
@@ -78,7 +83,7 @@ test('permissions round-trip over a real WS connection', async () => {
 test('an unknown RPC method returns a clean error, not a crash', async () => {
   const { dbPath, dir } = scratchDbPath()
   const server = await startServer({ dbPath })
-  const ws = await connect(server.port)
+  const ws = await connect(server.port, server.authToken)
 
   try {
     await assert.rejects(() => call(ws, 'does.not.exist', {}), /Unknown method/)
@@ -99,7 +104,7 @@ test('projects.create fails closed when no launcher is configured yet', async ()
   // unsandboxed by omission.
   const { dbPath, dir } = scratchDbPath()
   const server = await startServer({ dbPath, apiKeys: TEST_API_KEYS })
-  const ws = await connect(server.port)
+  const ws = await connect(server.port, server.authToken)
 
   try {
     const permissions = await call(ws, 'project.loadPermissions', { projectDir: dir })
@@ -131,7 +136,7 @@ test('projects.create fails closed when no launcher is configured yet', async ()
 test('projects.list reflects created projects', async () => {
   const { dbPath, dir } = scratchDbPath()
   const server = await startServer({ dbPath, apiKeys: TEST_API_KEYS })
-  const ws = await connect(server.port)
+  const ws = await connect(server.port, server.authToken)
 
   try {
     const permissions = await call(ws, 'project.loadPermissions', { projectDir: dir })
