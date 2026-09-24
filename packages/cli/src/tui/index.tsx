@@ -1,16 +1,13 @@
 import React, { useState, useRef } from 'react'
 import { render, Box, Text, useInput, useApp } from 'ink'
-import { spawn } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
-import { dirname, resolve } from 'node:path'
-import { MODEL_PRESETS, normalizeModelId, resolveDefaultModel } from '../env.js'
+import { resolve } from 'node:path'
+import { existsSync, statSync } from 'node:fs'
+import { listAvailableModels, loadEnvIntoProcess, normalizeModelId, resolveDefaultModel } from '../env.js'
+import { startSession } from './session/index.js'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-
-type SpawnAction = 'run' | 'video' | 'config' | 'help'
-type MenuKey = SpawnAction | 'model' | 'exit'
-type Screen = 'menu' | 'model'
+type SpawnAction = 'run'
+type MenuKey = SpawnAction | 'model' | 'dir' | 'exit'
+type Screen = 'menu' | 'model' | 'dir'
 
 type ModelChoice =
   | { type: 'preset'; id: string; hint: string }
@@ -20,11 +17,21 @@ type ModelChoice =
 interface AppProps {
   version: string
   initialModel: string
+  initialDir: string
   onModelChange: (model: string) => void
+  onDirChange: (dir: string) => void
   onSelect: (action: SpawnAction | 'exit') => void
 }
 
-function App({ version, initialModel, onModelChange, onSelect }: AppProps) {
+function isDirectory(path: string): boolean {
+  try {
+    return existsSync(path) && statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+function App({ version, initialModel, initialDir, onModelChange, onDirChange, onSelect }: AppProps) {
   const [screen, setScreen] = useState<Screen>('menu')
   const [menuIdx, setMenuIdx] = useState(0)
   const [modelIdx, setModelIdx] = useState(0)
@@ -32,6 +39,9 @@ function App({ version, initialModel, onModelChange, onSelect }: AppProps) {
   const [modelError, setModelError] = useState<string | null>(null)
   const [menuMessage, setMenuMessage] = useState<string | null>(null)
   const [currentModel, setCurrentModelState] = useState(initialModel)
+  const [projectDir, setProjectDir] = useState(initialDir)
+  const [dirDraft, setDirDraft] = useState<string | null>(null)
+  const [dirError, setDirError] = useState<string | null>(null)
   const menuIdxRef = useRef(0)
   const modelIdxRef = useRef(0)
   const { exit } = useApp()
@@ -44,17 +54,17 @@ function App({ version, initialModel, onModelChange, onSelect }: AppProps) {
   const menuItems: Array<{ key: MenuKey; label: string; description?: string }> = [
     { key: 'run', label: 'Run Agent', description: `Start an interactive session (model: ${currentModel})` },
     { key: 'model', label: 'Model', description: `Change LLM model (current: ${currentModel})` },
-    { key: 'video', label: 'Video Tools', description: 'Create and manage HyperFrames videos' },
-    { key: 'config', label: 'Config', description: 'View or update configuration' },
-    { key: 'help', label: 'Help', description: 'Show usage information' },
+    { key: 'dir', label: 'Directory', description: `Change working directory (current: ${projectDir})` },
     { key: 'exit', label: 'Exit' },
   ]
 
+  const availableModels = listAvailableModels()
   const modelItems: ModelChoice[] = [
-    ...MODEL_PRESETS.map((p): ModelChoice => ({ type: 'preset', id: p.id, hint: p.hint })),
+    ...availableModels.map((p): ModelChoice => ({ type: 'preset', id: p.id, hint: p.hint })),
     { type: 'custom' },
     { type: 'back' },
   ]
+  const noKeysConfigured = availableModels.length === 0
 
   function saveModel(id: string) {
     try {
@@ -68,6 +78,25 @@ function App({ version, initialModel, onModelChange, onSelect }: AppProps) {
     } catch (e) {
       setModelError(e instanceof Error ? e.message : String(e))
     }
+  }
+
+  function saveDir(raw: string) {
+    const trimmed = raw.trim()
+    if (!trimmed) {
+      setDirError('Path is required')
+      return
+    }
+    const abs = resolve(trimmed)
+    if (!isDirectory(abs)) {
+      setDirError(`Not a directory: ${abs}`)
+      return
+    }
+    setProjectDir(abs)
+    onDirChange(abs)
+    setDirDraft(null)
+    setDirError(null)
+    setScreen('menu')
+    setMenuMessage(`Directory set to ${abs}`)
   }
 
   function moveSelection(
@@ -97,6 +126,22 @@ function App({ version, initialModel, onModelChange, onSelect }: AppProps) {
         setCustomDraft(d => (d ?? '').slice(0, -1))
       } else if (input && !key.ctrl && !key.meta) {
         setCustomDraft(d => (d ?? '') + input)
+      }
+      return
+    }
+
+    // Directory path entry: literal typing, Enter saves, Esc cancels.
+    if (dirDraft !== null) {
+      if (key.return) {
+        saveDir(dirDraft)
+      } else if (key.escape || (key.ctrl && input === 'c')) {
+        setDirDraft(null)
+        setDirError(null)
+        setScreen('menu')
+      } else if (key.backspace || key.delete) {
+        setDirDraft(d => (d ?? '').slice(0, -1))
+      } else if (input && !key.ctrl && !key.meta) {
+        setDirDraft(d => (d ?? '') + input)
       }
       return
     }
@@ -132,6 +177,23 @@ function App({ version, initialModel, onModelChange, onSelect }: AppProps) {
       return
     }
 
+    if (screen === 'dir') {
+      if (key.escape || input === 'q') {
+        setDirError(null)
+        setScreen('menu')
+        return
+      }
+      if (key.ctrl && input === 'c') {
+        select('exit')
+        return
+      }
+      if (key.return || input === '\r' || input === '\n') {
+        setDirError(null)
+        setDirDraft('')
+      }
+      return
+    }
+
     if (input === 'q' || (key.ctrl && input === 'c')) {
       select('exit')
     } else if (key.upArrow) {
@@ -148,24 +210,78 @@ function App({ version, initialModel, onModelChange, onSelect }: AppProps) {
         setModelIdx(0)
         modelIdxRef.current = 0
         setScreen('model')
+      } else if (itemKey === 'dir') {
+        setMenuMessage(null)
+        setDirError(null)
+        setDirDraft('')
+        setScreen('dir')
       } else {
         select(itemKey)
       }
     }
   })
 
+  if (screen === 'dir') {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Box marginBottom={1}>
+          <Text bold color="cyan">⚡ Vajra</Text>
+          <Text color="white"> v{version} — Directory</Text>
+        </Box>
+
+        <Box marginBottom={1}>
+          <Text color="white">Current: </Text>
+          <Text color="yellow">{projectDir}</Text>
+        </Box>
+
+        <Box marginBottom={1}>
+          <Text color="cyan">New path: </Text>
+          <Text color="white">{dirDraft ?? ''}█</Text>
+        </Box>
+
+        {dirError && (
+          <Box marginBottom={1}>
+            <Text color="red">{dirError}</Text>
+          </Box>
+        )}
+
+        <Box>
+          <Text color="white">
+            {dirDraft !== null ? 'Enter Save  Esc Cancel' : 'Enter Change  Esc Back'}
+          </Text>
+        </Box>
+      </Box>
+    )
+  }
+
   if (screen === 'model') {
     return (
       <Box flexDirection="column" padding={1}>
         <Box marginBottom={1}>
           <Text bold color="cyan">⚡ Vajra</Text>
-          <Text color="gray"> v{version} — Model</Text>
+          <Text color="white"> v{version} — Model</Text>
         </Box>
 
         <Box marginBottom={1}>
-          <Text color="gray">Current: </Text>
+          <Text color="white">Dir: </Text>
+          <Text color="yellow">{projectDir}</Text>
+        </Box>
+
+        <Box marginBottom={1}>
+          <Text color="white">Current: </Text>
           <Text color="green">{currentModel}</Text>
         </Box>
+
+        {noKeysConfigured && (
+          <Box marginBottom={1}>
+            <Text color="yellow">
+              No API keys configured. Set OPENCODE_API_KEY (Zen free) or OPENROUTER_API_KEY via
+            </Text>
+            <Box>
+              <Text color="yellow">  vajra config -s OPENCODE_API_KEY=...</Text>
+            </Box>
+          </Box>
+        )}
 
         <Box flexDirection="column" marginBottom={1}>
           {modelItems.map((item, idx) => (
@@ -175,10 +291,10 @@ function App({ version, initialModel, onModelChange, onSelect }: AppProps) {
                 {item.type === 'preset' ? item.id : item.type === 'custom' ? 'Custom…' : 'Back'}
               </Text>
               {idx === modelIdx && item.type === 'preset' && (
-                <Text color="gray">  {item.hint}</Text>
+                <Text color="white">  {item.hint}</Text>
               )}
               {idx === modelIdx && item.type === 'custom' && (
-                <Text color="gray">  Type any OpenRouter model id</Text>
+                <Text color="white">  Type any model id (zen/*, openai/*, …)</Text>
               )}
             </Box>
           ))}
@@ -198,7 +314,7 @@ function App({ version, initialModel, onModelChange, onSelect }: AppProps) {
         )}
 
         <Box>
-          <Text color="gray" dimColor>
+          <Text color="white">
             {customDraft !== null ? 'Enter Save  Esc Cancel' : '↑↓ Navigate  Enter Select  Esc Back'}
           </Text>
         </Box>
@@ -210,19 +326,20 @@ function App({ version, initialModel, onModelChange, onSelect }: AppProps) {
     <Box flexDirection="column" padding={1}>
       <Box marginBottom={1}>
         <Text bold color="cyan">⚡ Vajra</Text>
-        <Text color="gray"> v{version}</Text>
+        <Text color="white"> v{version}</Text>
+      </Box>
+
+      <Box marginBottom={1}>
+        <Text color="white">Dir: </Text>
+        <Text color="yellow">{projectDir}</Text>
       </Box>
 
       <Box flexDirection="column" marginBottom={1}>
         {menuItems.map((item, idx) => (
-          <Box key={item.label}>
-            <Text color={idx === menuIdx ? 'cyan' : 'white'}>
-              {idx === menuIdx ? '▸ ' : '  '}{item.label}
-            </Text>
-            {idx === menuIdx && item.description && (
-              <Text color="gray">  {item.description}</Text>
-            )}
-          </Box>
+          <Text key={item.label} color={idx === menuIdx ? 'cyan' : 'white'}>
+            {idx === menuIdx ? '▸ ' : '  '}{item.label}
+            {idx === menuIdx && item.description ? `  ${item.description}` : ''}
+          </Text>
         ))}
       </Box>
 
@@ -233,29 +350,10 @@ function App({ version, initialModel, onModelChange, onSelect }: AppProps) {
       )}
 
       <Box>
-        <Text color="gray" dimColor>↑↓ Navigate  Enter Select  q Quit</Text>
+        <Text color="white">↑↓ Navigate  Enter Select  q Quit</Text>
       </Box>
     </Box>
   )
-}
-
-const MENU_COMMANDS: Record<Exclude<SpawnAction, 'run'>, { command: string; args: string[] }> = {
-  video: { command: 'video', args: ['--help'] },
-  config: { command: 'config', args: [] },
-  help: { command: '--help', args: [] },
-}
-
-function runEntry(command: string, args: string[] = []): Promise<void> {
-  // Re-invoke the same entry script (works for both dist/index.js and dev src runs).
-  const self = process.argv[1] ?? resolve(__dirname, '..', 'index.js')
-  return new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, [self, command, ...args], {
-      stdio: 'inherit',
-      cwd: process.cwd(),
-    })
-    child.on('close', () => resolvePromise())
-    child.on('error', () => resolvePromise())
-  })
 }
 
 export async function startTUI(version: string): Promise<void> {
@@ -264,17 +362,22 @@ export async function startTUI(version: string): Promise<void> {
     process.exit(0)
   }
 
-  // Loop so subcommands (config, help, ...) return to the menu when they finish.
+  // Loop so returning from a subcommand goes back to the menu.
   // Only 'Exit' (or q / Ctrl+C) leaves the TUI.
-  // The model is session-scoped: picked in the Model screen, passed to `run` via -m.
+  // Model and directory are session-scoped: picked in the menus, passed to the session.
   let sessionModel = resolveDefaultModel()
+  let sessionDir = process.cwd()
   while (true) {
+    // Re-read .env each lap: Config -s runs in a child and only updates the file.
+    loadEnvIntoProcess()
     let selection: SpawnAction | 'exit' = 'exit'
     const instance = render(
       <App
         version={version}
         initialModel={sessionModel}
+        initialDir={sessionDir}
         onModelChange={(model) => { sessionModel = model }}
+        onDirChange={(dir) => { sessionDir = dir }}
         onSelect={(action) => { selection = action }}
       />,
     )
@@ -285,10 +388,11 @@ export async function startTUI(version: string): Promise<void> {
     }
 
     if (selection === 'run') {
-      await runEntry('run', ['-m', sessionModel])
-    } else {
-      const { command, args } = MENU_COMMANDS[selection]
-      await runEntry(command, args)
+      await startSession({
+        version,
+        model: sessionModel,
+        projectDir: sessionDir,
+      })
     }
   }
 }

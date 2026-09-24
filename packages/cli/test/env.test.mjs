@@ -14,6 +14,8 @@ const {
   resolveApiKeyForModel,
   resolveDefaultModel,
   readEnvFile,
+  listAvailableModels,
+  loadEnvIntoProcess,
 } = await import(envUrl)
 
 test('writeEnvKey creates and updates a KEY=VALUE line', () => {
@@ -71,7 +73,7 @@ test('resolveDefaultModel prefers VAJRA_MODEL then DEFAULT_MODEL', () => {
   )
   assert.equal(
     resolveDefaultModel({}),
-    'openai/gpt-4o-mini',
+    'zen/space-bunny-free',
   )
 })
 
@@ -85,6 +87,42 @@ test('resolveApiKeyForModel selects provider-specific credentials', () => {
   assert.equal(resolveApiKeyForModel('go/mimo-v2.5', undefined, env), 'oc-key')
   assert.equal(resolveApiKeyForModel('zen/mimo-v2.5-free', 'explicit', env), 'explicit')
   assert.equal(resolveApiKeyForModel('openai/gpt-4o', undefined, {}), undefined)
+})
+
+test('listAvailableModels filters presets by configured keys', () => {
+  const zenOnly = listAvailableModels({ OPENCODE_API_KEY: 'oc-key' })
+  assert.ok(zenOnly.length > 0)
+  assert.ok(zenOnly.every(m => m.id.startsWith('zen/')))
+
+  const orOnly = listAvailableModels({ OPENROUTER_API_KEY: 'or-key' })
+  assert.ok(orOnly.length > 0)
+  assert.ok(orOnly.every(m => !m.id.startsWith('zen/')))
+
+  const both = listAvailableModels({ OPENCODE_API_KEY: 'a', OPENROUTER_API_KEY: 'b' })
+  assert.ok(both.some(m => m.id.startsWith('zen/')))
+  assert.ok(both.some(m => !m.id.startsWith('zen/')))
+
+  assert.deepEqual(listAvailableModels({}), [])
+  assert.deepEqual(listAvailableModels({ OPENCODE_API_KEY: '  ' }), [])
+})
+
+test('loadEnvIntoProcess copies keys from the discovered .env into env', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'envload-'))
+  const prev = process.cwd()
+  try {
+    writeFileSync(join(dir, '.env'), 'OPENCODE_API_KEY=oc-from-file\nEMPTY_KEY=\n')
+    chdir(dir)
+    const fakeEnv = {}
+    const usedPath = loadEnvIntoProcess(fakeEnv)
+    assert.equal(usedPath, join(dir, '.env'))
+    assert.equal(fakeEnv.OPENCODE_API_KEY, 'oc-from-file')
+    assert.equal(fakeEnv.EMPTY_KEY, undefined)
+    // available models now see the loaded key
+    assert.ok(listAvailableModels(fakeEnv).some(m => m.id.startsWith('zen/')))
+  } finally {
+    chdir(prev)
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('readEnvFile ignores comments and blanks', () => {

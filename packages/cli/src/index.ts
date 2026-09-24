@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { existsSync, readFileSync } from 'node:fs'
 import {
   findEnvPath,
+  loadEnvIntoProcess,
   parseSetPair,
   readEnvFile,
   resolveApiKeyForModel,
@@ -39,6 +40,8 @@ const envPath = findEnvPath()
 dotenv.config({ path: envPath })
 // Also load from current working directory if different
 dotenv.config()
+// Force-load keys present in the file (dotenv does not override existing vars)
+loadEnvIntoProcess()
 
 const program = new Command()
 
@@ -59,10 +62,11 @@ program
   .option('-t, --timeout <seconds>', 'Per-task timeout in seconds', '300')
   .option('--allow-unenforced', 'Allow tools to run without OS sandbox enforcement (not recommended)')
   .addHelpText('after', `
-Model recommendations:
-  Fast (1-3s):   openai/gpt-4o-mini, openai/gpt-4o, anthropic/claude-3-haiku
-  Slow (30-90s): nvidia/*:free, google/*:free (free tier, very slow)
-  Zen:           zen/* (requires OPENCODE_API_KEY)
+Model recommendations (only models with a configured key are offered in the TUI):
+  Zen free:      zen/space-bunny-free (default), zen/mimo-v2.6-flash-free, zen/mimo-v2.5-free, …
+                 (requires OPENCODE_API_KEY — free tier)
+  OpenRouter:    openai/gpt-4o-mini, openai/gpt-4o, anthropic/claude-3-haiku, nvidia/*:free
+                 (requires OPENROUTER_API_KEY)
 
 Examples:
   $ vajra run "fix the login bug"

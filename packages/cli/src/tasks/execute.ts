@@ -1,10 +1,10 @@
-import { TerminalStreamer } from '../streaming.js'
 import type { LaunchHandle } from '../agent/developer.js'
 import type { AgentRegistry } from '../agent/registry.js'
 import type { TaskQueue } from '../agent/taskqueue.js'
 import { streamChatCompletion, type OpenRouterMessage } from '../agent/openrouter.js'
 import { getWorkerToolSpecs } from '../agent/tools.js'
 import type { ChangeHistory, FileLockManager } from '@codekalakaars/vajra-sandbox'
+import type { SessionStreamer } from '../session/ui.js'
 import { needsServer, findServerEntry } from './server.js'
 
 export interface ExecuteTaskInput {
@@ -28,7 +28,7 @@ export interface ExecuteTaskInput {
   handle: LaunchHandle
   apiKey: string
   model: string
-  streamer: TerminalStreamer
+  streamer: SessionStreamer
   changeHistory: ChangeHistory
   queue: TaskQueue
   registry: AgentRegistry
@@ -118,7 +118,7 @@ export async function executeTask(
   handle: LaunchHandle,
   apiKey: string,
   model: string,
-  streamer: TerminalStreamer,
+  streamer: SessionStreamer,
   changeHistory: ChangeHistory,
   queue: TaskQueue,
   registry: AgentRegistry,

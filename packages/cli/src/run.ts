@@ -1,19 +1,9 @@
 import * as readline from 'node:readline'
-import { existsSync } from 'node:fs'
 import { TerminalStreamer } from './streaming.js'
-import { developerConversationTurn, type LaunchHandle, type DeveloperTurnResult } from './agent/developer.js'
-import { AgentRegistry } from './agent/registry.js'
-import { TaskQueue } from './agent/taskqueue.js'
-import type { OpenRouterMessage } from './agent/openrouter.js'
-import { FileLockManager, ChangeHistory } from '@codekalakaars/vajra-sandbox'
-import { randomUUID } from 'node:crypto'
-import { resolve } from 'node:path'
-import { evaluateSkipIf } from './tasks/skip.js'
-import { computeTaskPermissions, normalizeProjectPath } from './tasks/permissions.js'
-import { executeTask } from './tasks/execute.js'
-import { createToolHandle } from './tools/handle.js'
-import { finalReport } from './tasks/report.js'
-import { launchSandboxSession, type SandboxSession } from './sandbox/launch.js'
+import { runSession, isExitCommand } from './session/service.js'
+import type { SessionUI, TaskEvent } from './session/ui.js'
+
+export { isExitCommand }
 
 export interface RunOptions {
   task?: string
@@ -27,386 +17,106 @@ export interface RunOptions {
   allowUnenforced?: boolean
 }
 
-const DEFAULT_MAX_RETRIES = 2
-
-function isExitCommand(message: string): boolean {
-  const lower = message.trim().toLowerCase()
-  return lower === 'exit' || lower === 'quit' || lower === '/exit' || lower === '/quit'
+function ask(message: string): Promise<string> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise<string>(resolve => {
+    rl.question(message, answer => {
+      rl.close()
+      resolve(answer.trim())
+    })
+  })
 }
 
+/**
+ * CLI adapter: TerminalStreamer for output, readline for prompts, SIGINT for
+ * interrupt. All orchestration lives in session/service.ts.
+ */
 export async function runCommand(options: RunOptions): Promise<void> {
   const streamer = new TerminalStreamer(options.verbose)
 
-  if (!options.apiKey) {
-    const requiredKey = options.model.startsWith('zen/') || options.model.startsWith('go/')
-      ? 'OPENCODE_API_KEY'
-      : 'OPENROUTER_API_KEY'
-    streamer.error(`No API key provided for model '${options.model}'. Set ${requiredKey} or use --api-key`)
-    process.exit(1)
-  }
-
-  const projectDir = resolve(options.projectDir)
-  if (!existsSync(projectDir)) {
-    streamer.error(`Project directory does not exist: ${projectDir}`)
-    process.exit(1)
+  const ui: SessionUI = {
+    banner: () => streamer.banner(),
+    info: message => streamer.info(message),
+    success: message => streamer.success(message),
+    error: message => streamer.error(message),
+    warning: message => streamer.warning(message),
+    newline: () => streamer.newline(),
+    onTextDelta: text => streamer.onTextDelta(text),
+    onThinkingDelta: text => streamer.onThinkingDelta(text),
+    finishLine: () => streamer.finishLine(),
+    discardBuffer: () => streamer.discardBuffer(),
+    askInitialTask: kind =>
+      kind === 'first'
+        ? ask('\x1b[1mWhat would you like me to work on? \x1b[0m')
+        : ask('\x1b[1mPlease enter a task (or type "exit" to quit): \x1b[0m'),
+    askUserMessage: () => ask('\x1b[1mYou: \x1b[0m'),
+    showPlan: plan => streamer.planSummary(plan),
+    askConfirmPlan: async () => {
+      const confirm = (await ask('\x1b[1m? Confirm plan? [y/N] \x1b[0m')).toLowerCase()
+      // D8: confirmation is [y/N] — anything other than yes rejects.
+      return confirm === 'y' || confirm === 'yes' ? 'y' : 'n'
+    },
+    askRejectFeedback: () => ask('\x1b[1mFeedback: \x1b[0m'),
+    onTaskEvent: (event: TaskEvent) => {
+      switch (event.type) {
+        case 'start':
+          streamer.info(`\n⏳ [${event.index}/${event.total}] ${event.title}`)
+          break
+        case 'done':
+          streamer.success(`Done: ${event.title}`)
+          break
+        case 'failed':
+          streamer.error(`Failed: ${event.title}`)
+          break
+        case 'skipped':
+          streamer.warning(`Skipped: ${event.title}`)
+          break
+        case 'retry':
+          streamer.warning(`  Retrying (${event.attempt}/${event.max})...`)
+          break
+        case 'no-changes':
+          streamer.warning(`  No changes made - skipping retry for "${event.title}"`)
+          break
+      }
+    },
   }
 
   // D6: first SIGINT aborts in-flight work; second exits immediately with 130.
   const abortController = new AbortController()
-  let interrupted = false
   let sigintCount = 0
-  // Declared early so the SIGINT handler can close the worker if it fires
-  // before launchSandboxSession resolves.
-  let sandbox: SandboxSession | null = null
+  // Assigned via onSandboxClose so a second Ctrl-C can close the worker even
+  // if launchSandboxSession is still in flight.
+  let forceCloseSandbox: (() => void) | null = null
   const onSigInt = () => {
     sigintCount++
     if (sigintCount >= 2) {
-      sandbox?.close()
+      forceCloseSandbox?.()
       process.exit(130)
     }
-    interrupted = true
     abortController.abort()
     streamer.warning('\nInterrupted. Finishing current step — press Ctrl-C again to force quit.')
   }
   process.on('SIGINT', onSigInt)
 
-  streamer.banner()
-
-  const sessionId = randomUUID()
-  const registry = new AgentRegistry()
-  const fileLocks = new FileLockManager()
-  // D1: ChangeHistory always records against the resolved projectDir.
-  const changeHistory = new ChangeHistory(projectDir)
-
-  const masterAgent = registry.createAgent(sessionId, 'master', 'Orchestrate task execution')
-  registry.updateStatus(masterAgent.id, 'running')
-
-  streamer.info(`Model: ${options.model}`)
-  streamer.info(`Timeout: ${options.timeout ?? 300}s per task`)
-
-  // Q: fork a confined worker for tool execution. Parent never calls
-  // applySandbox itself. Fail closed unless the user explicitly opted into
-  // unenforced mode; only that explicit mode may fall back in-process.
-  const allowUnenforced = options.allowUnenforced ?? false
   try {
-    sandbox = await launchSandboxSession(projectDir, sessionId, {
-      allowUnenforced,
-      requireEnforced: !allowUnenforced,
-    })
-    if (sandbox.report.enforced) {
-      streamer.info(`Sandbox: ${sandbox.report.mechanism}`)
-    } else {
-      streamer.warning(
-        `Sandbox not enforced (${sandbox.report.mechanism}) — tools run with app-level permissions only`,
-      )
-    }
-    for (const w of sandbox.report.warnings) streamer.warning(w)
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    if (!allowUnenforced) {
-      streamer.error(`Sandbox unavailable: ${message}`)
-      streamer.error('Re-run with --allow-unenforced to continue without OS sandbox enforcement.')
-      process.exit(1)
-    }
-    streamer.warning(
-      `Sandbox unavailable: ${message} — falling back to in-process tools (explicit --allow-unenforced)`,
-    )
-  }
-
-  const developerHandle: LaunchHandle = sandbox?.handle ?? createToolHandle(projectDir)
-
-  const messages: OpenRouterMessage[] = []
-  const summaryIndex: Array<{ path: string; symbols: string[]; preview: string; lineCount: number; importCount: number; exportCount: number }> = []
-
-  let initialMessage = options.task
-  if (!initialMessage) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-    initialMessage = await new Promise<string>(resolve => {
-      rl.question('\x1b[1mWhat would you like me to work on? \x1b[0m', answer => {
-        rl.close()
-        resolve(answer.trim())
-      })
-    })
-  }
-
-  // D7: honour exit/quit at the first prompt, not only on later turns.
-  if (initialMessage && isExitCommand(initialMessage)) {
-    streamer.info('Goodbye!')
-    process.removeListener('SIGINT', onSigInt)
-    sandbox?.close()
-    process.exit(0)
-  }
-
-  while (!initialMessage) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-    initialMessage = await new Promise<string>(resolve => {
-      rl.question('\x1b[1mPlease enter a task (or type "exit" to quit): \x1b[0m', answer => {
-        rl.close()
-        resolve(answer.trim())
-      })
-    })
-    if (initialMessage && isExitCommand(initialMessage)) {
-      streamer.info('Goodbye!')
-      process.removeListener('SIGINT', onSigInt)
-      sandbox?.close()
-      process.exit(0)
-    }
-  }
-
-  streamer.info(`\n🔍 Scanning project in ${projectDir}...`)
-  streamer.info(`💬 Starting conversation with developer...\n`)
-
-  let result: DeveloperTurnResult | undefined
-  let userMessage = initialMessage
-
-  let turn = 0
-  for (turn = 0; turn < 20; turn++) {
-    if (interrupted) break
-
-    try {
-      result = await developerConversationTurn({
-        sessionId,
-        projectDir,
-        userMessage,
-        model: options.model,
+    const result = await runSession(
+      {
+        task: options.task,
         apiKey: options.apiKey,
-        handle: developerHandle,
-        messages,
-        summaryIndex,
-        onTextDelta: text => streamer.onTextDelta(text),
-        onThinkingDelta: text => streamer.onThinkingDelta(text),
-        isInterrupted: () => interrupted,
+        model: options.model,
+        projectDir: options.projectDir,
+        autoConfirm: options.autoConfirm,
+        timeout: options.timeout,
+        allowUnenforced: options.allowUnenforced,
         signal: abortController.signal,
-      })
-    } catch (e) {
-      if (abortController.signal.aborted || interrupted) break
-      streamer.error(`API error: ${e instanceof Error ? e.message : String(e)}`)
-      streamer.warning('Check your API key and network connection.')
-      break
-    }
-
-    streamer.finishLine()
-
-    if (result.type === 'plan') {
-      streamer.planSummary(result.plan)
-
-      if (options.autoConfirm) {
-        streamer.info('Auto-confirming plan (--yes flag)\n')
-      } else {
-        // D8: confirmation is [y/N] — anything other than yes rejects.
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-        const confirm = await new Promise<string>(resolve => {
-          rl.question('\x1b[1m? Confirm plan? [y/N] \x1b[0m', answer => {
-            rl.close()
-            resolve(answer.trim().toLowerCase())
-          })
-        })
-
-        if (confirm !== 'y' && confirm !== 'yes') {
-          streamer.warning('Plan rejected. What would you like to change?')
-          userMessage = await new Promise<string>(resolve => {
-            const rl2 = readline.createInterface({ input: process.stdin, output: process.stdout })
-            rl2.question('\x1b[1mFeedback: \x1b[0m', answer => {
-              rl2.close()
-              resolve(answer.trim())
-            })
-          })
-          if (userMessage && isExitCommand(userMessage)) break
-          continue
-        }
-      }
-
-      streamer.info('\n🚀 Executing tasks...\n')
-
-      // D3: queue default timeout comes from the CLI -t flag (seconds).
-      const queue = new TaskQueue(sessionId, options.timeout ?? 300)
-      for (const task of result.plan.tasks) {
-        queue.addTask(task)
-      }
-
-      let completedCount = 0
-      const totalCount = result.plan.tasks.length
-
-      while (true) {
-        if (interrupted) break
-        const status = queue.getStatus()
-        if (status.done + status.failed + status.skipped >= status.total) break
-
-        const readyTasks = queue.getReadyTasks()
-
-        // No ready tasks but unfinished work remains (unresolvable deps) —
-        // break so the final report surfaces them as pending (D5/§27).
-        if (readyTasks.length === 0) {
-          break
-        }
-
-        for (const task of readyTasks) {
-          if (interrupted) break
-
-          if (task.skipIf && task.skipIf.length > 0) {
-            const shouldSkip = await evaluateSkipIf(task.skipIf, projectDir)
-            if (shouldSkip) {
-              queue.skipTask(task.id)
-              completedCount++
-              streamer.warning(`Skipped: ${task.title}`)
-              continue
-            }
-          }
-
-          const allTaskFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
-          const allTaskPaths = [...allTaskFiles, ...task.createDir]
-          // D4: wait for locks instead of permanently skipping on conflict.
-          await fileLocks.acquireOrWait(allTaskPaths, task.id, 'write')
-
-          const agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
-          queue.assignTask(task.id, agent.id)
-          registry.updateStatus(agent.id, 'running')
-          queue.startTask(task.id)
-
-          streamer.info(`\n⏳ [${completedCount + 1}/${totalCount}] ${task.title}`)
-
-          // D2: track dirty-set via onMutate rather than changeHistory.hasChanges
-          // alone (baseline records can make hasChanges unreliable across rollbacks).
-          const permissions = computeTaskPermissions(task, projectDir)
-          let dirty = false
-          const permissionLookup = (path: string) =>
-            permissions[normalizeProjectPath(projectDir, path)] ??
-            null
-
-          let taskHandle: LaunchHandle
-          if (sandbox) {
-            sandbox.setTaskPermissions(permissionLookup)
-            sandbox.setOnMutate(() => {
-              dirty = true
-            })
-            taskHandle = sandbox.handle
-          } else {
-            taskHandle = createToolHandle(projectDir, {
-              permissions: path => {
-                const key = normalizeProjectPath(projectDir, path)
-                return permissions[key] ?? { read: false, write: false, edit: false, delete: false }
-              },
-              onMutate: () => {
-                dirty = true
-              },
-            })
-          }
-
-          for (const filePath of allTaskFiles) {
-            await changeHistory.recordBefore(task.id, filePath)
-          }
-
-          let success = false
-          let retries = 0
-          const maxRetries = task.maxRetries ?? DEFAULT_MAX_RETRIES
-
-          while (retries <= maxRetries) {
-            dirty = false
-            success = await executeTask(
-              agent.id,
-              task,
-              taskHandle,
-              options.apiKey,
-              options.model,
-              streamer,
-              changeHistory,
-              queue,
-              registry,
-              sessionId,
-              fileLocks,
-              projectDir,
-              abortController.signal,
-            )
-
-            if (success) break
-
-            if (!dirty && !changeHistory.hasChanges(task.id)) {
-              streamer.warning(`  No changes made - skipping retry for "${task.title}"`)
-              break
-            }
-
-            if (retries < maxRetries) {
-              // rollback already drops the task's change set; re-baseline so
-              // the next attempt starts from the restored files.
-              await changeHistory.rollback(task.id)
-              for (const filePath of allTaskFiles) {
-                await changeHistory.recordBefore(task.id, filePath)
-              }
-              dirty = false
-              streamer.warning(`  Retrying (${retries + 1}/${maxRetries})...`)
-              retries++
-            } else {
-              break
-            }
-          }
-
-          if (success) {
-            queue.completeTask(task.id, true)
-            registry.updateStatus(agent.id, 'done')
-            streamer.success(`Done: ${task.title}`)
-          } else {
-            if (dirty || changeHistory.hasChanges(task.id)) {
-              await changeHistory.rollback(task.id)
-            }
-            queue.failTask(task.id)
-            registry.updateStatus(agent.id, 'failed')
-            streamer.error(`Failed: ${task.title}`)
-          }
-
-          fileLocks.release(task.id)
-          completedCount++
-        }
-      }
-
-      const finalStatus = queue.getStatus()
-      console.log('')
-      streamer.info('📊 Results:')
-      const report = finalReport(finalStatus)
-      for (const line of report.lines) {
-        if (report.exitCode === 0) streamer.success(line)
-        else streamer.warning(line)
-      }
-      console.log('')
-      if (report.exitCode === 0) {
-        streamer.success('✅ Done!')
-      } else {
-        streamer.error('Completed with failures or pending tasks.')
-      }
-      process.exitCode = report.exitCode
-      break
-    }
-
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-    userMessage = await new Promise<string>(resolve => {
-      rl.question('\x1b[1mYou: \x1b[0m', answer => {
-        rl.close()
-        resolve(answer.trim())
-      })
-    })
-
-    if (!userMessage) {
-      streamer.warning('Empty message. Type "exit" to quit.')
-      userMessage = 'exit'
-    }
-
-    if (isExitCommand(userMessage)) {
-      streamer.info('Goodbye!')
-      break
-    }
-  }
-
-  if (turn >= 20 && !interrupted && result?.type !== 'plan') {
-    // D9: we did not start execution after the turn cap — don't claim we did.
-    streamer.warning('Reached the 20-turn conversation limit. Continuing may be limited.')
-  }
-
-  registry.updateStatus(masterAgent.id, interrupted ? 'failed' : 'done')
-  process.removeListener('SIGINT', onSigInt)
-  sandbox?.close()
-  if (interrupted) {
-    streamer.warning('Session interrupted. Progress has been saved.')
-    if (process.exitCode === undefined || process.exitCode === 0) {
-      process.exitCode = 130
-    }
+        onSandboxClose: close => {
+          forceCloseSandbox = close
+        },
+      },
+      ui,
+    )
+    if (result.exitCode !== 0) process.exitCode = result.exitCode
+  } finally {
+    process.removeListener('SIGINT', onSigInt)
   }
 }
