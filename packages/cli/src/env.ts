@@ -1,13 +1,45 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 
-export const DEFAULT_MODEL = 'openai/gpt-4o-mini'
+export const DEFAULT_MODEL = 'zen/space-bunny-free'
 
-export const MODEL_PRESETS: Array<{ id: string; hint: string }> = [
-  { id: 'openai/gpt-4o-mini', hint: 'Fast, default' },
+export interface ModelPreset {
+  id: string
+  hint: string
+}
+
+/** OpenRouter models — only listed when OPENROUTER_API_KEY is set. */
+export const OPENROUTER_PRESETS: ModelPreset[] = [
+  { id: 'openai/gpt-4o-mini', hint: 'Fast' },
   { id: 'openai/gpt-4o', hint: 'Fast' },
   { id: 'anthropic/claude-3-haiku', hint: 'Fast' },
 ]
+
+/** OpenCode Zen free models — only listed when OPENCODE_API_KEY is set. */
+export const ZEN_FREE_PRESETS: ModelPreset[] = [
+  { id: 'zen/mimo-v2.6-flash-free', hint: 'Free (Zen)' },
+  { id: 'zen/mimo-v2.5-free', hint: 'Free (Zen)' },
+  { id: 'zen/deepseek-v4-flash-free', hint: 'Free (Zen)' },
+  { id: 'zen/space-bunny-free', hint: 'Free (Zen)' },
+  { id: 'zen/big-pickle', hint: 'Free stealth (Zen)' },
+  { id: 'zen/nemotron-3-ultra-free', hint: 'Free (Zen)' },
+  { id: 'zen/nemotron-3.5-lightning-free', hint: 'Free (Zen)' },
+  { id: 'zen/ling-3.0-flash-fin-free', hint: 'Free (Zen)' },
+  { id: 'zen/muse-spark-1.3-contributor-free', hint: 'Free (Zen)' },
+  { id: 'zen/jev-1.13-free', hint: 'Free (Zen)' },
+]
+
+/**
+ * Models the user can actually reach with the keys they have configured.
+ * - OPENCODE_API_KEY → Zen free presets (zen/*)
+ * - OPENROUTER_API_KEY → OpenRouter presets (openai/*, anthropic/*)
+ */
+export function listAvailableModels(env: NodeJS.ProcessEnv = process.env): ModelPreset[] {
+  const out: ModelPreset[] = []
+  if (env.OPENCODE_API_KEY?.trim()) out.push(...ZEN_FREE_PRESETS)
+  if (env.OPENROUTER_API_KEY?.trim()) out.push(...OPENROUTER_PRESETS)
+  return out
+}
 
 /** Resolve the default model from env (VAJRA_MODEL wins over DEFAULT_MODEL). */
 export function resolveDefaultModel(env: NodeJS.ProcessEnv = process.env): string {
@@ -93,6 +125,20 @@ export function readEnvFile(envPath: string): Record<string, string> {
     }
   }
   return values
+}
+
+/**
+ * (Re)load KEY=VALUE pairs from the discovered .env into process.env.
+ * Used by the TUI loop so `config -s` (child process writes the file)
+ * is visible without restarting. Empty values are skipped.
+ */
+export function loadEnvIntoProcess(env: NodeJS.ProcessEnv = process.env): string {
+  const envPath = findEnvPath()
+  const values = readEnvFile(envPath)
+  for (const [key, value] of Object.entries(values)) {
+    if (value) env[key] = value
+  }
+  return envPath
 }
 
 /** Create or update a single KEY=VALUE line, preserving the rest of the file. */
