@@ -9,6 +9,7 @@ import {
   findEnvPath,
   parseSetPair,
   readEnvFile,
+  resolveApiKeyForModel,
   resolveDefaultModel,
   writeEnvKey,
 } from './env.js'
@@ -56,26 +57,31 @@ program
   .option('-d, --dir <directory>', 'Project directory', process.cwd())
   .option('-y, --yes', 'Auto-confirm all plans without prompting')
   .option('-t, --timeout <seconds>', 'Per-task timeout in seconds', '300')
+  .option('--allow-unenforced', 'Allow tools to run without OS sandbox enforcement (not recommended)')
   .addHelpText('after', `
 Model recommendations:
   Fast (1-3s):   openai/gpt-4o-mini, openai/gpt-4o, anthropic/claude-3-haiku
   Slow (30-90s): nvidia/*:free, google/*:free (free tier, very slow)
-  Zen (blocked):  zen/* (requires OpenCode, not available from CLI)
+  Zen:           zen/* (requires OPENCODE_API_KEY)
 
 Examples:
   $ vajra run "fix the login bug"
   $ vajra run -m openai/gpt-4o "add dark mode"
   $ vajra run -t 600 -y "refactor the database layer"
+  $ vajra run --allow-unenforced "continue without OS sandbox enforcement"
   `)
   .action(async (task, options) => {
+    const model = options.model as string
+    const apiKey = resolveApiKeyForModel(model, options.apiKey as string | undefined)
     await runCommand({
       task,
-      apiKey: options.apiKey || process.env.OPENROUTER_API_KEY || process.env.OPENCODE_API_KEY,
-      model: options.model,
+      apiKey,
+      model,
       verbose: options.verbose,
       projectDir: options.dir,
       autoConfirm: options.yes,
       timeout: parseInt(options.timeout, 10) || 300,
+      allowUnenforced: Boolean(options.allowUnenforced),
     })
   })
 
@@ -124,7 +130,6 @@ program
     // Read from .env file directly to show all configured keys
     const knownKeys = [
       'OPENROUTER_API_KEY',
-      'ANTHROPIC_API_KEY',
       'OPENCODE_API_KEY',
       'DEFAULT_MODEL',
       'VAJRA_MODEL',

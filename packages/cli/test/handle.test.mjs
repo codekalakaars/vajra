@@ -44,6 +44,20 @@ test('read_file returns a redacted stub for .env', async () => {
   }
 })
 
+test('read_file returns a redacted stub for environment-specific env files', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-env-'))
+  try {
+    writeFileSync(join(dir, '.env.production'), 'PRODUCTION_SECRET=prodsecret\n')
+    const handle = createToolHandle(dir)
+    const result = await handle.callTool('read_file', { path: join(dir, '.env.production') })
+    assert.equal(typeof result, 'string')
+    assert.match(result, /REDACTED/)
+    assert.ok(!result.includes('prodsecret'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('run_command returns C1 JSON shape and rejects cwd escape', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'handle-cwd-'))
   try {

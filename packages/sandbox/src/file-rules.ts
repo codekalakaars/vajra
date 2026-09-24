@@ -356,7 +356,7 @@ export function checkToolPermission(
     // Check if the tool requires a specific permission
     if (tool === 'read_file' || tool === 'list_files' || tool === 'search_files') {
       if (!perm.read) return `Access denied: read not allowed for '${relativePath}'`
-    } else if (tool === 'write_file') {
+    } else if (tool === 'write_file' || tool === 'create_dir') {
       if (!perm.write) return `Access denied: write not allowed for '${relativePath}'`
     } else if (tool === 'edit_file') {
       if (!perm.edit) return `Access denied: edit not allowed for '${relativePath}'`

@@ -5,6 +5,7 @@
 // The parent never calls applySandbox itself.
 
 import { fork, type ChildProcess } from 'node:child_process'
+import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { LaunchHandle } from '../agent/developer.js'
 import {
@@ -40,8 +41,42 @@ export interface LaunchSandboxOptions {
   timeoutMs?: number
 }
 
+const WORKER_ENV_ALLOWLIST = [
+  'PATH',
+  'SystemRoot',
+  'TEMP',
+  'TMP',
+  'HOME',
+  'USERPROFILE',
+  'NODE_ENV',
+] as const
+
+function buildWorkerEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const key of WORKER_ENV_ALLOWLIST) {
+    const value = process.env[key]
+    if (value !== undefined) env[key] = value
+  }
+  return env
+}
+
 function resolveWorkerPath(): string {
   return fileURLToPath(new URL('./worker.js', import.meta.url))
+}
+
+/**
+ * The worker must be able to re-exec the Node interpreter under Landlock.
+ * nvm/asdf/homebrew installs live outside the hardcoded /usr //bin grants, so
+ * always merge process.execPath (and its bin dir for PATH lookup) into the
+ * read+execute set — otherwise run_command dies with EACCES on `node`.
+ */
+function withNodeToolchain(paths: readonly string[]): string[] {
+  const nodeBin = process.execPath
+  const nodeBinDir = dirname(nodeBin)
+  const merged = new Set(paths)
+  merged.add(nodeBin)
+  merged.add(nodeBinDir)
+  return [...merged]
 }
 
 function resolveSandboxConfig(projectDir: string, allowUnenforced: boolean): SandboxConfig {
@@ -55,11 +90,19 @@ function resolveSandboxConfig(projectDir: string, allowUnenforced: boolean): San
         fileRules: [...loaded.fileRules],
         defaultPermissions: { ...loaded.defaultPermissions },
         allowedTools: loaded.allowedTools ? [...loaded.allowedTools] : undefined,
-        readExecutePaths: [...loaded.readExecutePaths],
+        readExecutePaths: withNodeToolchain(loaded.readExecutePaths),
         readWritePaths: [...loaded.readWritePaths],
       })
     }
-    return loaded as SandboxConfig
+    return createSandboxConfig({
+      projectDir,
+      allowUnenforced: loaded.allowUnenforced,
+      fileRules: [...loaded.fileRules],
+      defaultPermissions: { ...loaded.defaultPermissions },
+      allowedTools: loaded.allowedTools ? [...loaded.allowedTools] : undefined,
+      readExecutePaths: withNodeToolchain(loaded.readExecutePaths),
+      readWritePaths: [...loaded.readWritePaths],
+    })
   }
   // No project config: grant full in-project access. The OS sandbox confines
   // the worker; app-level task permissions (parent) gate which paths each task
@@ -68,6 +111,7 @@ function resolveSandboxConfig(projectDir: string, allowUnenforced: boolean): San
     projectDir,
     allowUnenforced,
     defaultPermissions: { read: true, write: true, edit: true, delete: true },
+    readExecutePaths: withNodeToolchain([]),
   })
 }
 
@@ -80,14 +124,16 @@ export async function launchSandboxSession(
   sessionId: string,
   options: LaunchSandboxOptions = {},
 ): Promise<SandboxSession> {
-  const allowUnenforced = options.allowUnenforced ?? true
+  const allowUnenforced = options.allowUnenforced ?? false
+  const requireEnforced = options.requireEnforced ?? !allowUnenforced
   const timeoutMs = options.timeoutMs ?? 15_000
   const config = resolveSandboxConfig(projectDir, allowUnenforced)
   const job: LaunchJob = buildLaunchJob(config, sessionId)
 
   const child: ChildProcess = fork(resolveWorkerPath(), [], {
+    cwd: projectDir,
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-    env: { ...process.env },
+    env: buildWorkerEnv(),
   })
 
   let taskPermissionLookup: ((path: string) => TaskFilePermissions | null) | null = null
@@ -162,7 +208,7 @@ export async function launchSandboxSession(
 
   const report = await reportPromise
 
-  if (options.requireEnforced && !report.enforced) {
+  if (requireEnforced && !report.enforced) {
     child.kill('SIGTERM')
     throw new Error(`Sandbox not enforced: ${report.mechanism}`)
   }
@@ -176,7 +222,7 @@ export async function launchSandboxSession(
           const op =
             tool === 'read_file'
               ? 'read'
-              : tool === 'write_file'
+              : tool === 'write_file' || tool === 'create_dir'
                 ? 'write'
                 : tool === 'edit_file'
                   ? 'edit'

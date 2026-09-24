@@ -11,6 +11,7 @@ const {
   writeEnvKey,
   findEnvPath,
   parseSetPair,
+  resolveApiKeyForModel,
   resolveDefaultModel,
   readEnvFile,
 } = await import(envUrl)
@@ -72,6 +73,18 @@ test('resolveDefaultModel prefers VAJRA_MODEL then DEFAULT_MODEL', () => {
     resolveDefaultModel({}),
     'openai/gpt-4o-mini',
   )
+})
+
+test('resolveApiKeyForModel selects provider-specific credentials', () => {
+  const env = {
+    OPENROUTER_API_KEY: 'or-key',
+    OPENCODE_API_KEY: 'oc-key',
+  }
+  assert.equal(resolveApiKeyForModel('openai/gpt-4o', undefined, env), 'or-key')
+  assert.equal(resolveApiKeyForModel('zen/mimo-v2.5-free', undefined, env), 'oc-key')
+  assert.equal(resolveApiKeyForModel('go/mimo-v2.5', undefined, env), 'oc-key')
+  assert.equal(resolveApiKeyForModel('zen/mimo-v2.5-free', 'explicit', env), 'explicit')
+  assert.equal(resolveApiKeyForModel('openai/gpt-4o', undefined, {}), undefined)
 })
 
 test('readEnvFile ignores comments and blanks', () => {

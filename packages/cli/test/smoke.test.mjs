@@ -28,6 +28,13 @@ test('vajra --help lists core commands', async () => {
   assert.match(stdout, /config/)
 })
 
+test('vajra run --help documents explicit unenforced opt-in', async () => {
+  const { stdout } = await execFileAsync(process.execPath, [cliEntry, 'run', '--help'], {
+    timeout: 10000,
+  })
+  assert.match(stdout, /--allow-unenforced/)
+})
+
 test('parseProposePlanArgs-style plan shape is reachable via protocol schemas', async () => {
   const protocolUrl = pathToFileURL(
     join(import.meta.dirname, '..', '..', 'protocol', 'dist', 'index.js'),

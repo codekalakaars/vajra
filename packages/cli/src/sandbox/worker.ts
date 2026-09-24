@@ -48,7 +48,7 @@ function checkAlwaysOn(
     ? path.slice(projectDir.length + 1)
     : path
 
-  if (tool === 'write_file' || tool === 'edit_file') {
+  if (tool === 'write_file' || tool === 'edit_file' || tool === 'create_dir') {
     if (!defaultPermissions.write && !defaultPermissions.edit) {
       return `Access denied: write not allowed for '${relative}'`
     }

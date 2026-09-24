@@ -11,6 +11,7 @@ let session
 before(async () => {
   projectDir = mkdtempSync(join(tmpdir(), 'vajra-sandbox-'))
   writeFileSync(join(projectDir, 'hello.txt'), 'hello world\n', 'utf-8')
+  process.env.VAJRA_TEST_WORKER_LEAK = 'super-secret-worker-value'
   session = await launchSandboxSession(projectDir, 'test-session', {
     allowUnenforced: true,
     timeoutMs: 15_000,
@@ -19,6 +20,7 @@ before(async () => {
 
 after(() => {
   session?.close()
+  delete process.env.VAJRA_TEST_WORKER_LEAK
   if (projectDir) rmSync(projectDir, { recursive: true, force: true })
 })
 
@@ -34,6 +36,26 @@ test('read_file round-trips over IPC', async () => {
     path: join(projectDir, 'hello.txt'),
   })
   assert.match(content, /hello world/)
+})
+
+test('worker runs with the project directory as cwd', async () => {
+  const result = await session.handle.callTool('run_command', {
+    command: 'node -e "process.stdout.write(process.cwd())"',
+    timeoutMs: 10_000,
+  })
+  const parsed = JSON.parse(result)
+  assert.equal(parsed.exitCode, 0)
+  assert.equal(parsed.stdout, projectDir)
+})
+
+test('worker does not inherit arbitrary parent environment secrets', async () => {
+  const result = await session.handle.callTool('run_command', {
+    command: 'node -e "process.stdout.write(process.env.VAJRA_TEST_WORKER_LEAK || \'missing\')"',
+    timeoutMs: 10_000,
+  })
+  const parsed = JSON.parse(result)
+  assert.equal(parsed.exitCode, 0)
+  assert.equal(parsed.stdout, 'missing')
 })
 
 test('parent enforces task permissions before forwarding', async () => {

@@ -305,7 +305,7 @@ async function validatePlan(
   return warnings
 }
 
-function parseProposePlanArgs(raw: unknown): DeveloperPlan {
+export function parseProposePlanArgs(raw: unknown): DeveloperPlan {
   const args = raw as {
     tasks: Array<{
       title: string

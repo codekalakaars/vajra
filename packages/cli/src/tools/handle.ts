@@ -1,4 +1,5 @@
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { readdirSync } from 'node:fs'
 import type { LaunchHandle } from '../agent/developer.js'
 import type { PermissionsConfig } from '@codekalakaars/vajra-protocol'
 import {
@@ -111,13 +112,25 @@ export function tokenizeCommand(command: string): TokenizeResult {
 }
 
 function loadProjectSecrets(projectDir: string): EnvVar[] {
+  const secrets: EnvVar[] = []
   try {
-    const secrets = loadEnvFile(join(projectDir, '.env'))
-    if (Array.isArray(secrets)) return secrets
+    const names = readdirSync(projectDir, { withFileTypes: true })
+      .filter(entry => entry.isFile() && isMaskedName(entry.name))
+      .map(entry => entry.name)
+      .sort()
+
+    for (const name of names) {
+      try {
+        const loaded = loadEnvFile(join(projectDir, name))
+        if (Array.isArray(loaded)) secrets.push(...loaded)
+      } catch {
+        // unreadable env file is skipped
+      }
+    }
   } catch {
-    // missing .env is fine
+    // missing project dir is handled by callers
   }
-  return []
+  return secrets
 }
 
 function c1(
