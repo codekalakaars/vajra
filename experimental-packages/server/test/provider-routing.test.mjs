@@ -46,9 +46,13 @@ test('key order in the map does not decide the key', () => {
   assert.equal(createProvider('zen/kimi-k3', reversed).apiKey, keys.zen)
 })
 
-test('a provider with no key of its own falls back to the openrouter key', () => {
-  const { apiKey } = createProvider('zen/kimi-k3', { openrouter: keys.openrouter })
-  assert.equal(apiKey, keys.openrouter)
+test('a provider with no key of its own does not fall back to another provider key', () => {
+  // Intentional security change: sending a zen model with the openrouter
+  // key would authenticate the wrong account against the wrong API.
+  assert.throws(
+    () => createProvider('zen/kimi-k3', { openrouter: keys.openrouter }),
+    /No API key found for provider 'zen'/,
+  )
 })
 
 test('no usable key is an error, not a silent empty string', () => {

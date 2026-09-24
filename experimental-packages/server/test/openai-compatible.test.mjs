@@ -183,11 +183,13 @@ test('a caller abort stops the request', async () => {
 
   await withServer(handler, async (provider) => {
     const caller = new AbortController()
-    const pending = provider.streamChat({ ...request, signal: caller.signal }, () => {
-      caller.abort(new Error('project stopped'))
-    })
+    // Abort outside onTextDelta: deltas are buffered until the stream
+    // completes successfully, so a hang mid-stream never fires the callback.
+    // The abort must cancel the in-flight request itself.
+    const pending = provider.streamChat({ ...request, signal: caller.signal }, () => {})
+    setTimeout(() => caller.abort(new Error('project stopped')), 50)
 
-    await assert.rejects(pending)
+    await assert.rejects(pending, /cancelled|project stopped/i)
   })
 })
 

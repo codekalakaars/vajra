@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import dotenv from 'dotenv'
 import { openDb, reconcileStaleSessions } from './db/client.js'
-import { createAppServer } from './ws/server.js'
+import { createAppServer, getAuthToken } from './ws/server.js'
 import type { ProjectLauncher } from './project/manager.js'
 import { forkProjectLauncher } from './project/launcher.js'
 import { componentLogger } from './logger.js'
@@ -33,6 +33,8 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 
 export interface RunningServer {
   port: number
+  /** WS auth token — generated when VAJRA_AUTH_TOKEN is unset. */
+  authToken: string
   close(): Promise<void>
 }
 
@@ -63,6 +65,7 @@ export function startServer(options: StartOptions = {}): Promise<RunningServer> 
 
       resolve({
         port,
+        authToken: getAuthToken(),
         close: () =>
           new Promise((res) => {
             for (const client of wss.clients) client.terminate()

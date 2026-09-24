@@ -31,6 +31,11 @@ if (!AUTH_TOKEN) {
   log.warn({ token: AUTH_TOKEN }, 'No VAJRA_AUTH_TOKEN set — generated a temporary token for this session')
 }
 
+/** The token clients must present (header or ?token=). Exported for tests and embedders. */
+export function getAuthToken(): string {
+  return AUTH_TOKEN!
+}
+
 /**
  * Constant-time string comparison to prevent timing attacks.
  */
