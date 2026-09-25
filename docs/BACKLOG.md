@@ -10,11 +10,10 @@ Committed on `feat/cli-agent-v1-config` at `5fb801b`; `main` is still at
 `experimental-packages` branch at `bb732b2` — see "Regression bar" for what that
 means for the server suite.
 
-**The remaining substantial work is the worker pool (§1) plus the two open
-hazards in [CONCURRENCY_HAZARDS.md](CONCURRENCY_HAZARDS.md) — concurrent shell
-commands (P0) and lock-blocked tasks holding worker slots (P1).** Six of the
-eight hazards are addressed; §3 below carries the two that are not. This file
-holds everything else.
+**The concurrency hazard sweep is complete — all eight hazards in
+[CONCURRENCY_HAZARDS.md](CONCURRENCY_HAZARDS.md) are addressed, each with the
+mechanism that holds.** The remaining substantial work is the worker pool (§1).
+This file holds everything else.
 
 **Already done — do not redo:** per-task sandbox scoping, `search_content` +
 `run_baseline`, the context-budget fix (coverage 7.5% → 42%), concurrent task
@@ -24,11 +23,13 @@ persistence v1 **and v2 with resume + staleness gate**, the Manager
 heartbeats, all three renderers), **parallel tool calls within a message**, the
 TUI Defaults screen, and the `agent-core` move into `packages/`.
 
-**Fixed in the hazard sweep — do not redo:** worker respawn on crash
+**Fixed in the hazard sweep — do not redo:** `run_command` serialisation for
+shared resources (`withCommandResourceLock`), worker respawn on crash
 (`launch.ts`), the parallel-safety guarantee actually consumed
-(`plan-validate.ts`), validation-server port allocation (`tasks/server.ts`),
-per-file hashing in `persist`, read-cache invalidation after `run_command`
-(`handle.ts`), and a git re-read in the staleness gate (`session/resume.ts`).
+(`plan-validate.ts`), admission gated on lock availability (`canAdmitTask`),
+validation-server port allocation (`tasks/server.ts`), per-file hashing in
+`persist`, read-cache invalidation after `run_command` (`handle.ts`), and a git
+re-read in the staleness gate (`session/resume.ts`).
 
 **Decided, do not re-litigate:** the index budget saturating at 32,000 chars for
 every window ≥128k. Measured on this repo after the experimental split: the whole
@@ -82,24 +83,6 @@ interrupt unrelated in-flight work before the replacement worker is ready. A
 worker pool would provide per-task isolation and resource limits.
 
 ---
-
-## 3 · Open hazards
-
-Two of the eight in [CONCURRENCY_HAZARDS.md](CONCURRENCY_HAZARDS.md) are still
-open. Both were re-checked against the code on 2026-09-26 and neither has a fix.
-
-- **Concurrent shell commands contend on shared external state — P0.** Nothing
-  serialises `run_command`: `master.ts:98` and `execute.ts:390` dispatch straight
-  through, and `execute.ts:319` runs a tool-call group under `Promise.all`, so two
-  commands can overlap *inside* one task as well as across tasks. Concurrent
-  `pnpm install` corrupts `node_modules`; a second `git` command fails on
-  `.git/index.lock`. A per-project command lock in the tool handle is the
-  smallest fix; the plan schema actively encourages git in `rollback`.
-- **Tasks blocked on locks occupy worker slots — P1.** A task is admitted, then
-  blocks on `await fileLocks.acquireOrWait(...)` at `service.ts:683`, so it holds
-  its slot while waiting. With `maxWorkers: 4`, four tasks contending for one
-  path stall the pool. Admit only tasks whose locks are free, or release the slot
-  while waiting.
 
 ## 2 · Small open items
 
