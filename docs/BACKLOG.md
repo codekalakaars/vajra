@@ -4,7 +4,7 @@ Completed work is removed from these docs; the code and its tests are the record
 
 **State:** all suites green — root 31 pass/1 skipped, protocol 11/11, sandbox
 69/69, **CLI 272/272**. Every package typechecks. Everything is committed and
-pushed: `main` is at `025c93e`, and the experimental packages (`server`, `web`,
+pushed: `main` is at `682fc8f`, and the experimental packages (`server`, `web`,
 `programmatic-video`) are parked on the `experimental-packages` branch at
 `bb732b2` — see "Regression bar" for what that means for the server suite.
 

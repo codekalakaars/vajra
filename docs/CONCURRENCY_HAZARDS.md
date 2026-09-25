@@ -3,9 +3,9 @@
 What can go wrong now that tasks execute in parallel, found by reading the
 implementation rather than by listing generic dangers. Every claim cites code.
 
-Researched against `main` at `025c93e`, after Batches 1A–1D, 2A, 3A/3B, 4A, 6D
-and 6E landed. Every `file.ts:line` citation below refers to that commit — if one
-no longer points at the quoted code, the hazard has moved, not disappeared.
+Researched against `main` at `025c93e`; every citation re-verified against
+`682fc8f`, and all of them still point at the quoted code. If one stops matching,
+the hazard has moved, not disappeared.
 Concurrency is live: `master.ts:226-242` admits up to `maxWorkers` tasks and
 `service.ts` runs each through `runTaskOnce`.
 
@@ -79,10 +79,11 @@ An OOM from one runaway command takes the whole session with it.
 1. **Respawn and replay.** On unexpected exit, relaunch the worker, re-apply the
    sandbox, and fail only the calls that were in flight. Cheap, and turns a
    session-ending event into N task failures.
-2. **Worker pool** (Batch 5 in the backlog). Per-task processes give real
+2. **Worker pool** ([BACKLOG.md](BACKLOG.md) §1). Per-task processes give real
    isolation and per-task resource limits. Previously marked "measure first" on
    throughput grounds — this is the argument that actually justifies it, and it
-   is about blast radius, not speed.
+   is about blast radius, not speed. The `WorkerPool` source is no longer on
+   `main`: read it off the `experimental-packages` branch (`bb732b2`).
 
 ---
 
