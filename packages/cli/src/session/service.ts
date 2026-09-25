@@ -18,14 +18,18 @@ import { streamChatCompletion, type ChatMessage } from '../agent/chat.js'
 import { evaluateSkipIf } from '../tasks/skip.js'
 import { computeTaskPermissions, normalizeProjectPath } from '../tasks/permissions.js'
 import { executeTask } from '../tasks/execute.js'
-import { createToolHandle } from '../tools/handle.js'
+import { needsServer } from '../tasks/server.js'
+import { createToolHandle, tokenizeCommand, type ToolCache } from '../tools/handle.js'
 import { finalReport } from '../tasks/report.js'
 import { isSupportedModel } from '../env.js'
 import { launchSandboxSession, type SandboxSession } from '../sandbox/launch.js'
 import {
   SESSION_SCHEMA_VERSION,
+  DIRECTORY_FILE_HASH,
+  MISSING_FILE_HASH,
+  UNREADABLE_FILE_HASH,
   appendMessage,
-  hashFile,
+  inspectFile,
   loadMessages,
   loadSession,
   loadSummaryIndexCache,
@@ -54,6 +58,57 @@ export function resolveMaxWorkers(override?: number): number {
   const candidate = override === undefined ? configured : override
   if (!Number.isFinite(candidate)) return configured
   return Math.max(1, Math.floor(candidate))
+}
+
+const COMMAND_RESOURCE_PATHS: Record<string, string> = {
+  git: 'resource:git',
+  npm: 'resource:node_modules',
+  npx: 'resource:node_modules',
+  pnpm: 'resource:node_modules',
+  yarn: 'resource:node_modules',
+  cargo: 'resource:cargo',
+}
+
+export function commandResourcePath(command: string, argv?: readonly string[]): string | null {
+  let executable: string
+  if (argv?.[0]) {
+    executable = argv[0]
+  } else {
+    const tokenized = tokenizeCommand(command)
+    if (!tokenized.ok) return null
+    executable = tokenized.argv[0]
+  }
+  const name = (executable.split(/[\\/]/).pop() ?? '').toLowerCase()
+  return COMMAND_RESOURCE_PATHS[name] ?? null
+}
+
+export function withCommandResourceLock(
+  handle: LaunchHandle,
+  locks: FileLockManager,
+  owner: string,
+): LaunchHandle {
+  let nextLockId = 1
+  return {
+    callTool: async (tool, args) => {
+      if (tool !== 'run_command' || (typeof args !== 'object' || args === null)) {
+        return handle.callTool(tool, args)
+      }
+      const command = String((args as { command?: unknown }).command ?? '')
+      const argv = Array.isArray((args as { argv?: unknown }).argv)
+        ? (args as { argv: unknown[] }).argv.map(String)
+        : undefined
+      const path = commandResourcePath(command, argv)
+      if (path === null) return handle.callTool(tool, args)
+
+      const lockOwner = `${owner}:command-resource:${nextLockId++}`
+      await locks.acquireOrWait([path], lockOwner, 'write')
+      try {
+        return await handle.callTool(tool, args)
+      } finally {
+        locks.releaseFiles([path], lockOwner)
+      }
+    },
+  }
 }
 
 /**
@@ -161,6 +216,7 @@ export async function runSession(
     return { exitCode: 1, interrupted: false, exited: false }
   }
 
+  const toolCache: ToolCache = { read: new Map(), generation: 0 }
   const abortSignal = options.signal ?? new AbortController().signal
   const isInterrupted = () => abortSignal.aborted
   let exited = false
@@ -179,6 +235,7 @@ export async function runSession(
   const createdAt = Date.now()
   const registry = new AgentRegistry()
   const fileLocks = new FileLockManager()
+  const commandResourceLocks = new FileLockManager()
   // D1: ChangeHistory always records against the resolved projectDir.
   const changeHistory = new ChangeHistory(projectDir)
 
@@ -230,7 +287,7 @@ export async function runSession(
     return { exitCode: code, interrupted: isInterrupted(), exited }
   }
 
-  const developerHandle: LaunchHandle = sandbox?.handle ?? createToolHandle(projectDir)
+  const developerHandle: LaunchHandle = sandbox?.handle ?? createToolHandle(projectDir, { cache: toolCache })
 
   // The port requires onAgentEvent, but JavaScript test doubles and embedders
   // may not implement it. Observability must never be able to fail a run.
@@ -515,15 +572,31 @@ export async function runSession(
       const summaryFingerprint = repoFingerprint(projectDir)
       const gitState = readGitState(projectDir)
 
-      /** Every path any task reads or writes — the staleness gate's watch set. */
       const allTaskFilePaths = (): string[] => {
         const paths = new Set<string>()
         for (const t of queue.getAllTasks()) {
           for (const p of [...t.readFile, ...t.writeFile, ...t.deleteFile, ...t.createDir]) {
-            paths.add(p)
+            paths.add(normalizeProjectPath(projectDir, p))
           }
         }
         return [...paths]
+      }
+      const taskFilePaths = (task: TaskState): string[] => [
+        ...task.readFile,
+        ...task.writeFile,
+        ...task.deleteFile,
+        ...task.createDir,
+      ].map(path => normalizeProjectPath(projectDir, path))
+      const fileHashes: Record<string, string> = {}
+      let fileHashesInitialized = false
+      const updateFileHashes = (paths: readonly string[]): void => {
+        for (const path of new Set(paths)) {
+          const state = inspectFile(resolve(projectDir, path))
+          if (state.kind === 'file') fileHashes[path] = state.hash
+          else if (state.kind === 'directory') fileHashes[path] = DIRECTORY_FILE_HASH
+          else if (state.kind === 'missing') fileHashes[path] = MISSING_FILE_HASH
+          else fileHashes[path] = UNREADABLE_FILE_HASH
+        }
       }
       ui.info(`Concurrency: ${maxWorkers} task${maxWorkers === 1 ? '' : 's'} at a time`)
 
@@ -533,15 +606,15 @@ export async function runSession(
       /** The worker agent each task is running under, for terminal transitions. */
       const taskAgents = new Map<string, string>()
 
-      /**
-       * P4/P5: flush the whole session atomically. Every terminal transition
-       * is written before the next task is scheduled, so a crash can never
-       * lose a task that already finished. v2 also records the config a
-       * resume must reproduce, the phase, and a hash per touched file so the
-       * staleness gate can tell the tree apart from the one we planned for.
-       */
-      const persist = (): void => {
+      const persist = (task?: TaskState): void => {
         try {
+          if (!fileHashesInitialized) {
+            updateFileHashes(allTaskFilePaths())
+            fileHashesInitialized = true
+          } else if (task) {
+            updateFileHashes(taskFilePaths(task))
+          }
+
           const tasks: Record<string, PersistedTask> = {}
           for (const t of queue.getAllTasks()) {
             const entry: PersistedTask = { status: t.status }
@@ -560,12 +633,6 @@ export async function runSession(
             tasks[t.id] = entry
           }
 
-          const fileHashes: Record<string, string> = {}
-          for (const path of allTaskFilePaths()) {
-            const hash = hashFile(resolve(projectDir, path))
-            if (hash !== null) fileHashes[path] = hash
-          }
-
           saveSession({
             version: SESSION_SCHEMA_VERSION,
             sessionId,
@@ -582,7 +649,7 @@ export async function runSession(
             plan,
             evidence: null,
             tasks,
-            fileHashes,
+            fileHashes: { ...fileHashes },
             summaryFingerprint,
             ...(gitState ? { git: gitState } : {}),
           })
@@ -607,20 +674,64 @@ export async function runSession(
         let agent: AgentState | null = null
         let dirty = false
         try {
+          const allTaskFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
+          const allTaskPaths = [
+            ...allTaskFiles,
+            ...task.createDir,
+          ].map(path => normalizeProjectPath(projectDir, path))
+          // D4: wait for locks instead of permanently skipping on conflict.
+          await fileLocks.acquireOrWait(allTaskPaths, task.id, 'write')
+
+          // D2: track dirty-set via onMutate rather than changeHistory.hasChanges
+          // alone (baseline records can make hasChanges unreliable across rollbacks).
+          const permissions = computeTaskPermissions(task, projectDir)
+          const permissionLookup = (path: string) =>
+            permissions[normalizeProjectPath(projectDir, path)] ?? null
+
+          let taskHandle: LaunchHandle
+          if (sandbox) {
+            taskHandle = sandbox.handleForTask(task.id, permissionLookup, () => {
+              dirty = true
+            })
+          } else {
+            taskHandle = createToolHandle(projectDir, {
+              cache: toolCache,
+              permissions: path => {
+                const key = normalizeProjectPath(projectDir, path)
+                return permissions[key] ?? { read: false, write: false, edit: false, delete: false }
+              },
+              onMutate: () => {
+                dirty = true
+              },
+            })
+          }
+          taskHandle = withCommandResourceLock(taskHandle, commandResourceLocks, task.id)
+
           if (task.skipIf && task.skipIf.length > 0) {
-            const shouldSkip = await evaluateSkipIf(task.skipIf, projectDir)
+            const shouldSkip = await evaluateSkipIf(
+              task.skipIf,
+              projectDir,
+              async (command, args) => {
+                const output = await taskHandle.callTool('run_command', {
+                  command: [command, ...args].join(' '),
+                  argv: [command, ...args],
+                  timeoutMs: 30_000,
+                })
+                try {
+                  const parsed = JSON.parse(String(output)) as { exitCode?: unknown }
+                  return { code: typeof parsed.exitCode === 'number' ? parsed.exitCode : -1 }
+                } catch {
+                  return { code: -1 }
+                }
+              },
+            )
             if (shouldSkip) {
               queue.skipTask(task.id)
-              persist()
+              persist(task)
               ui.onTaskEvent({ type: 'skipped', title: task.title })
               return true
             }
           }
-
-          const allTaskFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
-          const allTaskPaths = [...allTaskFiles, ...task.createDir]
-          // D4: wait for locks instead of permanently skipping on conflict.
-          await fileLocks.acquireOrWait(allTaskPaths, task.id, 'write')
 
           agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
           taskAgents.set(task.id, agent.id)
@@ -643,30 +754,6 @@ export async function runSession(
             title: task.title,
           })
 
-          // D2: track dirty-set via onMutate rather than changeHistory.hasChanges
-          // alone (baseline records can make hasChanges unreliable across rollbacks).
-          const permissions = computeTaskPermissions(task, projectDir)
-          const permissionLookup = (path: string) =>
-            permissions[normalizeProjectPath(projectDir, path)] ?? null
-
-          let taskHandle: LaunchHandle
-          if (sandbox) {
-            // P1: per-task scope — two tasks in flight never share a lookup.
-            taskHandle = sandbox.handleForTask(task.id, permissionLookup, () => {
-              dirty = true
-            })
-          } else {
-            taskHandle = createToolHandle(projectDir, {
-              permissions: path => {
-                const key = normalizeProjectPath(projectDir, path)
-                return permissions[key] ?? { read: false, write: false, edit: false, delete: false }
-              },
-              onMutate: () => {
-                dirty = true
-              },
-            })
-          }
-
           for (const filePath of allTaskFiles) {
             await changeHistory.recordBefore(task.id, filePath)
           }
@@ -676,7 +763,7 @@ export async function runSession(
           if (isInterrupted()) {
             queue.returnToPending(task.id)
             if (agent) registry.updateStatus(agent.id, 'pending')
-            persist()
+            persist(task)
             return true
           }
 
@@ -706,7 +793,7 @@ export async function runSession(
           if (success) {
             queue.completeTask(task.id, true)
             registry.updateStatus(agent.id, 'done')
-            persist()
+            persist(task)
             ui.onTaskEvent({ type: 'done', title: task.title })
             return true
           } else {
@@ -741,7 +828,7 @@ export async function runSession(
             ui.onTaskEvent({ type: 'failed', title: task.title })
           }
           if (agent) registry.updateStatus(agent.id, 'failed')
-          persist()
+          persist(task)
           ui.error(`Task failed: ${task.title} — ${message}`)
           return false
         } finally {
@@ -767,7 +854,11 @@ export async function runSession(
           // Honour the plan's own rollback commands first — without this the
           // `rollback` field is decorative.
           if (task.rollback && task.rollback.length > 0) {
-            const handle = sandbox?.handle ?? createToolHandle(projectDir)
+            const handle = withCommandResourceLock(
+              sandbox?.handle ?? createToolHandle(projectDir, { cache: toolCache }),
+              commandResourceLocks,
+              task.id,
+            )
             const result = await runRollbackCommands(task.rollback, handle)
             if (result.failed.length > 0) {
               ui.warning(
@@ -793,13 +884,13 @@ export async function runSession(
           // The Manager's reason is a fallback: a real error from the attempt
           // is more useful to whoever reads the record.
           if (!taskErrors.has(task.id)) taskErrors.set(task.id, reason)
-          persist()
+          persist(task)
         },
         parkTask: async task => {
           queue.returnToPending(task.id)
           const agentId = taskAgents.get(task.id)
           if (agentId) registry.updateStatus(agentId, 'pending')
-          persist()
+          persist(task)
         },
         rebaselineTask: async task => {
           // Re-baseline so the next attempt starts from the restored files.
@@ -808,6 +899,23 @@ export async function runSession(
           }
         },
         onTaskEvent: event => ui.onTaskEvent(event),
+        canAdmitTask: task => {
+          const filePaths = [...task.readFile, ...task.writeFile, ...task.deleteFile, ...task.createDir]
+            .map(path => normalizeProjectPath(projectDir, path))
+          const resourcePaths = [
+            ...task.rollback,
+            ...task.validation,
+            ...task.skipIf
+              .filter(condition => /^command passes:/i.test(condition.trim()))
+              .map(condition => condition.trim().replace(/^command passes:/i, '').trim()),
+          ]
+            .map(command => commandResourcePath(command))
+            .filter((path): path is string => path !== null)
+          const serverPath = needsServer(task.validation) ? '<resource:validation-server>' : null
+          return fileLocks.canAcquire(filePaths, 'write', task.id) &&
+            commandResourceLocks.canAcquire(resourcePaths, 'write', task.id) &&
+            (serverPath === null || fileLocks.canAcquire([serverPath], 'write', task.id))
+        },
         ...(options.useMasterLlm
           ? {
               decide: (task, context) =>

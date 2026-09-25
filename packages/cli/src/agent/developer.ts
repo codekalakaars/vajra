@@ -308,7 +308,7 @@ function lower(task: PlannedTask): PlannedTask {
  * - Requires model-supplied unique task `id`s (falls back to `task-N` only when absent).
  * - Unknown `dependsOn` ids are a tool error (not silently filtered).
  */
-export function parseProposePlanArgs(raw: unknown): ParsePlanResult {
+export function parseProposePlanArgs(raw: unknown, projectDir?: string): ParsePlanResult {
   const args = raw as {
     tasks?: Array<{
       id?: string
@@ -389,16 +389,20 @@ export function parseProposePlanArgs(raw: unknown): ParsePlanResult {
     }
   }
 
-  // Compute parallel execution waves from the dependency graph. planParallel
-  // also reports write-set conflicts; the caller rejects those before parse.
-  const independentGroups = planParallel(tasks).waves
+  const parallel = planParallel(tasks, projectDir)
+  if (parallel.errors.length > 0) {
+    return {
+      ok: false,
+      error: `Plan rejected:\n- ${parallel.errors.join('\n- ')}`,
+    }
+  }
 
   return {
     ok: true,
     plan: {
       tasks,
-      independentGroups,
-      estimatedWorkers: Math.max(1, ...independentGroups.map(g => g.length)),
+      independentGroups: parallel.waves,
+      estimatedWorkers: Math.max(1, ...parallel.waves.map(g => g.length)),
     },
   }
 }
@@ -966,7 +970,7 @@ export async function developerConversationTurn(
         const rejection: string[] = []
         if (structured) {
           const evidence = buildEvidence(filesRead, baselinesByCommand, proposed.data.tasks, projectDir)
-          const validation = validatePlan(proposed.data.tasks, evidence)
+          const validation = validatePlan(proposed.data.tasks, evidence, projectDir)
           if (!validation.ok) rejection.push(...validation.errors)
         }
         const contractCheck = validateContracts(proposed.data.tasks, proposed.data.contracts)
@@ -982,7 +986,7 @@ export async function developerConversationTurn(
           continue
         }
 
-        const parsedPlan = parseProposePlanArgs(parsed)
+        const parsedPlan = parseProposePlanArgs(parsed, projectDir)
         if (!parsedPlan.ok) {
           messages.push({
             role: 'tool',
@@ -1001,7 +1005,17 @@ export async function developerConversationTurn(
         }
         plan.tasks = detectAndRemoveCircularDeps(plan.tasks)
         enrichHarnessEvidence(plan.tasks, filesRead, baselinesByCommand, projectDir)
-        const warnings = [...planParallel(proposed.data.tasks).warnings, ...contractCheck.warnings]
+        const parallel = planParallel(plan.tasks, projectDir)
+        if (parallel.errors.length > 0) {
+          messages.push({
+            role: 'tool',
+            content: `Plan rejected:\n- ${parallel.errors.join('\n- ')}`,
+            tool_call_id: toolCall.id,
+          })
+          emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
+          continue
+        }
+        const warnings = [...parallel.warnings, ...contractCheck.warnings]
         messages.push({
           role: 'tool',
           content:
