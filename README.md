@@ -8,7 +8,7 @@ so they can work on your code without reading your secrets.
 | Package | Description |
 | --- | --- |
 | `@codekalakaars/vajra-core` | Rust napi-rs addon — file/process/env/path primitives, sandbox enforcement |
-| `@codekalakaars/vajra-sandbox` | Standalone TypeScript sandbox — file locks, permissions, daemon, CLI |
+| `@codekalakaars/vajra-sandbox` | Standalone TypeScript sandbox — file locks, permissions, config, CLI |
 | `@codekalakaars/vajra-protocol` | Shared RPC types, tool definitions, push event shapes |
 | `@codekalakaars/vajra-cli` | Shipping product — multi-agent task execution from the terminal |
 | `@codekalakaars/vajra-agent-core` | Shared pure agent helpers (summary/tree/tools) used by the CLI |
