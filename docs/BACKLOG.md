@@ -20,6 +20,14 @@ persistence v1 **and v2 with resume + staleness gate**, the Manager
 heartbeats, all three renderers), **parallel tool calls within a message**, the
 TUI Defaults screen, and the `agent-core` move into `packages/`.
 
+**Decided, do not re-litigate:** the index budget saturating at 32,000 chars for
+every window ≥128k. Measured on this repo after the experimental split: the whole
+index renders in 10,280 chars — under a third of the cap — so a larger window
+buys nothing today. `context-budget.test.mjs` now asserts the cap is not the
+binding constraint and fails with a "revisit" message if the repo ever grows into
+it. Raising the cap is a cost decision, not a correctness one: see the prompt
+caching item below, which is why a bigger index is not free.
+
 ---
 
 ## Conventions
@@ -66,16 +74,13 @@ cheaper respawn-and-replay alternative worth trying first.
 
 ## 2 · Small open items
 
-- **`deriveIndexBudget` saturates.** 128k, 200k and 256k context windows all
-  return `MAX_INDEX_BUDGET_CHARS` (32,000) — verified. Model-awareness
-  differentiates nothing among current models. Revisit once you know whether 42%
-  coverage at ~19k chars of prompt is the right trade.
-- **Two tests reach into `dist/` by path** — `test/summary-limits.test.mjs` and
-  `test/context-budget.test.mjs`. They worked around a barrel that now exports
-  the symbols they need, so they could import by package name.
-- **Prompt caching is cancelled, not solved.** The OpenRouter removal took
-  `cache_control` with it, and `chat.ts` has no caching. Every round-trip resends
-  the full prefix — now ~19k chars of repo context, up from the ~3.5k measured
-  before the coverage fix. If the zen gateway does not cache long prefixes
-  server-side, that cost is being paid in full. Worth measuring before assuming
-  it is free.
+- **Prompt caching is cancelled, not solved — and now measured.** `chat.ts`
+  carries no `cache_control` (the OpenRouter removal took it), so nothing asks
+  the gateway to cache. Measured on this repo: the resent prefix is **19,307
+  chars ≈ 4,827 tokens** (10,280 summary + 9,027 tree), and a developer turn
+  runs up to 60 iterations — roughly 290k prompt tokens per turn if the gateway
+  caches nothing. What is *not* known is whether the zen gateway caches long
+  prefixes implicitly. The experiment: two identical large requests, compare
+  `usage.prompt_tokens` in the second against the first. That needs a live call
+  against the configured key, so it is waiting on a decision to spend the credit
+  rather than on more code.
