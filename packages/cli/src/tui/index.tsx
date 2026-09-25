@@ -2,12 +2,32 @@ import React, { useState, useRef } from 'react'
 import { render, Box, Text, useInput, useApp } from 'ink'
 import { resolve } from 'node:path'
 import { existsSync, statSync } from 'node:fs'
-import { listAvailableModels, loadEnvIntoProcess, normalizeModelId, resolveDefaultModel } from '../env.js'
+import {
+  DEFAULT_DIR_KEY,
+  DEFAULT_MODEL_KEY,
+  isPersistedDefault,
+  listAvailableModels,
+  loadEnvIntoProcess,
+  normalizeModelId,
+  resolveDefaultDir,
+  resolveDefaultModel,
+  saveDefaults,
+} from '../env.js'
 import { startSession } from './session/index.js'
 
 type SpawnAction = 'run'
-type MenuKey = SpawnAction | 'model' | 'dir' | 'exit'
-type Screen = 'menu' | 'model' | 'dir'
+type MenuKey = SpawnAction | 'model' | 'dir' | 'defaults' | 'exit'
+type Screen = 'menu' | 'model' | 'dir' | 'defaults'
+
+/**
+ * Which gateway a model id routes to. Provider is not independently
+ * selectable — `resolveBaseURL` in agent/chat.ts derives it from the prefix.
+ */
+function gatewayFor(model: string): string {
+  if (model.startsWith('go/')) return 'OpenCode Zen (go)'
+  if (model.startsWith('zen/')) return 'OpenCode Zen'
+  return 'unsupported'
+}
 
 type ModelChoice =
   | { type: 'preset'; id: string; hint: string }
@@ -42,8 +62,11 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
   const [projectDir, setProjectDir] = useState(initialDir)
   const [dirDraft, setDirDraft] = useState<string | null>(null)
   const [dirError, setDirError] = useState<string | null>(null)
+  const [defaultsIdx, setDefaultsIdx] = useState(0)
+  const [defaultsError, setDefaultsError] = useState<string | null>(null)
   const menuIdxRef = useRef(0)
   const modelIdxRef = useRef(0)
+  const defaultsIdxRef = useRef(0)
   const { exit } = useApp()
 
   function select(action: SpawnAction | 'exit') {
@@ -55,8 +78,16 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
     { key: 'run', label: 'Run Agent', description: `Start an interactive session (model: ${currentModel})` },
     { key: 'model', label: 'Model', description: `Change LLM model (current: ${currentModel})` },
     { key: 'dir', label: 'Directory', description: `Change working directory (current: ${projectDir})` },
+    { key: 'defaults', label: 'Defaults', description: 'Save model and directory so they persist across restarts' },
     { key: 'exit', label: 'Exit' },
   ]
+
+  const defaultsItems = [
+    { key: 'save-both', label: 'Save model and directory as defaults' },
+    { key: 'save-model', label: `Save model only (${currentModel})` },
+    { key: 'save-dir', label: 'Save directory only' },
+    { key: 'back', label: 'Back' },
+  ] as const
 
   const availableModels = listAvailableModels()
   const modelItems: ModelChoice[] = [
@@ -77,6 +108,20 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
       setMenuMessage(`Model set to ${saved}`)
     } catch (e) {
       setModelError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  function persistDefaults(what: 'save-both' | 'save-model' | 'save-dir') {
+    try {
+      const envPath = saveDefaults({
+        model: what === 'save-dir' ? undefined : currentModel,
+        projectDir: what === 'save-model' ? undefined : projectDir,
+      })
+      setDefaultsError(null)
+      setScreen('menu')
+      setMenuMessage(`Defaults saved to ${envPath}`)
+    } catch (e) {
+      setDefaultsError(e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -101,7 +146,7 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
 
   function moveSelection(
     direction: 1 | -1,
-    items: unknown[],
+    items: readonly unknown[],
     ref: React.MutableRefObject<number>,
     setIdx: (updater: (prev: number) => number) => void,
   ) {
@@ -177,6 +222,34 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
       return
     }
 
+    if (screen === 'defaults') {
+      if (key.escape || input === 'q') {
+        setDefaultsError(null)
+        setScreen('menu')
+        return
+      }
+      if (key.ctrl && input === 'c') {
+        select('exit')
+        return
+      }
+      if (key.upArrow) {
+        setDefaultsError(null)
+        moveSelection(-1, defaultsItems, defaultsIdxRef, setDefaultsIdx)
+      } else if (key.downArrow) {
+        setDefaultsError(null)
+        moveSelection(1, defaultsItems, defaultsIdxRef, setDefaultsIdx)
+      } else if (key.return || input === '\r' || input === '\n') {
+        const choice = defaultsItems[defaultsIdxRef.current].key
+        if (choice === 'back') {
+          setDefaultsError(null)
+          setScreen('menu')
+        } else {
+          persistDefaults(choice)
+        }
+      }
+      return
+    }
+
     if (screen === 'dir') {
       if (key.escape || input === 'q') {
         setDirError(null)
@@ -215,11 +288,68 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
         setDirError(null)
         setDirDraft('')
         setScreen('dir')
+      } else if (itemKey === 'defaults') {
+        setMenuMessage(null)
+        setDefaultsError(null)
+        setDefaultsIdx(0)
+        defaultsIdxRef.current = 0
+        setScreen('defaults')
       } else {
         select(itemKey)
       }
     }
   })
+
+  if (screen === 'defaults') {
+    const modelPersisted = isPersistedDefault(DEFAULT_MODEL_KEY)
+    const dirPersisted = isPersistedDefault(DEFAULT_DIR_KEY)
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Box marginBottom={1}>
+          <Text bold color="cyan">⚡ Vajra</Text>
+          <Text color="white"> v{version} — Defaults</Text>
+        </Box>
+
+        <Box flexDirection="column" marginBottom={1}>
+          <Box>
+            <Text color="white">Model     </Text>
+            <Text color="green">{currentModel}</Text>
+            <Text color="white">{modelPersisted ? '  (saved)' : '  (this session only)'}</Text>
+          </Box>
+          <Box>
+            <Text color="white">Gateway   </Text>
+            <Text color="yellow">{gatewayFor(currentModel)}</Text>
+            <Text color="white">  (follows the model prefix)</Text>
+          </Box>
+          <Box>
+            <Text color="white">Directory </Text>
+            <Text color="green">{projectDir}</Text>
+            <Text color="white">{dirPersisted ? '  (saved)' : '  (this session only)'}</Text>
+          </Box>
+        </Box>
+
+        <Box flexDirection="column" marginBottom={1}>
+          {defaultsItems.map((item, idx) => (
+            <Box key={item.key}>
+              <Text color={idx === defaultsIdx ? 'cyan' : 'white'}>
+                {idx === defaultsIdx ? '▸ ' : '  '}{item.label}
+              </Text>
+            </Box>
+          ))}
+        </Box>
+
+        {defaultsError && (
+          <Box marginBottom={1}>
+            <Text color="red">{defaultsError}</Text>
+          </Box>
+        )}
+
+        <Box>
+          <Text color="white">↑↓ Navigate  Enter Save  Esc Back</Text>
+        </Box>
+      </Box>
+    )
+  }
 
   if (screen === 'dir') {
     return (
@@ -275,7 +405,7 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
         {noKeysConfigured && (
           <Box marginBottom={1}>
             <Text color="yellow">
-              No API keys configured. Set OPENCODE_API_KEY (Zen free) or OPENROUTER_API_KEY via
+              No API keys configured. Set OPENCODE_API_KEY (Zen free) via
             </Text>
             <Box>
               <Text color="yellow">  vajra config -s OPENCODE_API_KEY=...</Text>
@@ -294,7 +424,7 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
                 <Text color="white">  {item.hint}</Text>
               )}
               {idx === modelIdx && item.type === 'custom' && (
-                <Text color="white">  Type any model id (zen/*, openai/*, …)</Text>
+                <Text color="white">  Type any model id (zen/*, go/*)</Text>
               )}
             </Box>
           ))}
@@ -364,9 +494,10 @@ export async function startTUI(version: string): Promise<void> {
 
   // Loop so returning from a subcommand goes back to the menu.
   // Only 'Exit' (or q / Ctrl+C) leaves the TUI.
-  // Model and directory are session-scoped: picked in the menus, passed to the session.
+  // Seeded from saved defaults (.env), then session-scoped until the user
+  // saves again from the Defaults screen.
   let sessionModel = resolveDefaultModel()
-  let sessionDir = process.cwd()
+  let sessionDir = resolveDefaultDir()
   while (true) {
     // Re-read .env each lap: Config -s runs in a child and only updates the file.
     loadEnvIntoProcess()

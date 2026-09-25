@@ -11,7 +11,6 @@ import assert from 'node:assert/strict'
 import { createProvider, parseModelString } from '../dist/agent/providers/index.js'
 
 const keys = {
-  openrouter: 'sk-or-test',
   anthropic: 'sk-ant-test',
   zen: 'sk-zen-test',
 }
@@ -31,26 +30,36 @@ test('a zen model resolves the zen key', () => {
   assert.equal(apiKey, keys.zen)
 })
 
-test('a bare model falls back to openrouter and its key', () => {
-  const { provider, apiKey, resolvedModel } = createProvider('nvidia/nemotron-3-ultra-550b-a55b:free', keys)
+test('a go model resolves the shared OpenCode key', () => {
+  const { provider, apiKey } = createProvider('go/kimi-k3', { ...keys, go: keys.zen })
 
-  assert.equal(provider.name, 'openrouter')
-  assert.equal(apiKey, keys.openrouter)
-  assert.equal(resolvedModel, 'nvidia/nemotron-3-ultra-550b-a55b:free')
+  assert.equal(provider.name, 'zen')
+  assert.equal(apiKey, keys.zen)
+})
+
+test('a bare model is rejected — there is no default gateway', () => {
+  assert.throws(
+    () => createProvider('nvidia/nemotron-3-ultra-550b-a55b:free', keys),
+    /Unknown provider/,
+  )
+  assert.throws(
+    () => createProvider('claude-3.5-sonnet', keys),
+    /Unknown provider/,
+  )
 })
 
 test('key order in the map does not decide the key', () => {
-  const reversed = { zen: keys.zen, anthropic: keys.anthropic, openrouter: keys.openrouter }
+  const reversed = { zen: keys.zen, anthropic: keys.anthropic }
 
   assert.equal(createProvider('anthropic/claude-3-opus-20240229', reversed).apiKey, keys.anthropic)
   assert.equal(createProvider('zen/kimi-k3', reversed).apiKey, keys.zen)
 })
 
 test('a provider with no key of its own does not fall back to another provider key', () => {
-  // Intentional security change: sending a zen model with the openrouter
-  // key would authenticate the wrong account against the wrong API.
+  // Sending a zen model with the anthropic key would authenticate the wrong
+  // account against the wrong API.
   assert.throws(
-    () => createProvider('zen/kimi-k3', { openrouter: keys.openrouter }),
+    () => createProvider('zen/kimi-k3', { anthropic: keys.anthropic }),
     /No API key found for provider 'zen'/,
   )
 })
@@ -59,7 +68,10 @@ test('no usable key is an error, not a silent empty string', () => {
   assert.throws(() => createProvider('anthropic/claude-3-opus-20240229', {}), /No API key/)
 })
 
-test('parseModelString keeps openrouter meta-model slugs intact', () => {
-  assert.deepEqual(parseModelString('openrouter/free'), { provider: 'openrouter', model: 'openrouter/free' })
-  assert.deepEqual(parseModelString('openrouter/auto'), { provider: 'openrouter', model: 'openrouter/auto' })
+test('parseModelString accepts only zen/, go/ and anthropic/', () => {
+  assert.deepEqual(parseModelString('zen/space-bunny-free'), { provider: 'zen', model: 'space-bunny-free' })
+  assert.deepEqual(parseModelString('go/mimo-v2.5'), { provider: 'go', model: 'mimo-v2.5' })
+  assert.deepEqual(parseModelString('anthropic/claude-3-opus-20240229'), { provider: 'anthropic', model: 'claude-3-opus-20240229' })
+  assert.throws(() => parseModelString('openai/gpt-4o'), /Unknown provider/)
+  assert.throws(() => parseModelString('nemotron-3-super-free'), /Unknown provider/)
 })

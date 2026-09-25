@@ -110,6 +110,39 @@ test('run_command rejects unknown commands and reports failure on non-zero exit'
   }
 })
 
+test('run_baseline returns the same C1 shape and appends argv args', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-baseline-'))
+  try {
+    const handle = createToolHandle(dir)
+
+    const pass = await handle.callTool('run_baseline', {
+      command: 'node',
+      args: ['-e', 'process.exit(0)'],
+    })
+    const passParsed = JSON.parse(pass)
+    assert.equal(passParsed.exitCode, 0)
+    assert.equal(passParsed.signal, null)
+
+    const fail = await handle.callTool('run_baseline', {
+      command: 'node -e "process.exit(7)"',
+      args: [],
+    })
+    const failParsed = JSON.parse(fail)
+    assert.equal(failParsed.exitCode, 7)
+
+    const denied = await handle.callTool('run_baseline', { command: 'not-a-real-tool', args: [] })
+    const deniedParsed = JSON.parse(denied)
+    assert.ok(deniedParsed.exitCode !== 0)
+    assert.match(deniedParsed.stderr, /not allowed/)
+
+    const escape = await handle.callTool('run_baseline', { command: 'node', args: [], cwd: '../..' })
+    const escapeParsed = JSON.parse(escape)
+    assert.match(escapeParsed.stderr, /escapes/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('task permissions deny writes outside the allow-list', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'handle-perm-'))
   try {

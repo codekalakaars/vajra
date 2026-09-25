@@ -38,7 +38,13 @@ const SYMBOL_PATTERNS: RegExp[] = [
   /\b(?:pub\s+)?static\s+(\w+)/g,
 ]
 
-export function extractSymbols(content: string): string[] {
+/**
+ * Per-file symbol cap. 15 misrepresented large modules — a 400-line file
+ * routinely has more exported symbols than that — so the cap is 40.
+ */
+export const SYMBOL_CAP = 40
+
+export function extractSymbols(content: string, maxSymbols: number = SYMBOL_CAP): string[] {
   const symbols = new Set<string>()
   for (const pattern of SYMBOL_PATTERNS) {
     pattern.lastIndex = 0
@@ -49,7 +55,8 @@ export function extractSymbols(content: string): string[] {
       }
     }
   }
-  return [...symbols].slice(0, 15)
+  const cap = Number.isFinite(maxSymbols) && maxSymbols >= 0 ? Math.floor(maxSymbols) : SYMBOL_CAP
+  return [...symbols].slice(0, cap)
 }
 
 export function countImports(content: string): number {
@@ -78,15 +85,53 @@ export function shouldSkipFile(entry: ProjectFileEntry): boolean {
   return path.split('/').some((segment) => SKIP_DIRS.has(segment))
 }
 
+/** Characters per token — the conversion factor from a context window to chars. */
+const CHARS_PER_TOKEN = 4
+
+/** The summary index may claim at most this share of the model's window. */
+const INDEX_WINDOW_SHARE = 0.25
+
+/** Never hand the Developer a narrower index than the old fixed budget. */
+export const MIN_INDEX_BUDGET_CHARS = 4000
+
+/** Even a huge window must not let the index swallow the whole prompt. */
+export const MAX_INDEX_BUDGET_CHARS = 32000
+
+/** Budget used when the caller does not know the model's context window. */
+export const DEFAULT_INDEX_BUDGET_CHARS = MIN_INDEX_BUDGET_CHARS
+
+/**
+ * Derive the summary-index budget (in characters) from a model's context
+ * window (in tokens).
+ *
+ * The caller owns the model table — `getModelLimit` lives in the CLI's
+ * developer.ts — so the window is passed in and this package stays
+ * dependency-free and I/O-free.
+ */
+export function deriveIndexBudget(contextWindowTokens: number): number {
+  if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
+    return DEFAULT_INDEX_BUDGET_CHARS
+  }
+  const budget = Math.floor(contextWindowTokens * CHARS_PER_TOKEN * INDEX_WINDOW_SHARE)
+  return Math.min(MAX_INDEX_BUDGET_CHARS, Math.max(MIN_INDEX_BUDGET_CHARS, budget))
+}
+
 /**
  * Format summary index with hierarchical compression.
  * Groups files by directory and provides different levels of detail.
+ *
+ * `budgetChars` is a character budget, not a token count — callers should
+ * pass `deriveIndexBudget(getModelLimit(model))`.
  */
 export function formatSummaryIndexHierarchical(
   summary: SummaryEntry[],
-  maxTokens: number = 4000,
+  budgetChars: number = DEFAULT_INDEX_BUDGET_CHARS,
 ): string {
   if (summary.length === 0) return '(no files indexed)'
+
+  const maxChars = Number.isFinite(budgetChars) && budgetChars > 0
+    ? Math.floor(budgetChars)
+    : DEFAULT_INDEX_BUDGET_CHARS
 
   const dirMap = new Map<string, SummaryEntry[]>()
   for (const entry of summary) {
@@ -103,7 +148,7 @@ export function formatSummaryIndexHierarchical(
   const sortedDirs = [...dirMap.entries()].sort((a, b) => b[1].length - a[1].length)
 
   for (const [dir, entries] of sortedDirs) {
-    if (currentSize >= maxTokens) break
+    if (currentSize >= maxChars) break
 
     const dirHeader = `\n${dir}/ (${entries.length} files)`
     result.push(dirHeader)
@@ -116,7 +161,7 @@ export function formatSummaryIndexHierarchical(
     })
 
     for (const entry of sortedEntries) {
-      if (currentSize >= maxTokens) break
+      if (currentSize >= maxChars) break
 
       const fileName = entry.path.split('/').pop() || entry.path
       const symbols = entry.symbols.length > 0 ? entry.symbols.slice(0, 5).join(', ') : ''

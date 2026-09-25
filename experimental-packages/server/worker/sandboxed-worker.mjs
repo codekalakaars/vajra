@@ -12,7 +12,7 @@
 // and only then becomes a pure dispatch loop: {callId, tool, args} in,
 // {callId, ok, result|error} out.
 //
-// It never sees the OpenRouter API key, the system prompt, or the
+// It never sees the API key, the system prompt, or the
 // conversation — only individual tool invocations the parent forwards to it
 // one at a time. The parent process must never call applySandbox itself;
 // see src/session/launcher.ts and the security invariant checklist in the

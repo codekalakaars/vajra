@@ -7,7 +7,9 @@ test('every tool schema validates its own well-formed example', () => {
     read_file: { path: 'a.txt' },
     list_files: { path: '.', recursive: false },
     search_files: { query: 'function readFile' },
+    search_content: { query: 'function main', isRegex: false, maxResults: 5 },
     run_command: { command: 'cargo test', cwd: '.', timeoutMs: 30000 },
+    run_baseline: { command: 'cargo', args: ['test'], cwd: '.', timeoutMs: 30000 },
     write_file: { path: 'a.txt', content: 'hello' },
     edit_file: { path: 'a.txt', oldString: 'foo', newString: 'bar' },
     delete_file: { path: 'old.txt' },
@@ -81,6 +83,59 @@ test('propose_plan accepts a single validation string', () => {
     summary: 'Add tests',
   })
   assert.deepEqual(plan.tasks[0].validation, ['pnpm test'])
+})
+
+test('propose_plan accepts the structured context/edits/verify form (§2)', () => {
+  const plan = toolDefinitions.propose_plan.schema.parse({
+    tasks: [
+      {
+        id: 'structured',
+        title: 'Structured task',
+        description: 'Uses anchors and baselines',
+        context: [{ path: 'src/a.ts', reason: 'owns the edit site', symbols: ['run'] }],
+        edits: [
+          { path: 'src/a.ts', op: 'modify', anchor: 'const run = () => {}', change: 'Return a tuple.' },
+          { path: 'src/b.ts', op: 'create', change: 'New module.' },
+        ],
+        verify: [
+          { command: 'pnpm', args: ['test'], kind: 'proves-change' },
+          { command: 'pnpm', args: ['build'], kind: 'regression-guard', expectExit: 0, timeoutSeconds: 60 },
+        ],
+      },
+      {
+        id: 'consume-shape',
+        title: 'Consume the run() shape',
+        description: 'Codes against the pinned contract',
+        dependsOn: ['structured'],
+      },
+    ],
+    summary: 'structured plan',
+    contracts: [
+      {
+        id: 'run-shape',
+        statement: 'run() always returns {exitCode, signal, stdout, stderr}.',
+        producedBy: 'structured',
+        consumedBy: ['consume-shape'],
+      },
+    ],
+  })
+  const task = plan.tasks[0]
+  assert.equal(task.context[0].path, 'src/a.ts')
+  assert.equal(task.edits[1].op, 'create')
+  // Harness-facing defaults the model may omit.
+  assert.equal(task.verify[0].expectExit, 0)
+  assert.equal(task.verify[0].timeoutSeconds, 120)
+  assert.deepEqual(task.verify[0].args, ['test'])
+  assert.equal(plan.contracts[0].consumedBy[0], 'consume-shape')
+})
+
+test('run_baseline exposes argv-style arguments like run_command', () => {
+  const parsed = toolDefinitions.run_baseline.schema.parse({
+    command: 'pnpm',
+    args: ['--filter', '@codekalakaars/vajra-protocol', 'test'],
+  })
+  assert.deepEqual(parsed.args, ['--filter', '@codekalakaars/vajra-protocol', 'test'])
+  assert.throws(() => toolDefinitions.run_baseline.schema.parse({ args: ['test'] }))
 })
 
 test('run_command uses timeoutMs in milliseconds (C5)', () => {

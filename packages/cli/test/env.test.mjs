@@ -16,6 +16,7 @@ const {
   readEnvFile,
   listAvailableModels,
   loadEnvIntoProcess,
+  normalizeModelId,
 } = await import(envUrl)
 
 test('writeEnvKey creates and updates a KEY=VALUE line', () => {
@@ -77,16 +78,25 @@ test('resolveDefaultModel prefers VAJRA_MODEL then DEFAULT_MODEL', () => {
   )
 })
 
-test('resolveApiKeyForModel selects provider-specific credentials', () => {
+test('resolveApiKeyForModel only routes zen/* and go/* to the OpenCode key', () => {
   const env = {
-    OPENROUTER_API_KEY: 'or-key',
     OPENCODE_API_KEY: 'oc-key',
   }
-  assert.equal(resolveApiKeyForModel('openai/gpt-4o', undefined, env), 'or-key')
   assert.equal(resolveApiKeyForModel('zen/mimo-v2.5-free', undefined, env), 'oc-key')
   assert.equal(resolveApiKeyForModel('go/mimo-v2.5', undefined, env), 'oc-key')
   assert.equal(resolveApiKeyForModel('zen/mimo-v2.5-free', 'explicit', env), 'explicit')
+  // Unsupported model ids get no credential at all.
+  assert.equal(resolveApiKeyForModel('openai/gpt-4o', undefined, env), undefined)
   assert.equal(resolveApiKeyForModel('openai/gpt-4o', undefined, {}), undefined)
+})
+
+test('normalizeModelId rejects anything but zen/* and go/*', () => {
+  assert.equal(normalizeModelId(' zen/space-bunny-free '), 'zen/space-bunny-free')
+  assert.equal(normalizeModelId('go/mimo-v2.5'), 'go/mimo-v2.5')
+  assert.throws(() => normalizeModelId('openai/gpt-4o'), /Unsupported model 'openai\/gpt-4o'/)
+  assert.throws(() => normalizeModelId('nvidia/nemotron-3-super-120b-a12b:free'), /Unsupported model/)
+  assert.throws(() => normalizeModelId('   '), /Model id is required/)
+  assert.throws(() => normalizeModelId('zen/bad id'), /Invalid model id/)
 })
 
 test('listAvailableModels filters presets by configured keys', () => {
@@ -94,14 +104,7 @@ test('listAvailableModels filters presets by configured keys', () => {
   assert.ok(zenOnly.length > 0)
   assert.ok(zenOnly.every(m => m.id.startsWith('zen/')))
 
-  const orOnly = listAvailableModels({ OPENROUTER_API_KEY: 'or-key' })
-  assert.ok(orOnly.length > 0)
-  assert.ok(orOnly.every(m => !m.id.startsWith('zen/')))
-
-  const both = listAvailableModels({ OPENCODE_API_KEY: 'a', OPENROUTER_API_KEY: 'b' })
-  assert.ok(both.some(m => m.id.startsWith('zen/')))
-  assert.ok(both.some(m => !m.id.startsWith('zen/')))
-
+  // No other provider key unlocks anything.
   assert.deepEqual(listAvailableModels({}), [])
   assert.deepEqual(listAvailableModels({ OPENCODE_API_KEY: '  ' }), [])
 })

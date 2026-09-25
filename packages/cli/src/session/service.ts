@@ -1,25 +1,86 @@
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { FileLockManager, ChangeHistory } from '@codekalakaars/vajra-sandbox'
+import {
+  FileLockManager,
+  ChangeHistory,
+  resolveConcurrencyConfig,
+} from '@codekalakaars/vajra-sandbox'
+import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
 import {
   developerConversationTurn,
   type LaunchHandle,
   type DeveloperTurnResult,
 } from '../agent/developer.js'
-import { AgentRegistry } from '../agent/registry.js'
-import { TaskQueue } from '../agent/taskqueue.js'
-import type { OpenRouterMessage } from '../agent/openrouter.js'
+import { AgentRegistry, type AgentState } from '../agent/registry.js'
+import { TaskQueue, type TaskState } from '../agent/taskqueue.js'
+import { streamChatCompletion, type ChatMessage } from '../agent/chat.js'
 import { evaluateSkipIf } from '../tasks/skip.js'
 import { computeTaskPermissions, normalizeProjectPath } from '../tasks/permissions.js'
 import { executeTask } from '../tasks/execute.js'
 import { createToolHandle } from '../tools/handle.js'
 import { finalReport } from '../tasks/report.js'
+import { isSupportedModel } from '../env.js'
 import { launchSandboxSession, type SandboxSession } from '../sandbox/launch.js'
-import type { SessionUI } from './ui.js'
+import {
+  SESSION_SCHEMA_VERSION,
+  appendMessage,
+  hashFile,
+  loadMessages,
+  loadSession,
+  loadSummaryIndexCache,
+  readGitState,
+  repoFingerprint,
+  saveSession,
+  saveSummaryIndexCache,
+  type PersistedTask,
+  type SessionPhase,
+  type SummaryIndexCacheEntry,
+} from '../persist/index.js'
+import { masterDecide, masterLoop, runRollbackCommands, MASTER_DECIDE_TOOL_SPECS } from '../agent/master.js'
+import { blocksAutomaticResume, describeVerdict, planResume } from './resume.js'
+import type { AgentEvent, SessionUI } from './ui.js'
 
 const DEFAULT_MAX_RETRIES = 2
 const MAX_CONVERSATION_TURNS = 20
+
+/**
+ * Bound on task concurrency (P2): `resolveConcurrencyConfig().maxConcurrentWorkers`
+ * unless the `--concurrency` flag overrides it. Clamped to >= 1 so a zero or
+ * negative flag can never freeze the scheduler.
+ */
+export function resolveMaxWorkers(override?: number): number {
+  const configured = resolveConcurrencyConfig().maxConcurrentWorkers
+  const candidate = override === undefined ? configured : override
+  if (!Number.isFinite(candidate)) return configured
+  return Math.max(1, Math.floor(candidate))
+}
+
+/**
+ * §3: session startup spends real time building the summary index. An unchanged
+ * repo should reuse the cached one — keyed on a cheap file-count + mtime
+ * fingerprint, not on content, because hashing everything would cost as much
+ * as building it.
+ */
+/** The Master tool loop parses model output; malformed JSON is not fatal. */
+function safeJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return {}
+  }
+}
+
+function seedSummaryIndex(projectDir: string): SummaryIndexCacheEntry[] {
+  try {
+    const fingerprint = repoFingerprint(projectDir)
+    const cached = loadSummaryIndexCache(projectDir, fingerprint)
+    if (cached) return cached.entries
+  } catch {
+    // A broken cache is never fatal — the index is simply rebuilt below.
+  }
+  return []
+}
 
 export interface SessionOptions {
   task?: string
@@ -30,6 +91,23 @@ export interface SessionOptions {
   timeout?: number
   /** Explicit opt-in to run without OS sandbox enforcement. */
   allowUnenforced?: boolean
+  /** Overrides `resolveConcurrencyConfig().maxConcurrentWorkers` (P2). */
+  concurrency?: number
+  /**
+   * Resume a persisted session. The staleness gate runs first and can refuse:
+   * `vajra resume` passes `force: true` only after the user has seen exactly
+   * what changed.
+   */
+  resumeFrom?: string
+  /** Skip the staleness gate. Only ever set from an explicit user decision. */
+  force?: boolean
+  /** Task ids the user explicitly accepted rolling back to their baselines. */
+  rollbackTasks?: string[]
+  /**
+   * §4: let the Manager ask the model what to do about a failure. Off by
+   * default — the mechanical decisions are the ones that must be predictable.
+   */
+  useMasterLlm?: boolean
   /** Host-owned abort (Ctrl-C / TUI interrupt). Aborting finishes the current step. */
   signal?: AbortSignal
   /**
@@ -62,16 +140,20 @@ export async function runSession(
   options: SessionOptions,
   ui: SessionUI,
 ): Promise<SessionResult> {
-  if (!options.apiKey) {
-    const requiredKey =
-      options.model.startsWith('zen/') || options.model.startsWith('go/')
-        ? 'OPENCODE_API_KEY'
-        : 'OPENROUTER_API_KEY'
+  if (!isSupportedModel(options.model)) {
     ui.error(
-      `No API key provided for model '${options.model}'. Set ${requiredKey} or use --api-key`,
+      `Unsupported model '${options.model}': only zen/* and go/* are supported`,
     )
     return { exitCode: 1, interrupted: false, exited: false }
   }
+  if (!options.apiKey) {
+    ui.error(
+      `No API key provided for model '${options.model}'. Set OPENCODE_API_KEY or use --api-key`,
+    )
+    return { exitCode: 1, interrupted: false, exited: false }
+  }
+  // Narrowed here so nested closures (the per-task runner) see a definite string.
+  const apiKey = options.apiKey
 
   const projectDir = resolve(options.projectDir)
   if (!existsSync(projectDir)) {
@@ -91,7 +173,10 @@ export async function runSession(
 
   ui.banner()
 
-  const sessionId = randomUUID()
+  // §3: a resume continues the *same* session, so the transcript, plan and
+  // task states stay in one record instead of accumulating fragments.
+  const sessionId = options.resumeFrom ?? randomUUID()
+  const createdAt = Date.now()
   const registry = new AgentRegistry()
   const fileLocks = new FileLockManager()
   // D1: ChangeHistory always records against the resolved projectDir.
@@ -147,7 +232,18 @@ export async function runSession(
 
   const developerHandle: LaunchHandle = sandbox?.handle ?? createToolHandle(projectDir)
 
-  const messages: OpenRouterMessage[] = []
+  // The port requires onAgentEvent, but JavaScript test doubles and embedders
+  // may not implement it. Observability must never be able to fail a run.
+  const agentUi = ui as { onAgentEvent?: (event: AgentEvent) => void }
+  const emitAgent = (event: AgentEvent): void => {
+    try {
+      agentUi.onAgentEvent?.(event)
+    } catch {
+      // a renderer that throws must not take the session down
+    }
+  }
+
+  const messages: ChatMessage[] = []
   const summaryIndex: Array<{
     path: string
     symbols: string[]
@@ -155,16 +251,150 @@ export async function runSession(
     lineCount: number
     importCount: number
     exportCount: number
-  }> = []
+  }> = seedSummaryIndex(projectDir)
+
+  /**
+   * §3 resume. The gate runs before anything is replayed: a changed tree is
+   * reported, never silently rolled back. `force` is the user's answer to
+   * that report, not a default.
+   */
+  let resumedPhase: SessionPhase | null = null
+  let resumedPlan: DeveloperPlan | null = null
+  let resumedCompleted = new Set<string>()
+  if (options.resumeFrom) {
+    // The sandbox is already up by now, so every exit below has to tear it
+    // down — otherwise the forked worker keeps the CLI alive.
+    const bail = (message: string): SessionResult => {
+      sandbox?.close()
+      ui.error(message)
+      return { exitCode: 1, interrupted: false, exited: false }
+    }
+    let stored: ReturnType<typeof loadSession> = null
+    try {
+      stored = loadSession(options.resumeFrom, projectDir)
+    } catch (e) {
+      // An unsafe id throws before we can report anything useful.
+      return bail(e instanceof Error ? e.message : String(e))
+    }
+    if (!stored) {
+      return bail(`No resumable session '${options.resumeFrom}' in ${projectDir}`)
+    }
+    const plan = planResume(stored, {
+      projectDir,
+      ...(options.force ? { assumeFresh: true } : {}),
+      ...(options.rollbackTasks ? { rollbackTaskIds: options.rollbackTasks } : {}),
+    })
+
+    if (blocksAutomaticResume(plan.staleness.verdict)) {
+      sandbox?.close()
+      ui.error(describeVerdict(plan.staleness))
+      for (const [path, how] of Object.entries(plan.staleness.changed)) {
+        ui.warning(`  ${how === 'deleted' ? 'deleted' : 'modified'}: ${path}`)
+      }
+      ui.warning(
+        'Re-run with --force to continue anyway, or re-plan the work from scratch.',
+      )
+      return { exitCode: 1, interrupted: false, exited: false }
+    }
+
+    const restored = loadMessages(stored.sessionId, projectDir)
+    messages.push(...(restored as unknown as ChatMessage[]))
+    resumedPhase = plan.phase
+    resumedPlan = stored.plan
+    resumedCompleted = new Set(plan.completed)
+    ui.info(`Resumed session ${stored.sessionId} (${plan.completed.length} task(s) already done).`)
+    if (plan.staleness.checked > 0) {
+      ui.info(describeVerdict(plan.staleness))
+    }
+  }
+
+  let recordedMessages = 0
+  try {
+    recordedMessages = options.resumeFrom ? loadMessages(options.resumeFrom, projectDir).length : 0
+  } catch {
+    // Reported properly by the resume block below.
+  }
+
+  /**
+   * §3: record a proposed plan before anything runs, so "the plan is on screen
+   * but not yet approved" is a resumable state rather than a lost one.
+   */
+  const recordProposedPlan = (plan: DeveloperPlan): void => {
+    try {
+      saveSession({
+        version: SESSION_SCHEMA_VERSION,
+        sessionId,
+        projectDir,
+        createdAt,
+        updatedAt: Date.now(),
+        config: {
+          model: options.model,
+          timeoutSeconds: options.timeout ?? 300,
+          allowUnenforced,
+        },
+        phase: 'awaiting-approval',
+        plan,
+        evidence: null,
+        tasks: Object.fromEntries(
+          plan.tasks.map(t => [t.id, { status: 'pending' as const }]),
+        ),
+        fileHashes: {},
+        summaryFingerprint: null,
+      })
+    } catch (e) {
+      ui.warning(`Could not persist session state: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
 
   let initialMessage = options.task
   let initialKind: 'first' | 'reentry' = 'first'
-  if (!initialMessage) {
+
+  /**
+   * §3: append the messages that are not already on disk. The developer's
+   * `messages` array is the live conversation, so only the tail is new.
+   */
+  const recordConversation = (): void => {
+    try {
+      for (let i = recordedMessages; i < messages.length; i++) {
+        const m = messages[i]
+        appendMessage(sessionId, projectDir, {
+          role: m.role,
+          content: m.content ?? null,
+          ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}),
+          ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
+          ...(m.name ? { name: m.name } : {}),
+        })
+      }
+      recordedMessages = messages.length
+    } catch (e) {
+      ui.warning(`Could not record conversation: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    flushIndexCache()
+  }
+
+  /** §3: publish the index so the next session on an unchanged repo skips it. */
+  let indexCacheWritten = false
+  const flushIndexCache = (): void => {
+    if (indexCacheWritten || summaryIndex.length === 0) return
+    try {
+      saveSummaryIndexCache(projectDir, {
+        version: 1,
+        fingerprint: repoFingerprint(projectDir),
+        createdAt: Date.now(),
+        entries: summaryIndex,
+      })
+      indexCacheWritten = true
+    } catch {
+      // Caching is an optimisation; a failure must not affect the session.
+    }
+  }
+  const resuming = Boolean(options.resumeFrom)
+  if (!initialMessage && !resuming) {
     initialMessage = await ui.askInitialTask(initialKind)
   }
 
   // D7: honour exit/quit at the first prompt, not only on later turns.
-  while (!initialMessage || isExitCommand(initialMessage)) {
+  while (!resuming && (!initialMessage || isExitCommand(initialMessage))) {
     if (initialMessage && isExitCommand(initialMessage)) {
       ui.info('Goodbye!')
       exited = true
@@ -174,39 +404,60 @@ export async function runSession(
     initialMessage = await ui.askInitialTask(initialKind)
   }
 
-  ui.info(`\n🔍 Scanning project in ${projectDir}...`)
-  ui.info(`💬 Starting conversation with developer...\n`)
+  if (!resuming) {
+    emitAgent({ type: 'phase', agent: { role: 'developer' }, phase: 'scanning' })
+    ui.info(`\n🔍 Scanning project in ${projectDir}...`)
+    ui.info(`💬 Starting conversation with developer...\n`)
+  }
 
   let result: DeveloperTurnResult | undefined
-  let userMessage = initialMessage
+  let userMessage = initialMessage ?? ''
+
+  // §3: a session that stopped short of running anything re-presents its plan
+  // instead of asking the Developer to plan all over again.
+  let preselected: DeveloperTurnResult | null =
+    resumedPhase === 'awaiting-approval' && resumedPlan ? { type: 'plan', plan: resumedPlan } : null
+  // Mid-execution: go straight back to the work that did not finish.
+  if (resumedPhase === 'executing' && resumedPlan) {
+    preselected = { type: 'plan', plan: resumedPlan }
+    options.autoConfirm = true
+  }
 
   let turn = 0
   for (turn = 0; turn < MAX_CONVERSATION_TURNS; turn++) {
     if (isInterrupted()) break
 
-    try {
-      result = await developerConversationTurn({
-        sessionId,
-        projectDir,
-        userMessage,
-        model: options.model,
-        apiKey: options.apiKey,
-        handle: developerHandle,
-        messages,
-        summaryIndex,
-        onTextDelta: text => ui.onTextDelta(text),
-        onThinkingDelta: text => ui.onThinkingDelta(text),
-        isInterrupted,
-        signal: abortSignal,
-      })
-    } catch (e) {
-      if (isInterrupted()) break
-      ui.error(`API error: ${e instanceof Error ? e.message : String(e)}`)
-      ui.warning('Check your API key and network connection.')
-      break
+    if (preselected) {
+      result = preselected
+      preselected = null
+    } else {
+      try {
+        result = await developerConversationTurn({
+          sessionId,
+          projectDir,
+          userMessage,
+          model: options.model,
+          apiKey: options.apiKey,
+          handle: developerHandle,
+          messages,
+          summaryIndex,
+          onTextDelta: text => ui.onTextDelta(text),
+          onThinkingDelta: text => ui.onThinkingDelta(text),
+          isInterrupted,
+          signal: abortSignal,
+          onAgentEvent: emitAgent,
+        })
+      } catch (e) {
+        if (isInterrupted()) break
+        ui.error(`API error: ${e instanceof Error ? e.message : String(e)}`)
+        ui.warning('Check your API key and network connection.')
+        break
+      }
+
+      ui.finishLine()
     }
 
-    ui.finishLine()
+    recordConversation()
 
     if (result.type === 'plan') {
       ui.showPlan(result.plan)
@@ -216,6 +467,9 @@ export async function runSession(
         ui.info('Auto-confirming plan (--yes flag)\n')
         confirmed = true
       } else {
+        // §3: record the phase *before* asking, so a crash or a Ctrl-C at the
+        // prompt is still a resumable session rather than a lost plan.
+        recordProposedPlan(result.plan)
         // D8: confirmation is [y/N] — anything other than yes rejects.
         confirmed = (await ui.askConfirmPlan()) === 'y'
       }
@@ -235,36 +489,131 @@ export async function runSession(
 
       // D3: queue default timeout comes from the CLI -t flag (seconds).
       const queue = new TaskQueue(sessionId, options.timeout ?? 300)
-      for (const task of result.plan.tasks) {
+      const plan: DeveloperPlan = result.plan
+      for (const task of plan.tasks) {
         queue.addTask(task)
       }
 
-      let completedCount = 0
-      const totalCount = result.plan.tasks.length
-
-      while (true) {
-        if (isInterrupted()) break
-        const status = queue.getStatus()
-        if (status.done + status.failed + status.skipped >= status.total) break
-
-        const readyTasks = queue.getReadyTasks()
-
-        // No ready tasks but unfinished work remains (unresolvable deps) —
-        // break so the final report surfaces them as pending (D5/§27).
-        if (readyTasks.length === 0) {
-          break
+      // §3: a mid-execution resume re-runs only what did not complete. The
+      // completed tasks stay recorded as done so the final report is honest
+      // about what this session actually did.
+      if (resumedCompleted.size > 0) {
+        for (const taskId of resumedCompleted) {
+          if (!queue.getTask(taskId)) continue
+          queue.markAlreadyDone(taskId)
         }
+        ui.info(
+          `Skipping ${resumedCompleted.size} task(s) that already completed in a previous run.`,
+        )
+      }
 
-        for (const task of readyTasks) {
-          if (isInterrupted()) break
+      // P2: bounded by resolveConcurrencyConfig().maxConcurrentWorkers,
+      // overridable per run via SessionOptions.concurrency (--concurrency).
+      const maxWorkers = resolveMaxWorkers(options.concurrency)
+      // Computed once: the staleness gate and the index cache need these, and
+      // a repo walk or a git call on every task transition would be absurd.
+      const summaryFingerprint = repoFingerprint(projectDir)
+      const gitState = readGitState(projectDir)
 
+      /** Every path any task reads or writes — the staleness gate's watch set. */
+      const allTaskFilePaths = (): string[] => {
+        const paths = new Set<string>()
+        for (const t of queue.getAllTasks()) {
+          for (const p of [...t.readFile, ...t.writeFile, ...t.deleteFile, ...t.createDir]) {
+            paths.add(p)
+          }
+        }
+        return [...paths]
+      }
+      ui.info(`Concurrency: ${maxWorkers} task${maxWorkers === 1 ? '' : 's'} at a time`)
+
+      const taskErrors = new Map<string, string>()
+      /** Tasks whose last attempt changed nothing — a retry cannot help. */
+      const noOpTasks = new Set<string>()
+      /** The worker agent each task is running under, for terminal transitions. */
+      const taskAgents = new Map<string, string>()
+
+      /**
+       * P4/P5: flush the whole session atomically. Every terminal transition
+       * is written before the next task is scheduled, so a crash can never
+       * lose a task that already finished. v2 also records the config a
+       * resume must reproduce, the phase, and a hash per touched file so the
+       * staleness gate can tell the tree apart from the one we planned for.
+       */
+      const persist = (): void => {
+        try {
+          const tasks: Record<string, PersistedTask> = {}
+          for (const t of queue.getAllTasks()) {
+            const entry: PersistedTask = { status: t.status }
+            if (t.startedAt !== null) entry.startedAt = t.startedAt
+            if (t.completedAt !== null) entry.completedAt = t.completedAt
+            const err = taskErrors.get(t.id)
+            if (err !== undefined) entry.error = err
+            // Baselines make an interrupted task recoverable: a resume can
+            // offer a rollback from the exact content this task started on.
+            const baselines: Record<string, string | null> = {}
+            for (const filePath of changeHistory.getTaskFiles(t.id)) {
+              const original = changeHistory.getOriginalContent(t.id, filePath)
+              if (original !== undefined) baselines[filePath] = original
+            }
+            if (Object.keys(baselines).length > 0) entry.baselines = baselines
+            tasks[t.id] = entry
+          }
+
+          const fileHashes: Record<string, string> = {}
+          for (const path of allTaskFilePaths()) {
+            const hash = hashFile(resolve(projectDir, path))
+            if (hash !== null) fileHashes[path] = hash
+          }
+
+          saveSession({
+            version: SESSION_SCHEMA_VERSION,
+            sessionId,
+            projectDir,
+            createdAt,
+            updatedAt: Date.now(),
+            config: {
+              model: options.model,
+              timeoutSeconds: options.timeout ?? 300,
+              ...(maxWorkers === undefined ? {} : { concurrency: maxWorkers }),
+              allowUnenforced,
+            },
+            phase: isInterrupted() ? 'finished' : 'executing',
+            plan,
+            evidence: null,
+            tasks,
+            fileHashes,
+            summaryFingerprint,
+            ...(gitState ? { git: gitState } : {}),
+          })
+        } catch (e) {
+          ui.warning(
+            `Could not persist session state: ${e instanceof Error ? e.message : String(e)}`,
+          )
+        }
+      }
+      // Plan accepted — record every task as pending before anything runs.
+      persist()
+
+      /**
+       * One attempt of one task, end to end. Everything it owns (dirty flag,
+       * permissions, handle scope, locks) is torn down on every exit path, and
+       * a throw fails *this* task only — peers keep their changes.
+       *
+       * The retry policy is no longer here: the Manager decides whether this
+       * gets another attempt. This returns whether the attempt succeeded.
+       */
+      const runTaskOnce = async (task: TaskState): Promise<boolean> => {
+        let agent: AgentState | null = null
+        let dirty = false
+        try {
           if (task.skipIf && task.skipIf.length > 0) {
             const shouldSkip = await evaluateSkipIf(task.skipIf, projectDir)
             if (shouldSkip) {
               queue.skipTask(task.id)
-              completedCount++
+              persist()
               ui.onTaskEvent({ type: 'skipped', title: task.title })
-              continue
+              return true
             }
           }
 
@@ -273,32 +622,39 @@ export async function runSession(
           // D4: wait for locks instead of permanently skipping on conflict.
           await fileLocks.acquireOrWait(allTaskPaths, task.id, 'write')
 
-          const agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
+          agent = registry.createAgent(sessionId, 'worker', task.title, masterAgent.id)
+          taskAgents.set(task.id, agent.id)
           queue.assignTask(task.id, agent.id)
           registry.updateStatus(agent.id, 'running')
           queue.startTask(task.id)
 
+          // Progress label derived from the queue: terminal + in-flight counts
+          // are still meaningful when tasks start and finish interleaved.
+          const progress = queue.getStatus()
           ui.onTaskEvent({
             type: 'start',
-            index: completedCount + 1,
-            total: totalCount,
+            index:
+              progress.done +
+              progress.failed +
+              progress.skipped +
+              progress.assigned +
+              progress.running,
+            total: progress.total,
             title: task.title,
           })
 
           // D2: track dirty-set via onMutate rather than changeHistory.hasChanges
           // alone (baseline records can make hasChanges unreliable across rollbacks).
           const permissions = computeTaskPermissions(task, projectDir)
-          let dirty = false
           const permissionLookup = (path: string) =>
             permissions[normalizeProjectPath(projectDir, path)] ?? null
 
           let taskHandle: LaunchHandle
           if (sandbox) {
-            sandbox.setTaskPermissions(permissionLookup)
-            sandbox.setOnMutate(() => {
+            // P1: per-task scope — two tasks in flight never share a lookup.
+            taskHandle = sandbox.handleForTask(task.id, permissionLookup, () => {
               dirty = true
             })
-            taskHandle = sandbox.handle
           } else {
             taskHandle = createToolHandle(projectDir, {
               permissions: path => {
@@ -315,72 +671,184 @@ export async function runSession(
             await changeHistory.recordBefore(task.id, filePath)
           }
 
-          let success = false
-          let retries = 0
-          const maxRetries = task.maxRetries ?? DEFAULT_MAX_RETRIES
+          // Interrupted during setup: nothing has been written yet, so hand
+          // the task back instead of reporting a run that never happened.
+          if (isInterrupted()) {
+            queue.returnToPending(task.id)
+            if (agent) registry.updateStatus(agent.id, 'pending')
+            persist()
+            return true
+          }
 
-          while (retries <= maxRetries) {
-            dirty = false
-            success = await executeTask(
-              agent.id,
-              task,
-              taskHandle,
-              options.apiKey,
-              options.model,
-              ui,
-              changeHistory,
-              queue,
-              registry,
-              sessionId,
-              fileLocks,
-              projectDir,
-              abortSignal,
-            )
+          dirty = false
+          const success = await executeTask(
+            agent.id,
+            task,
+            taskHandle,
+            apiKey,
+            options.model,
+            ui,
+            changeHistory,
+            queue,
+            registry,
+            sessionId,
+            fileLocks,
+            projectDir,
+            abortSignal,
+            emitAgent,
+          )
 
-            if (success) break
-
-            if (!dirty && !changeHistory.hasChanges(task.id)) {
-              ui.onTaskEvent({ type: 'no-changes', title: task.title })
-              break
-            }
-
-            if (retries < maxRetries) {
-              // rollback already drops the task's change set; re-baseline so
-              // the next attempt starts from the restored files.
-              await changeHistory.rollback(task.id)
-              for (const filePath of allTaskFiles) {
-                await changeHistory.recordBefore(task.id, filePath)
-              }
-              dirty = false
-              ui.onTaskEvent({
-                type: 'retry',
-                title: task.title,
-                attempt: retries + 1,
-                max: maxRetries,
-              })
-              retries++
-            } else {
-              break
-            }
+          const noChanges = !dirty && !changeHistory.hasChanges(task.id)
+          if (noChanges && !success) {
+            ui.onTaskEvent({ type: 'no-changes', title: task.title })
           }
 
           if (success) {
             queue.completeTask(task.id, true)
             registry.updateStatus(agent.id, 'done')
+            persist()
             ui.onTaskEvent({ type: 'done', title: task.title })
+            return true
           } else {
             if (dirty || changeHistory.hasChanges(task.id)) {
               await changeHistory.rollback(task.id)
             }
+            // The Manager still owns the terminal state: it may roll back and
+            // try again. Hand the failure back rather than failing here.
+            noOpTasks.add(task.id)
+            return false
+          }
+        } catch (e) {
+          // A throw used to end the whole run and leak this task's locks.
+          // Fail only this task, roll back only its own changes, persist.
+          const message = e instanceof Error ? e.message : String(e)
+          taskErrors.set(task.id, message)
+          try {
+            if (changeHistory.hasChanges(task.id)) {
+              await changeHistory.rollback(task.id)
+            }
+          } catch {
+            // Rollback is best effort — never let it mask the original error.
+          }
+          const state = queue.getTask(task.id)
+          if (
+            state &&
+            state.status !== 'done' &&
+            state.status !== 'failed' &&
+            state.status !== 'skipped'
+          ) {
             queue.failTask(task.id)
-            registry.updateStatus(agent.id, 'failed')
             ui.onTaskEvent({ type: 'failed', title: task.title })
           }
-
+          if (agent) registry.updateStatus(agent.id, 'failed')
+          persist()
+          ui.error(`Task failed: ${task.title} — ${message}`)
+          return false
+        } finally {
+          // Load-bearing under concurrency: a lock leaked here deadlocks every
+          // peer waiting on those paths until the process is killed.
           fileLocks.release(task.id)
-          completedCount++
+          sandbox?.releaseTask(task.id)
         }
       }
+
+      /**
+       * §4: the Manager owns the scheduler and the failure policy; this
+       * callback just says how a single attempt is run.
+       */
+      const masterResult = await masterLoop({
+        queue,
+        maxWorkers,
+        isInterrupted,
+        defaultMaxRetries: DEFAULT_MAX_RETRIES,
+        runTask: runTaskOnce,
+        taskWasNoOp: id => noOpTasks.has(id),
+        rollbackTask: async task => {
+          // Honour the plan's own rollback commands first — without this the
+          // `rollback` field is decorative.
+          if (task.rollback && task.rollback.length > 0) {
+            const handle = sandbox?.handle ?? createToolHandle(projectDir)
+            const result = await runRollbackCommands(task.rollback, handle)
+            if (result.failed.length > 0) {
+              ui.warning(
+                `Rollback command failed for ${task.title}: ${result.failed[0]}`,
+              )
+            }
+          }
+          if (changeHistory.hasChanges(task.id)) {
+            await changeHistory.rollback(task.id)
+          }
+        },
+        failTask: async (task, reason) => {
+          if (changeHistory.hasChanges(task.id)) {
+            await changeHistory.rollback(task.id)
+          }
+          const state = queue.getTask(task.id)
+          if (state && state.status !== 'done' && state.status !== 'skipped') {
+            queue.failTask(task.id)
+            ui.onTaskEvent({ type: 'failed', title: task.title })
+          }
+          const agentId = taskAgents.get(task.id)
+          if (agentId) registry.updateStatus(agentId, 'failed')
+          // The Manager's reason is a fallback: a real error from the attempt
+          // is more useful to whoever reads the record.
+          if (!taskErrors.has(task.id)) taskErrors.set(task.id, reason)
+          persist()
+        },
+        parkTask: async task => {
+          queue.returnToPending(task.id)
+          const agentId = taskAgents.get(task.id)
+          if (agentId) registry.updateStatus(agentId, 'pending')
+          persist()
+        },
+        rebaselineTask: async task => {
+          // Re-baseline so the next attempt starts from the restored files.
+          for (const filePath of [...task.readFile, ...task.writeFile, ...task.deleteFile]) {
+            await changeHistory.recordBefore(task.id, filePath)
+          }
+        },
+        onTaskEvent: event => ui.onTaskEvent(event),
+        ...(options.useMasterLlm
+          ? {
+              decide: (task, context) =>
+                masterDecide(
+                  {
+                    queue,
+                    ask: async (systemPrompt, userMessage) => {
+                      const messages: ChatMessage[] = [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: userMessage },
+                      ]
+                      const decided = await streamChatCompletion(
+                        {
+                          apiKey,
+                          model: options.model,
+                          messages,
+                          tools: MASTER_DECIDE_TOOL_SPECS,
+                          ...(abortSignal ? { signal: abortSignal } : {}),
+                        },
+                        () => {},
+                      )
+                      return (decided.message.tool_calls ?? []).map(call => ({
+                        name: call.function.name,
+                        args: safeJson(call.function.arguments),
+                      }))
+                    },
+                  },
+                  task,
+                  context,
+                  abortSignal,
+                ),
+            }
+          : {}),
+      })
+
+      if (masterResult.aborted) {
+        ui.warning(`Manager stopped the plan: ${masterResult.abortedReason ?? 'aborted'}`)
+      }
+
+      // Final flush so the record reflects exactly what is on disk now.
+      persist()
 
       const finalStatus = queue.getStatus()
       ui.newline()

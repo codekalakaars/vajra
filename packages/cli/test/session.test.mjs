@@ -74,11 +74,21 @@ test('runSession without API key errors and returns exit 1', async () => {
   assert.match(ui.text(), /OPENCODE_API_KEY/)
 })
 
-test('runSession picks OPENROUTER_API_KEY hint for non-zen models', async () => {
+test('runSession rejects non-zen/go models before anything else', async () => {
   const ui = makeUI()
   const result = await runSession({ model: 'openai/gpt-4o', projectDir: tmpdir() }, ui)
   assert.equal(result.exitCode, 1)
-  assert.match(ui.text(), /OPENROUTER_API_KEY/)
+  assert.match(ui.text(), /Unsupported model 'openai\/gpt-4o'/)
+  assert.match(ui.text(), /only zen\/\* and go\/\* are supported/)
+
+  // Even with an explicit key the unsupported model never reaches a request.
+  const ui2 = makeUI()
+  const result2 = await runSession(
+    { model: 'openai/gpt-4o', apiKey: 'sk-test', projectDir: tmpdir() },
+    ui2,
+  )
+  assert.equal(result2.exitCode, 1)
+  assert.match(ui2.text(), /Unsupported model 'openai\/gpt-4o'/)
 })
 
 test('runSession without project dir errors and returns exit 1', async () => {

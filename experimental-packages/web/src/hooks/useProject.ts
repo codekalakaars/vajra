@@ -52,7 +52,7 @@ export function useProject() {
   const client = useClient()
   const [state, setState] = useState<ProjectState>({
     projectId: null,
-    model: 'openrouter/free',
+    model: 'zen/space-bunny-free',
     status: 'idle',
     messages: [],
     thinkingText: '',
@@ -519,7 +519,7 @@ export function useProject() {
 
     setState({
       projectId,
-      model: 'openrouter/free',
+      model: 'zen/space-bunny-free',
       status: 'idle',
       messages: [],
       thinkingText: '',

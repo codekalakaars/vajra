@@ -1,5 +1,5 @@
 import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
-import type { SessionUI, TaskEvent } from '../../session/ui.js'
+import type { AgentEvent, SessionUI, TaskEvent } from '../../session/ui.js'
 import { SessionStore, type PromptKind } from './store.js'
 
 /**
@@ -79,6 +79,10 @@ export class InkSessionUI implements SessionUI {
 
   onTaskEvent(event: TaskEvent): void {
     this.store.applyTaskEvent(event)
+  }
+
+  onAgentEvent(event: AgentEvent): void {
+    this.store.applyAgentEvent(event)
   }
 }
 

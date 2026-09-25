@@ -77,6 +77,37 @@ export const searchFilesTool = defineTool({
   },
 })
 
+export const searchContentTool = defineTool({
+  name: 'search_content',
+  description:
+    'Search file contents in the project for a literal string (or a regular ' +
+    'expression when isRegex is true). Returns up to maxResults matches as ' +
+    'path:line: text. Masked files (.env and environment variants) are never ' +
+    'searched, so their contents can never appear. Build and dependency ' +
+    'directories (dist/, node_modules/, target/, …) are skipped.',
+  schema: z.object({
+    query: z.string().min(1),
+    isRegex: z.boolean().optional(),
+    maxResults: z.number().optional(),
+  }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'Text (or regular expression) to find in file contents.' },
+      isRegex: {
+        type: 'boolean',
+        description: 'Treat query as a JavaScript regular expression (default: false, literal match).',
+      },
+      maxResults: {
+        type: 'number',
+        description: 'Maximum number of matching lines to return (default 50, capped at 200).',
+      },
+    },
+    required: ['query'],
+    additionalProperties: false,
+  },
+})
+
 export const runCommandTool = defineTool({
   name: 'run_command',
   description:
@@ -95,6 +126,31 @@ export const runCommandTool = defineTool({
       timeoutMs: { type: 'number', description: 'Timeout in milliseconds (default: 30000).' },
     },
     required: ['command'],
+    additionalProperties: false,
+  },
+})
+
+export const runBaselineTool = defineTool({
+  name: 'run_baseline',
+  description:
+    'Run a candidate verification command NOW, before any changes, to record ' +
+    'whether it currently passes. Required before proposing it as a ' +
+    'proves-change check. Argv form, no shell.',
+  schema: z.object({
+    command: z.string().min(1),
+    args: z.preprocess((v) => (v === undefined ? [] : v), z.array(z.string())),
+    cwd: z.string().optional(),
+    timeoutMs: z.number().optional(),
+  }),
+  jsonSchema: {
+    type: 'object',
+    properties: {
+      command: { type: 'string' },
+      args: { type: 'array', items: { type: 'string' } },
+      cwd: { type: 'string' },
+      timeoutMs: { type: 'number' },
+    },
+    required: ['command', 'args'],
     additionalProperties: false,
   },
 })
@@ -165,11 +221,72 @@ export const createDirTool = defineTool({
   },
 })
 
+/** A file the worker should read, and the reason it matters. */
+export interface ContextRef {
+  path: string
+  /** Why this file is needed — lets the worker skip what it already knows. */
+  reason: string
+  /** Optional: narrow a large file to the symbols that matter. */
+  symbols?: string[]
+}
+
+/** A single change, anchored to text rather than a line number. */
+export interface EditSpec {
+  path: string
+  op: 'create' | 'modify' | 'delete'
+  /**
+   * Exact, unique text identifying the edit site. Required when op === 'modify'.
+   * This is the same contract `editFile` already enforces — it fails on an
+   * absent or ambiguous match — so the plan becomes directly executable.
+   */
+  anchor?: string
+  /** Filled in by the harness, not the model: occurrences of `anchor` in the file. */
+  anchorOccurrences?: number
+  /** Imperative and specific: what to write at that site. */
+  change: string
+}
+
+/** A command that decides whether the task worked. */
+export interface VerifySpec {
+  /** Executable only — argv form, no shell. */
+  command: string
+  args: string[]
+  cwd?: string
+  expectExit: number
+  /** Optional substring that must appear in stdout+stderr. */
+  expectStdout?: string
+  timeoutSeconds: number
+  /**
+   * 'proves-change'  — must FAIL before the edit, pass after. This is the test.
+   * 'regression-guard' — must PASS before and after. This is the safety net.
+   */
+  kind: 'proves-change' | 'regression-guard'
+  /** Filled in by the harness: exit code observed when run at plan time. */
+  baselineExit?: number
+}
+
+/** A decision two tasks must agree on that no single file shows. */
+export interface PlanContract {
+  id: string
+  /** The decision, stated so an implementer can follow it with no other context. */
+  statement: string
+  /** Task that establishes it. */
+  producedBy: string
+  /** Tasks that must code against it. */
+  consumedBy: string[]
+}
+
 export interface PlannedTaskInput {
   /** Stable task id. Other tasks reference it from dependsOn. */
   id: string
   title: string
   description: string
+
+  /** Structured form. When present, supersedes readFile/writeFile/instructions/validation. */
+  context?: ContextRef[]
+  edits?: EditSpec[]
+  verify?: VerifySpec[]
+
   /** Step-by-step instructions — exactly what the worker should do. */
   instructions?: string[]
   /** Files to read (read-only access). */
@@ -200,6 +317,7 @@ export interface PlannedTaskInput {
 
 export interface ProposePlanArgs {
   tasks: PlannedTaskInput[]
+  contracts?: PlanContract[]
   summary: string
 }
 
@@ -217,6 +335,38 @@ const validationArray = z.preprocess(
   z.array(z.string()),
 )
 
+const contextRefSchema = z.object({
+  path: z.string().min(1),
+  reason: z.string().min(1),
+  symbols: z.array(z.string()).optional(),
+})
+
+const editSpecSchema = z.object({
+  path: z.string().min(1),
+  op: z.enum(['create', 'modify', 'delete']),
+  anchor: z.string().optional(),
+  anchorOccurrences: z.number().optional(),
+  change: z.string().min(1),
+})
+
+const verifySpecSchema = z.object({
+  command: z.string().min(1),
+  args: z.preprocess((v) => (v === undefined ? [] : v), z.array(z.string())),
+  cwd: z.string().optional(),
+  expectExit: z.number().default(0),
+  expectStdout: z.string().optional(),
+  timeoutSeconds: z.number().default(120),
+  kind: z.enum(['proves-change', 'regression-guard']).default('proves-change'),
+  baselineExit: z.number().optional(),
+})
+
+const planContractSchema = z.object({
+  id: z.string().min(1),
+  statement: z.string().min(1),
+  producedBy: z.string().min(1),
+  consumedBy: z.array(z.string()).min(1),
+})
+
 export const proposePlanTool = defineTool<ProposePlanArgs>({
   name: 'propose_plan',
   description:
@@ -229,6 +379,9 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
       id: z.string().min(1),
       title: z.string(),
       description: z.string(),
+      context: z.array(contextRefSchema).optional(),
+      edits: z.array(editSpecSchema).optional(),
+      verify: z.array(verifySpecSchema).optional(),
       instructions: stringArray,
       readFile: stringArray,
       writeFile: stringArray,
@@ -243,6 +396,7 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
       rollback: z.array(z.string()).optional(),
       skipIf: z.array(z.string()).optional(),
     })),
+    contracts: z.array(planContractSchema).optional(),
     summary: z.string(),
   }),
   jsonSchema: {
@@ -259,6 +413,67 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
             },
             title: { type: 'string', description: 'Short title for the task.' },
             description: { type: 'string', description: 'What needs to be done and why.' },
+            context: {
+              type: 'array',
+              description:
+                'Files the worker must read, each with the reason it matters. ' +
+                'Only list files you have actually read yourself.',
+              items: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string' },
+                  reason: { type: 'string', description: 'Why this file is needed, in one clause.' },
+                  symbols: { type: 'array', items: { type: 'string' } },
+                },
+                required: ['path', 'reason'],
+                additionalProperties: false,
+              },
+            },
+            edits: {
+              type: 'array',
+              description: 'Every change this task makes.',
+              items: {
+                type: 'object',
+                properties: {
+                  path: { type: 'string' },
+                  op: { type: 'string', enum: ['create', 'modify', 'delete'] },
+                  anchor: {
+                    type: 'string',
+                    description:
+                      'REQUIRED for modify. Exact text from the file that appears ' +
+                      'EXACTLY ONCE, identifying where the change goes. Copy it ' +
+                      'verbatim from the file you read — do not paraphrase.',
+                  },
+                  change: {
+                    type: 'string',
+                    description: 'What to write at that site. Imperative and specific.',
+                  },
+                },
+                required: ['path', 'op', 'change'],
+                additionalProperties: false,
+              },
+            },
+            verify: {
+              type: 'array',
+              description:
+                'Commands that decide whether this task worked. Argv form, no shell. ' +
+                'At least one must be kind=proves-change: a command that FAILS now ' +
+                'and passes once the task is done.',
+              items: {
+                type: 'object',
+                properties: {
+                  command: { type: 'string', description: 'Executable only, e.g. "pnpm".' },
+                  args: { type: 'array', items: { type: 'string' } },
+                  cwd: { type: 'string' },
+                  expectExit: { type: 'number' },
+                  expectStdout: { type: 'string' },
+                  timeoutSeconds: { type: 'number' },
+                  kind: { type: 'string', enum: ['proves-change', 'regression-guard'] },
+                },
+                required: ['command', 'args', 'kind'],
+                additionalProperties: false,
+              },
+            },
             instructions: {
               type: 'array',
               items: { type: 'string' },
@@ -324,6 +539,34 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
         },
       },
       summary: { type: 'string', description: 'Brief summary of the overall plan.' },
+      contracts: {
+        type: 'array',
+        description:
+          'Decisions two or more tasks must agree on that no single file shows — ' +
+          'a return shape, a field name, which module owns a table. Add one when ' +
+          'tasks with no file overlap would otherwise invent the same interface ' +
+          'differently. Write each statement in full: an agent reads it cold.',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'Short identifier for this contract.' },
+            statement: {
+              type: 'string',
+              description:
+                'The decision in full, self-contained. Never "as discussed" or ' +
+                '"the above" — at least a full sentence naming the shape/owner.',
+            },
+            producedBy: { type: 'string', description: 'Task id that establishes the contract.' },
+            consumedBy: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Task ids that must code against it. Must depend on producedBy.',
+            },
+          },
+          required: ['id', 'statement', 'producedBy', 'consumedBy'],
+          additionalProperties: false,
+        },
+      },
     },
     required: ['tasks', 'summary'],
     additionalProperties: false,
@@ -334,7 +577,9 @@ export const toolDefinitions = {
   read_file: readFileTool,
   list_files: listFilesTool,
   search_files: searchFilesTool,
+  search_content: searchContentTool,
   run_command: runCommandTool,
+  run_baseline: runBaselineTool,
   write_file: writeFileTool,
   edit_file: editFileTool,
   delete_file: deleteFileTool,
@@ -349,12 +594,13 @@ export type ToolName = keyof typeof toolDefinitions
  * is deleted in favour of this map — do not reintroduce a rival table.
  */
 export const roleTools: Record<string, ToolName[]> = {
-  developer: ['read_file', 'list_files', 'search_files', 'propose_plan'],
+  developer: ['read_file', 'list_files', 'search_files', 'search_content', 'run_baseline', 'propose_plan'],
   master: ['read_file', 'list_files', 'search_files', 'run_command'],
   worker: [
     'read_file',
     'list_files',
     'search_files',
+    'search_content',
     'write_file',
     'edit_file',
     'delete_file',

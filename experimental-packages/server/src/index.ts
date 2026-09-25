@@ -12,7 +12,7 @@ import { killAllPreviewServers } from './ws/handlers/video.js'
 const log = componentLogger('server')
 
 dotenv.config()
-if (!process.env.OPENROUTER_API_KEY && !process.env.ANTHROPIC_API_KEY && !process.env.OPENCODE_API_KEY) {
+if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENCODE_API_KEY) {
   const repoRootEnv = resolve(dirname(fileURLToPath(import.meta.url)), '../../..', '.env')
   dotenv.config({ path: repoRootEnv })
 }
@@ -87,14 +87,13 @@ const isMain = process.argv[1] !== undefined && import.meta.url === `file://${pr
 if (isMain) {
   const port = Number(process.env.PORT) || 4820
   const apiKeys: Record<string, string> = {}
-  if (process.env.OPENROUTER_API_KEY) apiKeys.openrouter = process.env.OPENROUTER_API_KEY
   if (process.env.ANTHROPIC_API_KEY) apiKeys.anthropic = process.env.ANTHROPIC_API_KEY
   if (process.env.OPENCODE_API_KEY) {
     apiKeys.zen = process.env.OPENCODE_API_KEY
     apiKeys.go = process.env.OPENCODE_API_KEY  // go provider uses same OpenCode API
   }
   if (Object.keys(apiKeys).length === 0) {
-    log.error('API key required: set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or OPENCODE_API_KEY in .env or environment')
+    log.error('API key required: set ANTHROPIC_API_KEY or OPENCODE_API_KEY in .env or environment')
     log.error('  See .env.example at the repo root')
     process.exit(1)
   }

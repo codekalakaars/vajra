@@ -121,7 +121,7 @@ test('an unenforceable platform is refused by the launcher, not silently accepte
   rmSync(project, { recursive: true, force: true })
 })
 
-test("the OpenRouter API key never reaches the worker's environment", async (t) => {
+test("the API key never reaches the worker's environment", async (t) => {
   // run_command was removed from the agent's tool set, so this test can no
   // longer be exercised through the dispatch table. The security invariant
   // (API key stays in the parent process) is still enforced by the worker's

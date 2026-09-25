@@ -2,7 +2,7 @@ import React from 'react'
 import { Box, Text } from 'ink'
 import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
 import { renderMarkdown } from '../../streaming.js'
-import type { Entry, SessionState, PendingPrompt, TaskStatus } from './store.js'
+import type { AgentActivity, Entry, SessionState, PendingPrompt, TaskStatus } from './store.js'
 
 const TASK_ICONS: Record<TaskStatus, { icon: string; color: string }> = {
   pending: { icon: '○', color: 'gray' },
@@ -76,6 +76,34 @@ export function PlanCard({ plan }: { plan: DeveloperPlan }) {
   )
 }
 
+function elapsed(since: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - since) / 1000))
+  return seconds < 1 ? '0.1s' : `${seconds}s`
+}
+
+function ActivityLine({ activity }: { activity: AgentActivity }) {
+  const what = activity.tool
+    ? `${activity.tool}${activity.summary ? ` ${activity.summary}` : ''}`
+    : (activity.phase ?? '')
+  return (
+    <Text color="gray">
+      {' '}
+      ↳ {what} {elapsed(activity.since)}
+      {activity.toolCount > 0 ? ` · ${activity.toolCount} tool${activity.toolCount === 1 ? '' : 's'}` : ''}
+    </Text>
+  )
+}
+
+export function DeveloperRow({ activity }: { activity: AgentActivity | undefined }) {
+  if (!activity) return null
+  return (
+    <Text>
+      <Text color="magenta">◆ developer </Text>
+      {activity.tool || activity.phase ? <ActivityLine activity={activity} /> : <Text color="gray"> thinking…</Text>}
+    </Text>
+  )
+}
+
 export function TaskList({
   tasks,
   index,
@@ -94,10 +122,13 @@ export function TaskList({
       {tasks.map((task, i) => {
         const { icon, color } = TASK_ICONS[task.status]
         return (
-          <Text key={i}>
-            <Text color={color as 'green'}>{icon} </Text>
-            <Text color={task.status === 'pending' ? 'gray' : undefined}>{task.title}</Text>
-          </Text>
+          <Box key={i} flexDirection="column">
+            <Text>
+              <Text color={color as 'green'}>{icon} </Text>
+              <Text color={task.status === 'pending' ? 'gray' : undefined}>{task.title}</Text>
+            </Text>
+            {task.activity && <ActivityLine activity={task.activity} />}
+          </Box>
         )
       })}
     </Box>
@@ -150,6 +181,7 @@ function EntryView({ entry }: { entry: Entry }) {
 export function Transcript({ state }: { state: SessionState }) {
   return (
     <Box flexDirection="column">
+      {state.developer && <DeveloperRow activity={state.developer} />}
       {state.entries.map((entry, i) => (
         <EntryView key={i} entry={entry} />
       ))}

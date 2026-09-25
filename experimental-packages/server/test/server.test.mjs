@@ -95,7 +95,7 @@ test('an unknown RPC method returns a clean error, not a crash', async () => {
 })
 
 // A project resolves its provider when it is created, so these need a key.
-const TEST_API_KEYS = { openrouter: 'test-key' }
+const TEST_API_KEYS = { zen: 'test-key' }
 
 test('projects.create fails closed when no launcher is configured yet', async () => {
   // This is the security-relevant case for this slice: with no worker/sandbox
@@ -114,7 +114,7 @@ test('projects.create fails closed when no launcher is configured yet', async ()
       projectDir: dir,
       permissions,
       task: 'do something',
-      model: 'openrouter/some-model',
+      model: 'zen/mimo-v2.5-free',
     })
     assert.equal(typeof projectId, 'string')
 
@@ -140,7 +140,7 @@ test('projects.list reflects created projects', async () => {
 
   try {
     const permissions = await call(ws, 'project.loadPermissions', { projectDir: dir })
-    await call(ws, 'projects.create', { projectDir: dir, permissions, task: 'a task', model: 'openrouter/some-model' })
+    await call(ws, 'projects.create', { projectDir: dir, permissions, task: 'a task', model: 'zen/mimo-v2.5-free' })
 
     const projects = await call(ws, 'projects.list', {})
     assert.equal(projects.length, 1)

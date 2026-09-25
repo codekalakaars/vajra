@@ -1,14 +1,21 @@
 import type { LaunchHandle } from '../agent/developer.js'
 import type { AgentRegistry } from '../agent/registry.js'
 import type { TaskQueue } from '../agent/taskqueue.js'
-import { streamChatCompletion, type OpenRouterMessage } from '../agent/openrouter.js'
+import { streamChatCompletion, type ChatMessage, type ToolCall } from '../agent/chat.js'
 import { getWorkerToolSpecs } from '../agent/tools.js'
 import type { ChangeHistory, FileLockManager } from '@codekalakaars/vajra-sandbox'
-import type { SessionStreamer } from '../session/ui.js'
+import type { AgentEvent, AgentLabel, SessionStreamer } from '../session/ui.js'
+import { startHeartbeat, summarizeToolCall, summarizeToolResult } from '../session/ui.js'
 import { needsServer, findServerEntry } from './server.js'
 
-export interface ExecuteTaskInput {
-  agentId: string
+/**
+ * Tools that only observe. These may run concurrently within one assistant
+ * message; anything that writes keeps the model's original order, because a
+ * later mutation may depend on an earlier one.
+ */
+const READ_ONLY_TOOLS = new Set(['read_file', 'list_files', 'search_files', 'search_content'])
+
+export interface ExecuteTaskInput {  agentId: string
   task: {
     id: string
     title: string
@@ -36,6 +43,8 @@ export interface ExecuteTaskInput {
   fileLocks: FileLockManager
   projectDir: string
   signal?: AbortSignal
+  /** Identifies this worker's row; falls back to the title alone. */
+  onAgentEvent?: (event: AgentEvent) => void
 }
 
 /**
@@ -126,9 +135,13 @@ export async function executeTask(
   fileLocks: FileLockManager,
   projectDir: string,
   signal?: AbortSignal,
+  onAgentEvent?: (event: AgentEvent) => void,
 ): Promise<boolean> {
   const MAX_WORKER_TOOL_CALLS = 100
   let toolCallCount = 0
+
+  const agent: AgentLabel = { role: 'worker', taskId: task.id, title: task.title }
+  const emit = (event: AgentEvent): void => onAgentEvent?.(event)
 
   const instructionLines = task.instructions.map((inst, i) => `${i + 1}. ${inst}`).join('\n')
   const readFileList = task.readFile.length > 0 ? task.readFile.join(', ') : '(none)'
@@ -161,7 +174,7 @@ export async function executeTask(
     '- After completing all instructions, respond with a brief summary',
   ].filter(Boolean).join('\n')
 
-  const messages: OpenRouterMessage[] = [
+  const messages: ChatMessage[] = [
     { role: 'system', content: systemPrompt },
     { role: 'user', content: 'Execute the task now.' },
   ]
@@ -169,11 +182,23 @@ export async function executeTask(
   const toolSpecs = getWorkerToolSpecs()
 
   try {
+    emit({ type: 'phase', agent, phase: 'executing' })
+    let providerRounds = 0
+
     while (toolCallCount < MAX_WORKER_TOOL_CALLS) {
       if (signal?.aborted) break
 
+      providerRounds++
       const result = await streamChatCompletion(
-        { apiKey, model, messages, tools: toolSpecs, signal },
+        {
+          apiKey,
+          model,
+          messages,
+          tools: toolSpecs,
+          signal,
+          round: providerRounds,
+          onEvent: event => emit({ ...event, agent }),
+        },
         text => streamer.onTextDelta(text),
       )
 
@@ -184,27 +209,104 @@ export async function executeTask(
 
       messages.push(result.message)
 
-      for (const toolCall of result.message.tool_calls) {
-        toolCallCount++
-        if (toolCallCount > MAX_WORKER_TOOL_CALLS) break
+      /**
+       * Run one tool call end to end: announce, execute, announce the result.
+       * The caller decides whether calls like this one may overlap.
+       */
+      const runToolCall = async (toolCall: ToolCall): Promise<string> => {
+        const callStarted = Date.now()
+        const toolName = toolCall.function.name
+        let args: unknown = undefined
+        try {
+          args = JSON.parse(toolCall.function.arguments)
+        } catch {
+          args = undefined
+        }
+        emit({
+          type: 'tool-start',
+          agent,
+          callId: toolCall.id,
+          tool: toolName,
+          summary: summarizeToolCall(toolName, args, projectDir),
+        })
 
         let resultContent: string
+        let rawResult: unknown
+        // A tool call can block for minutes; keep the row moving meanwhile.
+        const stopHeartbeat = startHeartbeat(emit, agent)
         try {
-          const result = await handle.callTool(toolCall.function.name, JSON.parse(toolCall.function.arguments))
+          const result = await handle.callTool(toolName, args)
           resultContent = typeof result === 'string' ? result : JSON.stringify(result)
+          rawResult = result
         } catch (e) {
           resultContent = `Error: ${e instanceof Error ? e.message : String(e)}`
+          rawResult = resultContent
+        } finally {
+          stopHeartbeat()
         }
 
-        messages.push({
-          role: 'tool',
-          content: resultContent,
-          tool_call_id: toolCall.id,
+        const outcome = summarizeToolResult(toolName, args, rawResult, Date.now() - callStarted)
+        emit({
+          type: 'tool-end',
+          agent,
+          callId: toolCall.id,
+          tool: toolName,
+          ok: outcome.ok,
+          ms: Date.now() - callStarted,
+          detail: outcome.detail,
         })
+        return resultContent
+      }
+
+      const toolCalls = result.message.tool_calls
+      let index = 0
+      while (index < toolCalls.length) {
+        if (signal?.aborted) break
+
+        // Models routinely return 3-5 independent reads in one message.
+        // Overlapping them is the cheapest parallelism in the whole loop; only
+        // read-only tools may overlap, because ordering matters for mutations.
+        let end = index
+        if (READ_ONLY_TOOLS.has(toolCalls[index].function.name)) {
+          while (end < toolCalls.length && READ_ONLY_TOOLS.has(toolCalls[end].function.name)) {
+            end++
+          }
+        } else {
+          end = index + 1
+        }
+
+        const group = toolCalls.slice(index, end)
+        // The budget is charged before running, so an exhausted loop still
+        // answers every tool call rather than leaving the chain dangling.
+        toolCallCount += group.length
+        if (toolCallCount > MAX_WORKER_TOOL_CALLS) {
+          for (const toolCall of group) {
+            messages.push({
+              role: 'tool',
+              content: 'Error: Tool call budget exhausted.',
+              tool_call_id: toolCall.id,
+            })
+          }
+          break
+        }
+
+        if (group.length > 1) {
+          // Results are appended in the model's original call order, whatever
+          // order they finished in — the provider rejects a mismatch.
+          const settled = await Promise.all(group.map(runToolCall))
+          for (let k = 0; k < group.length; k++) {
+            messages.push({ role: 'tool', content: settled[k], tool_call_id: group[k].id })
+          }
+        } else {
+          const content = await runToolCall(group[0])
+          messages.push({ role: 'tool', content, tool_call_id: group[0].id })
+        }
+        index = end
       }
     }
 
     if (task.validation.length > 0) {
+      emit({ type: 'phase', agent, phase: 'validating' })
       let serverProcess: ReturnType<typeof import('node:child_process').spawn> | null = null
 
       if (needsServer(task.validation)) {
@@ -225,14 +327,39 @@ export async function executeTask(
 
       try {
         for (const cmd of task.validation) {
+          const validationStarted = Date.now()
+          const validationArgs = {
+            command: cmd,
+            timeoutMs: task.timeoutSeconds * 1000,
+          }
+          emit({
+            type: 'tool-start',
+            agent,
+            callId: `validate-${cmd}`,
+            tool: 'run_command',
+            summary: summarizeToolCall('run_command', validationArgs, projectDir),
+          })
+          const stopHeartbeat = startHeartbeat(emit, agent)
           try {
             // C5: task timeout is seconds; run_command timeoutMs is milliseconds.
-            const result = await handle.callTool('run_command', {
-              command: cmd,
-              timeoutMs: task.timeoutSeconds * 1000,
-            })
+            const result = await handle.callTool('run_command', validationArgs)
             const output = typeof result === 'string' ? result : JSON.stringify(result)
             const parsed = parseCommandResult(output)
+            const outcome = summarizeToolResult(
+              'run_command',
+              validationArgs,
+              result,
+              Date.now() - validationStarted,
+            )
+            emit({
+              type: 'tool-end',
+              agent,
+              callId: `validate-${cmd}`,
+              tool: 'run_command',
+              ok: parsed.ok,
+              ms: Date.now() - validationStarted,
+              detail: outcome.detail,
+            })
 
             if (!parsed.ok) {
               streamer.warning(
@@ -241,7 +368,18 @@ export async function executeTask(
               return false
             }
           } catch {
+            emit({
+              type: 'tool-end',
+              agent,
+              callId: `validate-${cmd}`,
+              tool: 'run_command',
+              ok: false,
+              ms: Date.now() - validationStarted,
+              detail: 'threw',
+            })
             return false
+          } finally {
+            stopHeartbeat()
           }
         }
       } finally {

@@ -6,16 +6,16 @@ import type {
   ChatCompletionTool,
 } from 'openai/resources/chat'
 
-export interface OpenRouterToolCall {
+export interface ToolCall {
   id: string
   type: 'function'
   function: { name: string; arguments: string }
 }
 
-export interface OpenRouterMessage {
+export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content?: string | null
-  tool_calls?: OpenRouterToolCall[]
+  tool_calls?: ToolCall[]
   tool_call_id?: string
   name?: string
 }
@@ -28,19 +28,33 @@ export interface OpenAiToolSpec {
 export interface ChatCompletionRequest {
   apiKey: string
   model: string
-  messages: OpenRouterMessage[]
+  messages: ChatMessage[]
   tools?: OpenAiToolSpec[]
   toolChoice?: 'auto' | 'required' | 'none'
   /** Abort mid-request / mid-stream (contract C6). */
   signal?: AbortSignal
+  /**
+   * Observability only — never affects the response. `chat.ts` owns the
+   * round-trip, so it owns the timing; the caller adapts this to the UI port
+   * instead of the agent layer importing the UI.
+   */
+  onEvent?: (event: ChatRoundEvent) => void
+  /** Round N of the caller's loop, for llm-start/llm-end. Defaults to 1. */
+  round?: number
+  /** Cap of the caller's loop, when known. */
+  roundBudget?: number
 }
 
+export type ChatRoundEvent =
+  | { type: 'llm-start'; round: number }
+  | { type: 'llm-end'; round: number; ms: number; budget?: number }
+  | { type: 'heartbeat'; elapsedMs: number }
+
 export interface ChatCompletionResult {
-  message: OpenRouterMessage
+  message: ChatMessage
   finishReason: string | null
 }
 
-const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 const ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
 const ZEN_GO_BASE_URL = 'https://opencode.ai/zen/go/v1'
 const MAX_RETRIES = 5
@@ -51,17 +65,14 @@ const REQUEST_TIMEOUT_MS = 120_000
 function resolveBaseURL(model: string): string {
   if (model.startsWith('go/')) return ZEN_GO_BASE_URL
   if (model.startsWith('zen/')) return ZEN_BASE_URL
-  return OPENROUTER_BASE_URL
+  throw new Error(
+    `Unsupported model '${model}': only zen/* and go/* are supported`,
+  )
 }
 
 function stripProviderPrefix(model: string): string {
   if (model.startsWith('go/')) return model.slice('go/'.length)
   if (model.startsWith('zen/')) return model.slice('zen/'.length)
-  if (model.startsWith('openrouter/')) {
-    const after = model.slice('openrouter/'.length)
-    if (after === 'free' || after === 'auto' || after === 'auto-beta') return model
-    return after
-  }
   return model
 }
 
@@ -176,7 +187,7 @@ export function computeRetryDelayMs(err: unknown, attempt: number): number {
   return Math.floor(Math.random() * base) + 1
 }
 
-function toSdkMessages(messages: OpenRouterMessage[]): ChatCompletionMessageParam[] {
+function toSdkMessages(messages: ChatMessage[]): ChatCompletionMessageParam[] {
   return messages.map(m => {
     if (m.role === 'tool') {
       return {
@@ -217,11 +228,11 @@ function toSdkTools(tools: OpenAiToolSpec[] | undefined): ChatCompletionTool[] |
 
 function toResult(completion: ChatCompletion): ChatCompletionResult {
   const choice = completion.choices[0]
-  if (!choice) throw new Error('OpenRouter response had no choices')
+  if (!choice) throw new Error('Provider response had no choices')
 
   const msg = choice.message
   const funcCalls = msg.tool_calls?.filter(tc => tc.type === 'function') ?? []
-  const message: OpenRouterMessage = {
+  const message: ChatMessage = {
     role: 'assistant',
     content: msg.content ?? null,
     ...(funcCalls.length > 0
@@ -244,6 +255,40 @@ function throwIfAborted(signal?: AbortSignal): void {
   }
 }
 
+const HEARTBEAT_MS = 750
+
+/**
+ * Bracket one caller round: `llm-start` on entry, `llm-end` on exit, and a
+ * `heartbeat` every 750 ms while the call (including retries and backoff) is
+ * outstanding. The heartbeat is what keeps the screen moving through a
+ * 40-second provider call — the start/end pair alone leaves it silent.
+ *
+ * Returns a stop function; call it from a `finally`.
+ */
+function watchRound(request: ChatCompletionRequest): () => void {
+  const onEvent = request.onEvent
+  if (!onEvent) return () => {}
+  const round = request.round ?? 1
+  const budget = request.roundBudget
+  const startedAt = Date.now()
+
+  onEvent({ type: 'llm-start', round })
+  const timer = setInterval(() => {
+    onEvent({ type: 'heartbeat', elapsedMs: Date.now() - startedAt })
+  }, HEARTBEAT_MS)
+  timer.unref?.()
+
+  return () => {
+    clearInterval(timer)
+    onEvent({
+      type: 'llm-end',
+      round,
+      ms: Date.now() - startedAt,
+      ...(budget !== undefined ? { budget } : {}),
+    })
+  }
+}
+
 export async function chatCompletion(
   request: ChatCompletionRequest,
 ): Promise<ChatCompletionResult> {
@@ -259,20 +304,25 @@ export async function chatCompletion(
     ...(request.signal ? { signal: request.signal } : {}),
   }
 
-  for (let attempt = 0; ; attempt++) {
-    throwIfAborted(request.signal)
-    try {
-      const completion = await client.chat.completions.create(params)
-      return toResult(completion)
-    } catch (err) {
-      if (isAbortError(err)) throw err
-      if (isRetryable(err) && attempt < MAX_RETRIES) {
-        const delay = computeRetryDelayMs(err, attempt)
-        await sleep(delay, request.signal)
-        continue
+  const endRound = watchRound(request)
+  try {
+    for (let attempt = 0; ; attempt++) {
+      throwIfAborted(request.signal)
+      try {
+        const completion = await client.chat.completions.create(params)
+        return toResult(completion)
+      } catch (err) {
+        if (isAbortError(err)) throw err
+        if (isRetryable(err) && attempt < MAX_RETRIES) {
+          const delay = computeRetryDelayMs(err, attempt)
+          await sleep(delay, request.signal)
+          continue
+        }
+        throw new Error(extractErrorMessage(err))
       }
-      throw new Error(extractErrorMessage(err))
     }
+  } finally {
+    endRound()
   }
 }
 
@@ -298,82 +348,87 @@ export async function streamChatCompletion(
   let emitted = 0
   let content = ''
 
-  for (let attempt = 0; ; attempt++) {
-    throwIfAborted(request.signal)
-    try {
-      const stream = await client.chat.completions.create(params) as AsyncIterable<ChatCompletionChunk>
+  const endRound = watchRound(request)
+  try {
+    for (let attempt = 0; ; attempt++) {
+      throwIfAborted(request.signal)
+      try {
+        const stream = await client.chat.completions.create(params) as AsyncIterable<ChatCompletionChunk>
 
-      content = ''
-      let finishReason: string | null = null
-      const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
+        content = ''
+        let finishReason: string | null = null
+        const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
 
-      for await (const chunk of stream) {
-        throwIfAborted(request.signal)
-        const choice = chunk.choices[0]
-        if (!choice) continue
+        for await (const chunk of stream) {
+          throwIfAborted(request.signal)
+          const choice = chunk.choices[0]
+          if (!choice) continue
 
-        const delta = choice.delta
+          const delta = choice.delta
 
-        if (delta?.content) {
-          content += delta.content
-          if (content.length > emitted) {
-            onTextDelta(content.slice(emitted))
-            emitted = content.length
+          if (delta?.content) {
+            content += delta.content
+            if (content.length > emitted) {
+              onTextDelta(content.slice(emitted))
+              emitted = content.length
+            }
           }
-        }
 
-        if (onThinkingDelta) {
-          const d = delta as Record<string, unknown> | undefined
-          const rd = d?.reasoning_details as Array<Record<string, unknown>> | undefined
-          if (rd) {
-            for (const detail of rd) {
-              if (detail.type === 'reasoning.text' && typeof detail.text === 'string') {
-                onThinkingDelta(detail.text)
+          if (onThinkingDelta) {
+            const d = delta as Record<string, unknown> | undefined
+            const rd = d?.reasoning_details as Array<Record<string, unknown>> | undefined
+            if (rd) {
+              for (const detail of rd) {
+                if (detail.type === 'reasoning.text' && typeof detail.text === 'string') {
+                  onThinkingDelta(detail.text)
+                }
               }
             }
           }
-        }
 
-        if (delta?.tool_calls) {
-          for (const fragment of delta.tool_calls) {
-            const idx = fragment.index
-            const existing = toolCalls.get(idx) ?? { id: '', name: '', arguments: '' }
-            if (fragment.id) existing.id = fragment.id
-            if (fragment.function?.name) existing.name = fragment.function.name
-            if (fragment.function?.arguments) existing.arguments += fragment.function.arguments
-            toolCalls.set(idx, existing)
+          if (delta?.tool_calls) {
+            for (const fragment of delta.tool_calls) {
+              const idx = fragment.index
+              const existing = toolCalls.get(idx) ?? { id: '', name: '', arguments: '' }
+              if (fragment.id) existing.id = fragment.id
+              if (fragment.function?.name) existing.name = fragment.function.name
+              if (fragment.function?.arguments) existing.arguments += fragment.function.arguments
+              toolCalls.set(idx, existing)
+            }
           }
+
+          if (choice.finish_reason) finishReason = choice.finish_reason
         }
 
-        if (choice.finish_reason) finishReason = choice.finish_reason
-      }
+        const orderedToolCalls: ToolCall[] = [...toolCalls.entries()]
+          .sort(([a], [b]) => a - b)
+          .map(([, tc]) => ({
+            id: tc.id,
+            type: 'function' as const,
+            function: { name: tc.name, arguments: tc.arguments },
+          }))
 
-      const orderedToolCalls: OpenRouterToolCall[] = [...toolCalls.entries()]
-        .sort(([a], [b]) => a - b)
-        .map(([, tc]) => ({
-          id: tc.id,
-          type: 'function' as const,
-          function: { name: tc.name, arguments: tc.arguments },
-        }))
+        const message: ChatMessage = {
+          role: 'assistant',
+          content: content.length > 0 ? content : null,
+          ...(orderedToolCalls.length > 0 ? { tool_calls: orderedToolCalls } : {}),
+        }
 
-      const message: OpenRouterMessage = {
-        role: 'assistant',
-        content: content.length > 0 ? content : null,
-        ...(orderedToolCalls.length > 0 ? { tool_calls: orderedToolCalls } : {}),
+        return { message, finishReason }
+      } catch (err) {
+        if (isAbortError(err)) throw err
+        if (isRetryable(err) && attempt < MAX_RETRIES) {
+          // Partial content from the failed attempt is discarded; only emit
+          // text that was already shown (emitted) is never re-sent.
+          content = ''
+          const delay = computeRetryDelayMs(err, attempt)
+          await sleep(delay, request.signal)
+          continue
+        }
+        throw new Error(extractErrorMessage(err))
       }
-
-      return { message, finishReason }
-    } catch (err) {
-      if (isAbortError(err)) throw err
-      if (isRetryable(err) && attempt < MAX_RETRIES) {
-        // Partial content from the failed attempt is discarded; only emit
-        // text that was already shown (emitted) is never re-sent.
-        content = ''
-        const delay = computeRetryDelayMs(err, attempt)
-        await sleep(delay, request.signal)
-        continue
-      }
-      throw new Error(extractErrorMessage(err))
     }
+  } finally {
+    endRound()
   }
 }

@@ -44,7 +44,7 @@ test('sessions/plan_steps/messages round-trip', () => {
 
   db.prepare(
     `INSERT INTO sessions (id, project_dir, task, model, status, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run('s1', '/tmp/project', 'do the thing', 'openrouter/some-model', 'starting', Date.now())
+  ).run('s1', '/tmp/project', 'do the thing', 'zen/mimo-v2.5-free', 'starting', Date.now())
 
   db.prepare(`INSERT INTO plan_steps (session_id, step_index, title, status) VALUES (?, ?, ?, ?)`).run(
     's1',

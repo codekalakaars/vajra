@@ -422,9 +422,11 @@ export class ProjectManager {
 
   setModel(projectId: string, model: string, apiKeys: Record<string, string>): void {
     // Switching models can switch providers. Leaving the conversation's
-    // provider in place sent, say, an Anthropic model id to OpenRouter.
-    const { provider, resolvedModel } = createProvider(model, apiKeys)
-    stmt(this.db, `UPDATE sessions SET model = ? WHERE id = ?`).run(resolvedModel, projectId)
+    // provider in place sent, say, an Anthropic model id to the zen gateway.
+    const { provider } = createProvider(model, apiKeys)
+    // Persist the full prefixed model — later reads re-parse it to rebuild
+    // the provider, and a stripped bare name has no provider.
+    stmt(this.db, `UPDATE sessions SET model = ? WHERE id = ?`).run(model, projectId)
 
     const conv = this.conversations.get(projectId)
     if (conv) conv.provider = provider

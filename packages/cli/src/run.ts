@@ -1,7 +1,7 @@
 import * as readline from 'node:readline'
 import { TerminalStreamer } from './streaming.js'
 import { runSession, isExitCommand } from './session/service.js'
-import type { SessionUI, TaskEvent } from './session/ui.js'
+import type { AgentEvent, SessionUI, TaskEvent } from './session/ui.js'
 
 export { isExitCommand }
 
@@ -15,6 +15,14 @@ export interface RunOptions {
   timeout?: number
   /** Explicit opt-in to run without OS sandbox enforcement. */
   allowUnenforced?: boolean
+  /** Suppress tool/agent lines; keep task-level events. */
+  quiet?: boolean
+  /** Overrides the configured max concurrent workers. */
+  concurrency?: number
+  /** Resume a persisted session instead of starting a new one. */
+  resumeFrom?: string
+  /** Continue even when the staleness gate reports a changed tree. */
+  force?: boolean
 }
 
 function ask(message: string): Promise<string> {
@@ -32,7 +40,7 @@ function ask(message: string): Promise<string> {
  * interrupt. All orchestration lives in session/service.ts.
  */
 export async function runCommand(options: RunOptions): Promise<void> {
-  const streamer = new TerminalStreamer(options.verbose)
+  const streamer = new TerminalStreamer(options.verbose, undefined, options.quiet === true)
 
   const ui: SessionUI = {
     banner: () => streamer.banner(),
@@ -79,6 +87,7 @@ export async function runCommand(options: RunOptions): Promise<void> {
           break
       }
     },
+    onAgentEvent: (event: AgentEvent) => streamer.agentEvent(event),
   }
 
   // D6: first SIGINT aborts in-flight work; second exits immediately with 130.
@@ -108,6 +117,9 @@ export async function runCommand(options: RunOptions): Promise<void> {
         autoConfirm: options.autoConfirm,
         timeout: options.timeout,
         allowUnenforced: options.allowUnenforced,
+        concurrency: options.concurrency,
+        resumeFrom: options.resumeFrom,
+        force: options.force,
         signal: abortController.signal,
         onSandboxClose: close => {
           forceCloseSandbox = close

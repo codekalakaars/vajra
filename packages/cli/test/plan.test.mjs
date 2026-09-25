@@ -100,3 +100,65 @@ test('retries is passed through (0 means 0)', () => {
   assert.equal(result.ok, true)
   assert.equal(result.plan.tasks[0].retries, 0)
 })
+
+test('structured context/edits/verify lower to the flat executor fields (§8)', () => {
+  const result = parseProposePlanArgs({
+    tasks: [
+      {
+        id: 'structured',
+        title: 't',
+        description: 'd',
+        context: [{ path: 'src/a.ts', reason: 'edit site' }],
+        edits: [
+          { path: 'src/a.ts', op: 'modify', anchor: 'const run = 1', change: 'Return a tuple.' },
+          { path: 'src/new.ts', op: 'create', change: 'New module.' },
+          { path: 'src/old.ts', op: 'delete', change: 'Obsolete.' },
+        ],
+        verify: [{ command: 'pnpm', args: ['test'], kind: 'proves-change' }],
+      },
+    ],
+    summary: 's',
+  })
+
+  assert.equal(result.ok, true)
+  const task = result.plan.tasks[0]
+  assert.deepEqual(task.readFile, ['src/a.ts'])
+  assert.deepEqual(task.writeFile, ['src/a.ts', 'src/new.ts'])
+  assert.deepEqual(task.deleteFile, ['src/old.ts'])
+  assert.deepEqual(task.instructions, [
+    'In src/a.ts, at the text `const run = 1`: Return a tuple.',
+    'Create src/new.ts: New module.',
+    'Delete src/old.ts: Obsolete.',
+  ])
+  assert.deepEqual(task.validation, ['pnpm test'])
+  // The structured fields survive on the plan so later stages can read them.
+  assert.equal(task.edits.length, 3)
+  assert.equal(task.verify[0].kind, 'proves-change')
+})
+
+test('tasks that omit the structured fields pass through unchanged (§2)', () => {
+  const result = parseProposePlanArgs({
+    tasks: [
+      {
+        id: 'legacy',
+        title: 't',
+        description: 'd',
+        instructions: ['Do the thing'],
+        readFile: ['src/x.ts'],
+        writeFile: ['src/y.ts'],
+        validation: ['pnpm build'],
+      },
+    ],
+    summary: 's',
+  })
+
+  assert.equal(result.ok, true)
+  const task = result.plan.tasks[0]
+  assert.deepEqual(task.instructions, ['Do the thing'])
+  assert.deepEqual(task.readFile, ['src/x.ts'])
+  assert.deepEqual(task.writeFile, ['src/y.ts'])
+  assert.deepEqual(task.validation, ['pnpm build'])
+  assert.equal(task.context, undefined)
+  assert.equal(task.edits, undefined)
+  assert.equal(task.verify, undefined)
+})

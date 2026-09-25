@@ -17,6 +17,65 @@ import {
 import { runCommand } from './run.js'
 import { startTUI } from './tui/index.js'
 import { videoCommand } from './video.js'
+import {
+  deleteSession,
+  latestSession,
+  listSessions,
+  loadMessages,
+  loadSession,
+  type PersistedSession,
+} from './persist/index.js'
+import { assessStaleness, describeVerdict } from './session/resume.js'
+
+function formatAge(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return 'unknown'
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+/** `vajra sessions show` — read-only transcript and plan. */
+function printSession(session: PersistedSession, projectDir: string): void {
+  console.log(`Session ${session.sessionId}`)
+  console.log(`  project   ${session.projectDir}`)
+  console.log(`  created   ${new Date(session.createdAt).toISOString()}`)
+  console.log(`  updated   ${new Date(session.updatedAt).toISOString()}`)
+  console.log(`  phase     ${session.phase}`)
+  console.log(`  model     ${session.config.model || '(unset)'}`)
+  if (session.git) console.log(`  git       ${session.git.head.slice(0, 8)}${session.git.dirty ? ' (dirty)' : ''}`)
+
+  const tasks = Object.entries(session.tasks ?? {})
+  if (tasks.length > 0) {
+    console.log('\nTasks:')
+    for (const [id, task] of tasks) {
+      const detail = task.error ? ` — ${task.error}` : ''
+      console.log(`  ${task.status.padEnd(8)} ${id}${detail}`)
+    }
+  }
+
+  if (session.plan) {
+    console.log(`\nPlan (${session.plan.tasks.length} task(s)):`)
+    for (const t of session.plan.tasks) {
+      console.log(`  ${t.id}: ${t.title}`)
+    }
+  }
+
+  console.log('\nStaleness:')
+  console.log(`  ${describeVerdict(assessStaleness(session, projectDir))}`)
+
+  const messages = loadMessages(session.sessionId, projectDir)
+  if (messages.length > 0) {
+    console.log(`\nTranscript (${messages.length} message(s)):`)
+    for (const m of messages) {
+      const body = (m.content ?? '').replace(/\s+/g, ' ').trim()
+      if (body) console.log(`  [${m.role}] ${body.slice(0, 200)}`)
+    }
+  }
+}
 
 // Find root .env file (go up from dist/ to packages/cli, then to repo root)
 const __filename = fileURLToPath(import.meta.url)
@@ -54,23 +113,26 @@ program
   .command('run')
   .description('Start an interactive session with the developer agent')
   .argument('[task]', 'Initial task description (optional)')
-  .option('-k, --api-key <key>', 'API key (OpenRouter or OpenCode Zen)')
+  .option('-k, --api-key <key>', 'API key (OpenCode Zen)')
   .option('-m, --model <model>', 'LLM model to use', resolveDefaultModel())
   .option('-v, --verbose', 'Show thinking/reasoning output')
+  .option('-q, --quiet', 'Suppress tool-level output; show task-level events only')
   .option('-d, --dir <directory>', 'Project directory', process.cwd())
   .option('-y, --yes', 'Auto-confirm all plans without prompting')
   .option('-t, --timeout <seconds>', 'Per-task timeout in seconds', '300')
+  .option('-c, --concurrency <n>', 'Max tasks to run at once', '')
   .option('--allow-unenforced', 'Allow tools to run without OS sandbox enforcement (not recommended)')
   .addHelpText('after', `
 Model recommendations (only models with a configured key are offered in the TUI):
   Zen free:      zen/space-bunny-free (default), zen/mimo-v2.6-flash-free, zen/mimo-v2.5-free, …
                  (requires OPENCODE_API_KEY — free tier)
-  OpenRouter:    openai/gpt-4o-mini, openai/gpt-4o, anthropic/claude-3-haiku, nvidia/*:free
-                 (requires OPENROUTER_API_KEY)
+  Go:            go/mimo-v2.5, go/kimi-k3, … (requires OPENCODE_API_KEY)
+
+Only zen/* and go/* model ids are supported.
 
 Examples:
   $ vajra run "fix the login bug"
-  $ vajra run -m openai/gpt-4o "add dark mode"
+  $ vajra run -m zen/mimo-v2.5-free "add dark mode"
   $ vajra run -t 600 -y "refactor the database layer"
   $ vajra run --allow-unenforced "continue without OS sandbox enforcement"
   `)
@@ -86,6 +148,92 @@ Examples:
       autoConfirm: options.yes,
       timeout: parseInt(options.timeout, 10) || 300,
       allowUnenforced: Boolean(options.allowUnenforced),
+      quiet: Boolean(options.quiet),
+      concurrency: parseInt(options.concurrency, 10) || undefined,
+    })
+  })
+
+program
+  .command('sessions')
+  .description('List, inspect and remove persisted sessions')
+  .argument('[subcommand]', 'show <id> | rm <id>', 'list')
+  .argument('[id]', 'Session id for show/rm')
+  .option('-d, --dir <directory>', 'Project directory', process.cwd())
+  .action((subcommand, id, options) => {
+    const projectDir = resolve(options.dir)
+    const action = String(subcommand ?? 'list')
+
+    if (action === 'list') {
+      const sessions = listSessions(projectDir)
+      if (sessions.length === 0) {
+        console.log(`No sessions recorded for ${projectDir}`)
+        return
+      }
+      console.log('ID                                 PHASE          PROGRESS  AGE      PLAN')
+      for (const s of sessions) {
+        const age = formatAge(Date.now() - s.updatedAt)
+        const progress = `${s.done}/${s.total}`
+        console.log(
+          `${s.sessionId.padEnd(34)} ${s.phase.padEnd(14)} ${progress.padEnd(9)} ${age.padEnd(8)} ${s.planTitle ?? s.status}`,
+        )
+      }
+      return
+    }
+
+    if (action === 'show') {
+      if (!id) {
+        console.error('Usage: vajra sessions show <id>')
+        process.exit(1)
+      }
+      const session = loadSession(id, projectDir)
+      if (!session) {
+        console.error(`No session '${id}' in ${projectDir}`)
+        process.exit(1)
+      }
+      printSession(session, projectDir)
+      return
+    }
+
+    if (action === 'rm') {
+      if (!id) {
+        console.error('Usage: vajra sessions rm <id>')
+        process.exit(1)
+      }
+      if (!deleteSession(id, projectDir)) {
+        console.error(`No session '${id}' in ${projectDir}`)
+        process.exit(1)
+      }
+      console.log(`Removed session ${id}`)
+      return
+    }
+
+    console.error(`Unknown subcommand '${action}'. Usage: vajra sessions [list|show <id>|rm <id>]`)
+    process.exit(1)
+  })
+
+program
+  .command('resume')
+  .description('Resume a persisted session')
+  .argument('[id]', 'Session id (defaults to the most recent for this project)')
+  .option('-d, --dir <directory>', 'Project directory', process.cwd())
+  .option('-f, --force', 'Resume even when the staleness gate reports a changed tree')
+  .option('-k, --api-key <key>', 'API key (OpenCode Zen)')
+  .option('-m, --model <model>', 'LLM model to use', resolveDefaultModel())
+  .action(async (id, options) => {
+    const projectDir = resolve(options.dir)
+    const sessionId = id ?? latestSession(projectDir)?.sessionId
+    if (!sessionId) {
+      console.error(`No sessions recorded for ${projectDir}`)
+      process.exit(1)
+    }
+    const model = options.model
+    await runCommand({
+      resumeFrom: sessionId,
+      force: Boolean(options.force),
+      model,
+      apiKey: resolveApiKeyForModel(model, options.apiKey),
+      verbose: false,
+      projectDir,
     })
   })
 
@@ -133,10 +281,10 @@ program
 
     // Read from .env file directly to show all configured keys
     const knownKeys = [
-      'OPENROUTER_API_KEY',
       'OPENCODE_API_KEY',
       'DEFAULT_MODEL',
       'VAJRA_MODEL',
+      'VAJRA_PROJECT_DIR',
     ]
 
     const envFromFile = readEnvFile(envPath)

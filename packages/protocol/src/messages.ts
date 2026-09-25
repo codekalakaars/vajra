@@ -2,6 +2,8 @@
 // Shapes mirroring vajra-core types are hand-duplicated — this package
 // must stay loadable in a browser bundle.
 
+import type { ContextRef, EditSpec, VerifySpec } from './tools.js'
+
 export interface FilePermissions {
   read: boolean
   write: boolean
@@ -33,6 +35,11 @@ export interface PlannedTask {
   id: string
   title: string
   description: string
+  /** Structured planning fields (docs/TASK_SPEC.md). When present they are the
+   *  source of truth and the flat arrays below are lowered from them. */
+  context?: ContextRef[]
+  edits?: EditSpec[]
+  verify?: VerifySpec[]
   /** Step-by-step instructions for the worker — exactly what to do. */
   instructions: string[]
   /** Files this task reads (read-only access). */

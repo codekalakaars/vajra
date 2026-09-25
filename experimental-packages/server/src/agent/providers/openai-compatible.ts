@@ -1,8 +1,8 @@
 // Shared implementation for OpenAI-compatible endpoints.
 //
-// OpenRouter and Zen differ only in base URL and name: message conversion,
-// tool conversion, stream accumulation, retries and deadlines were duplicated
-// line for line between them, so a fix to one silently left the other alone.
+// The zen and go gateways differ only in base URL and name: message conversion,
+// tool conversion, stream accumulation, retries and deadlines would otherwise
+// be duplicated line for line, so a fix to one silently left the other alone.
 // Anything speaking the OpenAI chat-completions API — a self-hosted gateway,
 // Ollama, together.ai — can subclass this.
 

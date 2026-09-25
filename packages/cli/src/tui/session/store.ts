@@ -1,4 +1,5 @@
 import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
+import type { AgentEvent } from '../../session/ui.js'
 
 export type PromptKind = 'initial-first' | 'initial-reentry' | 'user' | 'confirm-plan' | 'feedback'
 
@@ -19,9 +20,21 @@ export interface PendingPrompt {
 
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
 
+/** What one agent is doing right now, for the in-place activity row. */
+export interface AgentActivity {
+  phase?: string
+  tool: string
+  summary: string
+  since: number
+  /** Completed tool calls collapse into a count so the pane cannot grow forever. */
+  toolCount: number
+}
+
 export interface TaskView {
+  taskId?: string
   title: string
   status: TaskStatus
+  activity?: AgentActivity
 }
 
 export type Entry =
@@ -41,6 +54,8 @@ export interface SessionState {
   thinking: string
   prompt: PendingPrompt | null
   tasks: TaskView[]
+  /** The developer row — the only agent with no task. */
+  developer?: AgentActivity
   executionTotal: number
   executionIndex: number
   /** True after the user interrupts (Ctrl-C); prompts auto-drain with "exit". */
@@ -48,6 +63,8 @@ export interface SessionState {
   /** runSession resolved — show the dismiss screen. */
   finished: boolean
   exitCode: number
+  /** Bumped by heartbeats so elapsed counters actually tick. */
+  tick: number
 }
 
 const INITIAL: SessionState = {
@@ -56,11 +73,13 @@ const INITIAL: SessionState = {
   thinking: '',
   prompt: null,
   tasks: [],
+  developer: undefined,
   executionTotal: 0,
   executionIndex: 0,
   interrupted: false,
   finished: false,
   exitCode: 0,
+  tick: 0,
 }
 
 /** Observable session state. React subscribes via useSyncExternalStore. */
@@ -138,7 +157,11 @@ export class SessionStore {
 
   setPlanTasks(plan: DeveloperPlan): void {
     this.set({
-      tasks: plan.tasks.map(t => ({ title: t.title, status: 'pending' as TaskStatus })),
+      tasks: plan.tasks.map(t => ({
+        taskId: t.id,
+        title: t.title,
+        status: 'pending' as TaskStatus,
+      })),
       executionTotal: plan.tasks.length,
       executionIndex: 0,
     })
@@ -178,6 +201,105 @@ export class SessionStore {
     if (this.state.prompt) {
       queueMicrotask(() => this.submitPrompt('exit'))
     }
+  }
+
+  /**
+   * Fold a sub-task event into the row it belongs to. One row per active
+   * agent — interleaved events from four workers are attributed by
+   * `taskId`, never appended as a flat log.
+   */
+  applyAgentEvent(event: AgentEvent): void {
+    const { agent } = event
+    const isDeveloper = agent.role === 'developer'
+
+    if (event.type === 'heartbeat') {
+      // No state change, but re-render so elapsed counters move.
+      this.set({ tick: this.state.tick + 1 })
+      return
+    }
+
+    if (event.type === 'phase') {
+      const activity: AgentActivity = {
+        phase: event.phase,
+        tool: '',
+        summary: '',
+        since: Date.now(),
+        toolCount: 0,
+      }
+      if (isDeveloper) this.set({ developer: activity })
+      else this.updateWorkerActivity(agent.taskId, activity)
+      return
+    }
+
+    if (event.type === 'llm-start' || event.type === 'llm-end') {
+      if (event.type === 'llm-start') {
+        // The count carries across rounds — it is a running total for the row,
+        // not a per-round one, or a long task would keep restarting at 1.
+        const toolCount = (isDeveloper ? this.state.developer?.toolCount : undefined) ?? 0
+        const activity: AgentActivity = {
+          tool: 'thinking',
+          summary: `round ${event.round}`,
+          since: Date.now(),
+          toolCount,
+        }
+        if (isDeveloper) this.set({ developer: activity })
+        else this.updateWorkerActivity(agent.taskId, activity)
+      } else {
+        // Round finished — the row goes quiet until the next event.
+        if (isDeveloper) this.set({ developer: undefined })
+        else this.updateWorkerActivity(agent.taskId, undefined)
+      }
+      return
+    }
+
+    if (event.type === 'tool-start') {
+      const toolCount = (isDeveloper ? this.state.developer?.toolCount : undefined) ?? 0
+      const idx = isDeveloper ? -1 : this.state.tasks.findIndex(t => t.taskId === agent.taskId)
+      const activity: AgentActivity = {
+        tool: event.tool,
+        summary: event.summary,
+        since: Date.now(),
+        toolCount: idx >= 0 ? (this.state.tasks[idx].activity?.toolCount ?? 0) : toolCount,
+      }
+      if (isDeveloper) this.set({ developer: activity })
+      else this.updateWorkerActivity(agent.taskId, activity)
+      return
+    }
+
+    // tool-end
+    if (isDeveloper) {
+      const previous = this.state.developer
+      this.set({
+        developer: previous
+          ? { ...previous, toolCount: previous.toolCount + 1, tool: '', summary: '' }
+          : undefined,
+      })
+      return
+    }
+    if (!agent.taskId) return
+    const idx = this.state.tasks.findIndex(t => t.taskId === agent.taskId)
+    if (idx < 0) return
+    const previous = this.state.tasks[idx].activity
+    const tasks = [...this.state.tasks]
+    tasks[idx] = {
+      ...tasks[idx],
+      activity: previous
+        ? { ...previous, toolCount: previous.toolCount + 1, tool: '', summary: '' }
+        : undefined,
+    }
+    this.set({ tasks })
+  }
+
+  private updateWorkerActivity(
+    taskId: string | undefined,
+    activity: AgentActivity | undefined,
+  ): void {
+    if (!taskId) return
+    const idx = this.state.tasks.findIndex(t => t.taskId === taskId)
+    if (idx < 0) return
+    const tasks = [...this.state.tasks]
+    tasks[idx] = { ...tasks[idx], activity }
+    this.set({ tasks })
   }
 
   setFinished(exitCode: number): void {
