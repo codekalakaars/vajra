@@ -1,8 +1,9 @@
 # Contributing to Vajra
 
 Vajra is an AI agent sandbox platform: `@codekalakaars/vajra-core` (Rust napi-rs
-addon), `@codekalakaars/vajra-sandbox` (standalone TypeScript sandbox), a server,
-web UI, and KiCad integration. Read the [README](README.md) first.
+addon), `@codekalakaars/vajra-sandbox` (standalone TypeScript sandbox), and
+`@codekalakaars/vajra-cli` (the shipping product). Read the
+[README](README.md) first.
 
 ## Getting Started
 
