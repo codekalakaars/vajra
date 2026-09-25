@@ -3,8 +3,10 @@
 Completed work is removed from these docs; the code and its tests are the record.
 
 **State:** all suites green — root 31 pass/1 skipped, protocol 11/11, sandbox
-69/69, **CLI 272/272**. Every package typechecks. Nothing is committed; the whole
-body of work is in the working tree.
+69/69, **CLI 272/272**. Every package typechecks. Everything is committed and
+pushed: `main` is at `025c93e`, and the experimental packages (`server`, `web`,
+`programmatic-video`) are parked on the `experimental-packages` branch at
+`bb732b2` — see "Regression bar" for what that means for the server suite.
 
 **The substantial remaining work is [CONCURRENCY_HAZARDS.md](CONCURRENCY_HAZARDS.md)**
 — eight hazards in the now-live parallel execution path, three of them P0. Start
@@ -29,8 +31,12 @@ One agent owns a file; tests live in a file named after the module;
 
 ```
 root 31 pass / 1 skipped / 0 fail   ·   protocol 11/11
-sandbox 69/69   ·   CLI 272/272   ·   server 109 pass / 3 skipped
+sandbox 69/69   ·   CLI 272/272
 ```
+
+The server suite (109 pass / 3 skipped) is no longer part of this bar: it lives
+in `experimental-packages/server` on the `experimental-packages` branch. Run it
+from a checkout of that branch, not from `main`.
 
 Plus hand checks not covered by counts: `read_file` on a `.env` returns the
 masked stub; `run_command` output is redacted; shell metacharacters rejected;
@@ -45,7 +51,8 @@ masked stub; `run_command` output is redacted; shell metacharacters rejected;
 `packages/cli/src/sandbox/launch.ts` · **Size:** L
 
 Move `WorkerPool` from `experimental-packages/server/src/project/pool.ts` into
-the sandbox package and use it from `launch.ts`.
+the sandbox package and use it from `launch.ts`. That file is no longer on
+`main` — read it off the `experimental-packages` branch (`bb732b2`).
 
 This was previously marked "measure first" on throughput grounds, and that
 reasoning still holds — one worker already serves concurrent calls, because the
@@ -72,5 +79,3 @@ cheaper respawn-and-replay alternative worth trying first.
   before the coverage fix. If the zen gateway does not cache long prefixes
   server-side, that cost is being paid in full. Worth measuring before assuming
   it is free.
-- **Nothing is committed.** Every batch since `bceb58a` sits in the working tree
-  as one undifferentiated change.

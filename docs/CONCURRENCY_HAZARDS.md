@@ -3,9 +3,11 @@
 What can go wrong now that tasks execute in parallel, found by reading the
 implementation rather than by listing generic dangers. Every claim cites code.
 
-Researched against the working tree after Batches 1A–1D, 2A, 3A/3B, 4A, 6D and 6E
-landed. Concurrency is live: `master.ts:226-242` admits up to
-`maxWorkers` tasks and `service.ts` runs each through `runTaskOnce`.
+Researched against `main` at `025c93e`, after Batches 1A–1D, 2A, 3A/3B, 4A, 6D
+and 6E landed. Every `file.ts:line` citation below refers to that commit — if one
+no longer points at the quoted code, the hazard has moved, not disappeared.
+Concurrency is live: `master.ts:226-242` admits up to `maxWorkers` tasks and
+`service.ts` runs each through `runTaskOnce`.
 
 ---
 
@@ -37,7 +39,7 @@ working tree.
 
 - **`git`** — a second `git add`/`commit`/`checkout` fails on `.git/index.lock`.
   The plan schema encourages git in `rollback` commands, and
-  `runRollbackCommands` (`service.ts:767`) can fire while a peer is mid-command.
+  `runRollbackCommands` (`service.ts:771`) can fire while a peer is mid-command.
 - **`npm`/`pnpm install`** — concurrent installs into one `node_modules` is the
   documented way to corrupt it. This is real corruption, not a failed command.
 - **`cargo`** — blocks on the target-directory lock, so the second task stalls
