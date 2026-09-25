@@ -8,6 +8,20 @@
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./agent/developer": {
+      "types": "./dist/agent/developer.d.ts",
+      "default": "./dist/agent/developer.js"
+    },
+    "./native": {
+      "types": "./dist/native.d.ts",
+      "default": "./dist/native.js"
+    }
+  },
   "files": [
     "dist"
   ],
