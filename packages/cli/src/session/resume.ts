@@ -1,11 +1,15 @@
 import {
-  hashFile,
+  DIRECTORY_FILE_HASH,
+  MISSING_FILE_HASH,
+  UNREADABLE_FILE_HASH,
+  inspectFile,
   readGitState,
   type GitState,
   type PersistedSession,
   type SessionPhase,
 } from '../persist/index.js'
 import { resolve } from 'node:path'
+import { normalizeProjectPath } from '../tasks/permissions.js'
 
 /**
  * What a resume must decide before it replays anything.
@@ -53,19 +57,36 @@ export function assessStaleness(
 ): StalenessReport {
   const { replanOnPendingChange = true, checkGit = true } = options
   const changed: Record<string, 'modified' | 'deleted'> = {}
-  const recorded = session.fileHashes ?? {}
+  const recorded = new Map<string, string>()
+  for (const [path, hash] of Object.entries(session.fileHashes ?? {})) {
+    recorded.set(normalizeProjectPath(projectDir, path), hash)
+  }
 
-  for (const [path, hash] of Object.entries(recorded)) {
-    const now = hashFile(resolve(projectDir, path))
-    if (now === null) changed[path] = 'deleted'
-    else if (now !== hash) changed[path] = 'modified'
+  for (const [path, hash] of recorded) {
+    const current = inspectFile(resolve(projectDir, path))
+    if (current.kind === 'missing') {
+      if (hash !== MISSING_FILE_HASH && hash !== UNREADABLE_FILE_HASH) changed[path] = 'deleted'
+      continue
+    }
+    if (current.kind === 'unreadable') {
+      if (hash !== UNREADABLE_FILE_HASH) changed[path] = 'modified'
+      continue
+    }
+    if (
+      hash === MISSING_FILE_HASH ||
+      (hash === DIRECTORY_FILE_HASH && current.kind !== 'directory') ||
+      (current.kind === 'directory' && hash !== DIRECTORY_FILE_HASH) ||
+      (current.kind === 'file' && hash !== current.hash)
+    ) {
+      changed[path] = 'modified'
+    }
   }
 
   const paths = Object.keys(changed)
   const report = (verdict: ResumeVerdict): StalenessReport => ({
     verdict,
     changed,
-    checked: Object.keys(recorded).length,
+    checked: recorded.size,
   })
 
   if (paths.length === 0) {
@@ -110,7 +131,8 @@ export function assessStaleness(
         ...((planned as { readFile?: string[] }).readFile ?? []),
         ...((planned as { writeFile?: string[] }).writeFile ?? []),
         ...((planned as { deleteFile?: string[] }).deleteFile ?? []),
-      ]),
+        ...((planned as { createDir?: string[] }).createDir ?? []),
+      ].map(path => normalizeProjectPath(projectDir, path))),
     )
   }
 

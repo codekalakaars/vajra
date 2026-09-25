@@ -92,6 +92,18 @@ test('parallel tasks share a wave', () => {
   assert.equal(result.plan.estimatedWorkers, 2)
 })
 
+test('parallel conflicts in flat plans are rejected', () => {
+  const result = parseProposePlanArgs({
+    tasks: [
+      { id: 'a', title: 'a', description: 'd', writeFile: ['src/shared.ts'] },
+      { id: 'b', title: 'b', description: 'd', writeFile: ['src/shared.ts'] },
+    ],
+    summary: 's',
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.error, /both edit 'src\/shared\.ts'/)
+})
+
 test('retries is passed through (0 means 0)', () => {
   const result = parseProposePlanArgs({
     tasks: [{ id: 'a', title: 't', description: 'd', retries: 0 }],

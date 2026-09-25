@@ -21,6 +21,9 @@ export const SESSION_SCHEMA_VERSION = 2
 /** v1 records are still loadable and are migrated forward on read. */
 export const LEGACY_SESSION_SCHEMA_VERSION = 1
 export const VAJRA_DIR = '.vajra'
+export const MISSING_FILE_HASH = '__missing__'
+export const DIRECTORY_FILE_HASH = '__directory__'
+export const UNREADABLE_FILE_HASH = '__unreadable__'
 export const SESSIONS_SUBDIR = 'sessions'
 export const INDEX_SUBDIR = 'index'
 
@@ -68,7 +71,7 @@ export interface PersistedSession {
   plan: DeveloperPlan | null
   evidence: PersistedEvidence | null
   tasks: Record<string, PersistedTask & { baselines?: Record<string, string | null> }>
-  /** path → sha256 when the task touched it. The staleness gate. */
+  /** path → sha256 or a file-state marker for missing/directory/unreadable paths. */
   fileHashes: Record<string, string>
   summaryFingerprint: string | null
   git?: GitState
@@ -138,10 +141,27 @@ export function indexFile(projectDir: string, fingerprint: string): string {
 /** sha256 of a file's bytes, or null when it cannot be read. */
 export function hashFile(absPath: string): string | null {
   try {
-    return createHash('sha256').update(readFileSync(absPath)).digest('hex')
+    return createHash('sha256').update(readFileSync(absPath)).digest('hex');
   } catch {
-    return null
+    return null;
   }
+}
+
+export type FileState =
+  | { kind: 'file'; hash: string }
+  | { kind: 'directory' }
+  | { kind: 'missing' }
+  | { kind: 'unreadable' }
+
+export function inspectFile(absPath: string): FileState {
+  try {
+    if (statSync(absPath).isDirectory()) return { kind: 'directory' }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
+    return { kind: 'unreadable' }
+  }
+  const hash = hashFile(absPath)
+  return hash === null ? { kind: 'unreadable' } : { kind: 'file', hash }
 }
 
 export function hashContent(content: string | null): string | null {

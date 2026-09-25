@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { launchSandboxSession } from '../dist/sandbox/launch.js'
@@ -56,6 +56,44 @@ test('worker does not inherit arbitrary parent environment secrets', async () =>
   const parsed = JSON.parse(result)
   assert.equal(parsed.exitCode, 0)
   assert.equal(parsed.stdout, 'missing')
+})
+
+test('an unexpected worker exit rejects in-flight calls and respawns', async () => {
+  const results = await Promise.allSettled([
+    session.handle.callTool('run_command', {
+      command: 'node -e "process.kill(process.ppid, 9)"',
+      timeoutMs: 10_000,
+    }),
+    session.handle.callTool('run_command', {
+      command: 'node -e "setTimeout(() => {}, 10000)"',
+      timeoutMs: 10_000,
+    }),
+  ])
+
+  assert.equal(results[0].status, 'rejected')
+  assert.equal(results[1].status, 'rejected')
+  assert.match(String(results[0].reason), /Sandbox worker exited/)
+
+  const content = await session.handle.callTool('read_file', {
+    path: join(projectDir, 'hello.txt'),
+  })
+  assert.match(String(content), /hello world/)
+})
+
+test('a worker crash does not leave a command child mutating the project', async () => {
+  const marker = join(projectDir, 'orphan-after-crash.txt')
+  await Promise.allSettled([
+    session.handle.callTool('run_command', {
+      command: `node -e "setTimeout(() => require('node:fs').writeFileSync('${marker}', 'orphan'), 500)"`,
+      timeoutMs: 10_000,
+    }),
+    session.handle.callTool('run_command', {
+      command: 'node -e "process.kill(process.ppid, 9)"',
+      timeoutMs: 10_000,
+    }),
+  ])
+  await new Promise(resolve => setTimeout(resolve, 800))
+  assert.equal(existsSync(marker), false)
 })
 
 test('parent enforces task permissions before forwarding', async () => {

@@ -68,6 +68,25 @@ test('command passes: honours exit codes and rejects metacharacters', async () =
   }
 })
 
+test('command predicates can use an injected sandboxed runner', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'skip-injected-'))
+  try {
+    let seen
+    const result = await evaluateSkipIfDetailed(
+      ['command passes: git status --short'],
+      dir,
+      async (command, args) => {
+        seen = [command, args]
+        return { code: 0 }
+      },
+    )
+    assert.equal(result.shouldSkip, true)
+    assert.deepEqual(seen, ['git', ['status', '--short']])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('all recognised conditions must hold to skip', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'skip-all-'))
   try {

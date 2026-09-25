@@ -343,6 +343,66 @@ test('writeSetOf counts deletes as writes', () => {
   assert.deepEqual(paths, ['src/gone.ts'])
 })
 
+test('writeSetOf includes every flat mutation field', () => {
+  const paths = [...writeSetOf(task({
+    writeFile: ['src/write.ts'],
+    deleteFile: ['src/delete.ts'],
+    createDir: ['src/dir'],
+  }))].sort()
+  assert.deepEqual(paths, ['src/delete.ts', 'src/dir', 'src/write.ts'])
+})
+
+test('flat write/write conflicts are hard errors', () => {
+  const parallel = planParallel([
+    task({ id: 'a', writeFile: ['src/shared.ts'] }),
+    task({ id: 'b', writeFile: ['src/shared.ts'] }),
+  ])
+  assert.equal(parallel.errors.length, 1)
+  assert.match(parallel.errors[0], /'a' and 'b' both edit 'src\/shared\.ts'/)
+})
+
+test('flat read/write conflicts are hard errors', () => {
+  const parallel = planParallel([
+    task({ id: 'a', writeFile: ['src/shared.ts'] }),
+    task({ id: 'b', readFile: ['src/shared.ts'] }),
+  ])
+  assert.equal(parallel.errors.length, 1)
+  assert.match(parallel.errors[0], /'b' reads 'src\/shared\.ts' while 'a' edits it/)
+})
+
+test('equivalent path spellings cannot bypass conflict detection', () => {
+  const parallel = planParallel([
+    task({ id: 'a', writeFile: ['src/shared.ts'] }),
+    task({ id: 'b', writeFile: ['./src/../src/shared.ts'] }),
+  ])
+  assert.equal(parallel.errors.length, 1)
+  assert.match(parallel.errors[0], /both edit 'src\/shared\.ts'/)
+})
+
+test('absolute paths under the project use the same identity as relative paths', () => {
+  const parallel = planParallel(
+    [
+      task({ id: 'a', writeFile: ['/project/src/shared.ts'] }),
+      task({ id: 'b', writeFile: ['src/shared.ts'] }),
+    ],
+    '/project',
+  )
+  assert.equal(parallel.errors.length, 1)
+  assert.match(parallel.errors[0], /both edit 'src\/shared\.ts'/)
+})
+
+test('drive-letter paths normalize without dropping their root', () => {
+  const parallel = planParallel(
+    [
+      task({ id: 'a', writeFile: ['C:/project/src/shared.ts'] }),
+      task({ id: 'b', writeFile: ['src/shared.ts'] }),
+    ],
+    'C:/project',
+  )
+  assert.equal(parallel.errors.length, 1)
+  assert.match(parallel.errors[0], /both edit 'src\/shared\.ts'/)
+})
+
 // --- §7.3 contracts ---------------------------------------------------------
 
 const contract = (over = {}) => ({

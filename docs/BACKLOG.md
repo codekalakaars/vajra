@@ -2,15 +2,16 @@
 
 Completed work is removed from these docs; the code and its tests are the record.
 
-**State:** all suites green — root 31 pass/1 skipped, protocol 11/11, sandbox
-69/69, **CLI 272/272**. Every package typechecks. Everything is committed and
-pushed: `main` is at `682fc8f`, and the experimental packages (`server`, `web`,
-`programmatic-video`) are parked on the `experimental-packages` branch at
+**State:** all suites green in the current working tree — core 32 pass/1
+skipped, protocol 11/11, sandbox 69/69, **CLI 292/292**, Rust 75/75. Package
+builds, typechecks, and clippy pass. The working tree is based on `e358474` and
+is intentionally uncommitted; the experimental packages (`server`, `web`,
+`programmatic-video`) remain parked on the `experimental-packages` branch at
 `bb732b2` — see "Regression bar" for what that means for the server suite.
 
-**The substantial remaining work is [CONCURRENCY_HAZARDS.md](CONCURRENCY_HAZARDS.md)**
-— eight hazards in the now-live parallel execution path, three of them P0. Start
-there. This file holds everything else.
+**The concurrency hazard sweep is complete; no open hazards remain in
+[CONCURRENCY_HAZARDS.md](CONCURRENCY_HAZARDS.md).** The remaining substantial
+work is the worker pool below. This file holds everything else.
 
 **Already done — do not redo:** per-task sandbox scoping, `search_content` +
 `run_baseline`, the context-budget fix (coverage 7.5% → 42%), concurrent task
@@ -38,8 +39,8 @@ One agent owns a file; tests live in a file named after the module;
 **Regression bar** — no suite below:
 
 ```
-root 31 pass / 1 skipped / 0 fail   ·   protocol 11/11
-sandbox 69/69   ·   CLI 272/272
+core 32 pass / 1 skipped / 0 fail   ·   protocol 11/11
+sandbox 69/69   ·   CLI 292/292   ·   Rust 75/75
 ```
 
 The server suite (109 pass / 3 skipped) is no longer part of this bar: it lives
@@ -66,9 +67,9 @@ This was previously marked "measure first" on throughput grounds, and that
 reasoning still holds — one worker already serves concurrent calls, because the
 IPC is `callId`-multiplexed and commands run through `runCommandAsync`. **The
 argument that now justifies it is blast radius, not speed:** a single worker
-means one crash fails every in-flight task at once, with no respawn. See
-[CONCURRENCY_HAZARDS.md](CONCURRENCY_HAZARDS.md) §2, which also describes the
-cheaper respawn-and-replay alternative worth trying first.
+still shares one process across every task, so an OOM or native fault can still
+interrupt unrelated in-flight work before the replacement worker is ready. A
+worker pool would provide per-task isolation and resource limits.
 
 ---
 

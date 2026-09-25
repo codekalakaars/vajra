@@ -9,7 +9,7 @@ import {
   listFiles,
   deleteFile,
   createDir,
-  runCommandAsync,
+  runCommandAsyncTimeout,
   isMaskedName,
   loadPermissions,
   permissionsFor,
@@ -21,11 +21,17 @@ import { buildSummaryIndex, searchSummary, shouldSkipFile, type SummaryEntry } f
 import { scanProject } from '../native.js'
 import { normalizeProjectPath, type TaskFilePermissions } from '../tasks/permissions.js'
 
+export interface ToolCache {
+  read: Map<string, { mtimeMs: number; value: string }>
+  generation: number
+}
+
 export interface ToolHandleOptions {
   /** When provided, every file tool is gated on this map/callback. */
   permissions?: (path: string) => TaskFilePermissions
   /** Called after a successful mutating tool (write/edit/delete/create). */
   onMutate?: () => void
+  cache?: ToolCache
 }
 
 const MASKED_STUB = '[REDACTED: masked file — contents withheld]'
@@ -179,17 +185,31 @@ export function createToolHandle(
   let summaryCache: SummaryEntry[] | null = null
 
   /** 6E file-read cache — scoped to this handle (= one session/task), keyed by
-   *  absolute path + mtime. The stored value is exactly what read_file
+  *  absolute path + mtime. The stored value is exactly what read_file
    *  returned, i.e. already redacted; a masked file's contents can never enter
-   *  it because masked files return the stub before any cache interaction.
-   *  Mutating tools drop their entry explicitly (covers same-tick writes that
-   *  might not move mtime); any other change — a build, an external edit — is
-   *  caught by the mtime comparison on the next read. */
-  const readCache = new Map<string, { mtimeMs: number; value: string }>()
+   *  it because masked files return the stub before any cache interaction. */
+  const sharedCache = options.cache
+  const readCache = sharedCache?.read ?? new Map<string, { mtimeMs: number; value: string }>()
+  let cacheGeneration = sharedCache?.generation ?? 0
   const READ_CACHE_MAX = 512
 
-  const invalidateRead = (path: string): void => {
-    readCache.delete(resolve(path))
+  const syncCacheGeneration = (): void => {
+    if (!sharedCache || sharedCache.generation === cacheGeneration) return
+    cacheGeneration = sharedCache.generation
+    readCache.clear()
+    summaryCache = null
+  }
+
+  const invalidateAllReads = (): void => {
+    readCache.clear()
+    summaryCache = null
+    if (sharedCache) {
+      sharedCache.generation++
+      cacheGeneration = sharedCache.generation
+    }
+  }
+  const invalidateRead = (_path: string): void => {
+    invalidateAllReads()
   }
 
   const rememberRead = (path: string, mtimeMs: number, value: string): void => {
@@ -248,34 +268,18 @@ export function createToolHandle(
     cwd: string,
     timeoutMs: number,
   ): Promise<string> => {
-    let timedOut = false
-    const timer = setTimeout(() => { timedOut = true }, timeoutMs)
-    let raceTimer: ReturnType<typeof setTimeout> | undefined
     try {
-      const result = await Promise.race([
-        runCommandAsync(cmdName, cmdArgs, cwd),
-        new Promise<never>((_, reject) => {
-          raceTimer = setTimeout(() => {
-            timedOut = true
-            reject(new Error('timeout'))
-          }, timeoutMs)
-        }),
-      ])
-      if (timedOut) {
+      const result = await runCommandAsyncTimeout(cmdName, cmdArgs, cwd, timeoutMs)
+      if (result.code === 124 && result.stderr === 'Command timed out') {
         return c1(124, null, redact(result.stdout, secrets), 'Command timed out')
       }
+
       // code === -1 means killed by signal (native reports signal as -1)
       const exitCode = result.code
       const signal = exitCode === -1 ? 'SIGTERM' : null
       return c1(exitCode, signal, redact(result.stdout, secrets), redact(result.stderr, secrets))
     } catch (e) {
-      if (timedOut || (e instanceof Error && e.message === 'timeout')) {
-        return c1(124, null, '', 'Command timed out')
-      }
       return c1(-1, null, '', e instanceof Error ? e.message : String(e))
-    } finally {
-      clearTimeout(timer)
-      if (raceTimer) clearTimeout(raceTimer)
     }
   }
 
@@ -297,6 +301,7 @@ export function createToolHandle(
 
   return {
     callTool: async (tool: string, args: unknown) => {
+      syncCacheGeneration()
       const a = args as Record<string, unknown>
       switch (tool) {
         case 'read_file': {
@@ -449,12 +454,19 @@ export function createToolHandle(
         }
         case 'run_command': {
           const command = String(a.command ?? '').trim()
-          const tokenized = tokenizeCommand(command)
+          const internalArgv = Array.isArray(a.argv) ? a.argv.map(String) : null
+          const tokenized = internalArgv
+            ? ({ ok: true, argv: internalArgv } as const)
+            : tokenizeCommand(command)
           if (!tokenized.ok) {
             return c1(-1, null, '', tokenized.error)
           }
           const timeoutMs = (typeof a.timeoutMs === 'number' && a.timeoutMs > 0) ? a.timeoutMs : 30000
-          return runArgv(tokenized.argv, a.cwd, timeoutMs)
+          try {
+            return await runArgv(tokenized.argv, a.cwd, timeoutMs)
+          } finally {
+            invalidateAllReads()
+          }
         }
         case 'run_baseline': {
           const command = String(a.command ?? '').trim()
@@ -464,7 +476,11 @@ export function createToolHandle(
           }
           const extraArgs = Array.isArray(a.args) ? a.args.map(String) : []
           const timeoutMs = (typeof a.timeoutMs === 'number' && a.timeoutMs > 0) ? a.timeoutMs : 120000
-          return runArgv([...tokenized.argv, ...extraArgs], a.cwd, timeoutMs)
+          try {
+            return await runArgv([...tokenized.argv, ...extraArgs], a.cwd, timeoutMs)
+          } finally {
+            invalidateAllReads()
+          }
         }
         default:
           return `Error: Unknown tool: ${tool}`

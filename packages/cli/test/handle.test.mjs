@@ -89,6 +89,21 @@ test('run_command returns C1 JSON shape and rejects cwd escape', async () => {
   }
 })
 
+test('internal argv preserves argument boundaries', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-argv-'))
+  try {
+    const handle = createToolHandle(dir)
+    const result = JSON.parse(await handle.callTool('run_command', {
+      command: 'ignored',
+      argv: ['node', '-e', 'process.stdout.write("a b")'],
+    }))
+    assert.equal(result.exitCode, 0)
+    assert.equal(result.stdout, 'a b')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('run_command rejects unknown commands and reports failure on non-zero exit', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'handle-cmd-'))
   try {

@@ -257,6 +257,19 @@ test('runShellAsync does not block the event loop', async () => {
   assert.equal(ticked, true, 'event loop was blocked during the async call')
 })
 
+test('runCommandAsyncTimeout kills a command at the deadline', async () => {
+  const started = Date.now()
+  const result = await native.runCommandAsyncTimeout(
+    process.execPath,
+    ['-e', 'setTimeout(() => {}, 5000)'],
+    process.cwd(),
+    100,
+  )
+  assert.equal(result.code, 124)
+  assert.equal(result.stderr, 'Command timed out')
+  assert.ok(Date.now() - started < 2000)
+})
+
 test('runCommandAsync reports failures as rejections', async () => {
   const ok = isWindows
     ? await native.runCommandAsync('cmd', ['/C', 'echo hi'])
