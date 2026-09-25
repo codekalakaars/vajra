@@ -20,26 +20,42 @@ export function normalizeProjectPath(projectDir: string, filePath: string): stri
 }
 
 export function computeTaskPermissions(
-  task: { readFile: string[]; writeFile: string[]; deleteFile: string[]; createDir?: string[] },
+  task: {
+    readFile: string[]
+    writeFile: string[]
+    deleteFile: string[]
+    createDir?: string[]
+    edits?: Array<{ path: string; op: 'create' | 'modify' | 'delete' }>
+  },
   projectDir?: string,
 ): Record<string, TaskFilePermissions> {
   const norm = (p: string) => (projectDir ? normalizeProjectPath(projectDir, p) : p.split(sep).join('/'))
   const files: Record<string, TaskFilePermissions> = {}
 
+  // Structured edits are the finer-grained source of truth: op distinguishes
+  // write from delete per file instead of inferring it from array membership.
+  const hasEdits = (task.edits?.length ?? 0) > 0
+  const writeFiles = hasEdits
+    ? task.edits!.filter((e) => e.op !== 'delete').map((e) => e.path)
+    : task.writeFile
+  const deleteFiles = hasEdits
+    ? task.edits!.filter((e) => e.op === 'delete').map((e) => e.path)
+    : task.deleteFile
+
   for (const file of task.readFile) {
     files[norm(file)] = { read: true, write: false, edit: false, delete: false }
   }
-  for (const file of task.writeFile) {
+  for (const file of writeFiles) {
     files[norm(file)] = { read: true, write: true, edit: true, delete: false }
   }
-  for (const file of task.deleteFile) {
+  for (const file of deleteFiles) {
     files[norm(file)] = { read: true, write: false, edit: false, delete: true }
   }
   for (const dir of task.createDir ?? []) {
     files[norm(dir)] = { read: true, write: true, edit: true, delete: false }
   }
 
-  const allFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile, ...(task.createDir ?? [])]
+  const allFiles = [...task.readFile, ...writeFiles, ...deleteFiles, ...(task.createDir ?? [])]
   const dirs = new Set(allFiles.map(f => {
     const parts = norm(f).split('/')
     parts.pop()
@@ -50,11 +66,11 @@ export function computeTaskPermissions(
     if (!files[dir]) {
       // Grant write on parent dirs of writeFile entries so workers can create
       // new files in those directories.
-      const isWriteParent = [...task.writeFile, ...(task.createDir ?? [])].some(f => {
+      const isWriteParent = [...writeFiles, ...(task.createDir ?? [])].some(f => {
         const parent = norm(f).split('/').slice(0, -1).join('/')
         return parent === dir || dir.startsWith(parent + '/')
       }) || (task.createDir ?? []).some(d => norm(d) === dir || dir.startsWith(norm(d) + '/'))
-      const isDeleteParent = task.deleteFile.some(f => {
+      const isDeleteParent = deleteFiles.some(f => {
         const parent = norm(f).split('/').slice(0, -1).join('/')
         return parent === dir || dir.startsWith(parent + '/')
       })

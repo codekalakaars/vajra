@@ -15,19 +15,6 @@ importers:
         specifier: ^2.10.12
         version: 2.10.12
 
-  experimental-packages/agent-core:
-    dependencies:
-      '@codekalakaars/vajra-protocol':
-        specifier: workspace:*
-        version: link:../../packages/protocol
-    devDependencies:
-      '@types/node':
-        specifier: ^22.5.4
-        version: 22.20.1
-      typescript:
-        specifier: ^5.5.4
-        version: 5.9.3
-
   experimental-packages/programmatic-video:
     dependencies:
       hyperframes:
@@ -51,7 +38,7 @@ importers:
         version: 0.39.0
       '@codekalakaars/vajra-agent-core':
         specifier: workspace:*
-        version: link:../agent-core
+        version: link:../../packages/agent-core
       '@codekalakaars/vajra-core':
         specifier: workspace:*
         version: link:../..
@@ -151,11 +138,24 @@ importers:
         specifier: ^5.5.4
         version: 5.9.3
 
+  packages/agent-core:
+    dependencies:
+      '@codekalakaars/vajra-protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^22.5.4
+        version: 22.20.1
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+
   packages/cli:
     dependencies:
       '@codekalakaars/vajra-agent-core':
         specifier: workspace:*
-        version: link:../../experimental-packages/agent-core
+        version: link:../agent-core
       '@codekalakaars/vajra-core':
         specifier: workspace:*
         version: link:../..

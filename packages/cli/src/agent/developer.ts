@@ -1,11 +1,42 @@
-import type { DeveloperPlan, PlannedTask, ToolName } from '@codekalakaars/vajra-protocol'
-import { streamChatCompletion, type OpenRouterMessage } from './openrouter.js'
+import type {
+  DeveloperPlan,
+  EditSpec,
+  PlanEvidence,
+  PlannedTask,
+  PlannedTaskInput,
+  ProjectFileEntry,
+  ToolName,
+} from '@codekalakaars/vajra-protocol'
+import {
+  planParallel,
+  proposePlanTool,
+  validateContracts,
+  validatePlan,
+} from '@codekalakaars/vajra-protocol'
+import { resolve } from 'node:path'
+import { deriveIndexBudget } from '@codekalakaars/vajra-agent-core'
+import { streamChatCompletion, type ChatMessage, type ToolCall } from './chat.js'
 import { getDeveloperToolSpecs, parseToolCall } from './tools.js'
+import { tokenizeCommand } from '../tools/handle.js'
 import { scanProject } from '../native.js'
 import { buildNestedTree } from './tree.js'
 import { buildSummaryIndex, formatSummaryIndexHierarchical, searchSummary, type SummaryEntry } from './summary.js'
+import {
+  startHeartbeat,
+  summarizePlanTaskCount,
+  summarizeToolCall,
+  summarizeToolResult,
+  type AgentEvent,
+} from '../session/ui.js'
 
 const FREE_TOOLS = new Set(['search_files'])
+
+/**
+ * Tools that only observe. These may run concurrently within one assistant
+ * message; anything that writes keeps the model's original order, because a
+ * later mutation can depend on an earlier one.
+ */
+const READ_ONLY_TOOLS = new Set(['read_file', 'list_files', 'search_files', 'search_content'])
 
 export interface LaunchHandle {
   callTool(tool: string, args: unknown): Promise<unknown>
@@ -17,11 +48,6 @@ const CHARS_PER_TOKEN = 4
 // Default context limits by provider (in tokens)
 // Most models fall into these ranges; specific models can override if known
 const PROVIDER_DEFAULTS: Record<string, number> = {
-  'nvidia/': 256000,      // NVIDIA Nemotron models
-  'google/': 256000,      // Google Gemma models
-  'meta-llama/': 128000,  // Meta Llama models
-  'openai/': 128000,      // OpenAI models
-  'anthropic/': 200000,   // Anthropic Claude models
   'zen/': 128000,         // Zen models
   'go/': 128000,          // Go models
   default: 128000,
@@ -34,7 +60,7 @@ function getModelLimit(model: string): number {
   return PROVIDER_DEFAULTS.default
 }
 
-function estimateTokens(message: OpenRouterMessage): number {
+function estimateTokens(message: ChatMessage): number {
   let tokens = 0
   if (message.content) {
     tokens += Math.ceil(message.content.length / CHARS_PER_TOKEN)
@@ -58,20 +84,20 @@ function estimateTokens(message: OpenRouterMessage): number {
  * dropped, even when the history fits without compression.
  */
 export function compressMessages(
-  messages: OpenRouterMessage[],
+  messages: ChatMessage[],
   model: string,
   reserveTokens: number = 2000,
-): OpenRouterMessage[] {
+): ChatMessage[] {
   const maxTokens = getModelLimit(model) - reserveTokens
 
   // Split into units: system alone; assistant with tool_calls + its tool results;
   // other messages as single-message units. Incomplete units are dropped here.
-  const units: OpenRouterMessage[][] = []
+  const units: ChatMessage[][] = []
   let i = 0
   while (i < messages.length) {
     const msg = messages[i]
     if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
-      const unit: OpenRouterMessage[] = [msg]
+      const unit: ChatMessage[] = [msg]
       const toolIds = new Set(msg.tool_calls.map(tc => tc.id))
       let j = i + 1
       while (j < messages.length && messages[j].role === 'tool') {
@@ -96,11 +122,11 @@ export function compressMessages(
   const systemUnits = units.filter(u => u[0]?.role === 'system')
   const rest = units.filter(u => u[0]?.role !== 'system')
 
-  const all: OpenRouterMessage[] = [...systemUnits, ...rest].flat()
+  const all: ChatMessage[] = [...systemUnits, ...rest].flat()
   const totalTokens = all.reduce((sum, msg) => sum + estimateTokens(msg), 0)
   if (totalTokens <= maxTokens) return all
 
-  const compressed: OpenRouterMessage[] = []
+  const compressed: ChatMessage[] = []
   let currentTokens = 0
 
   for (const unit of systemUnits) {
@@ -111,7 +137,7 @@ export function compressMessages(
   }
 
   // Keep whole units from the end (most recent context).
-  const keptUnits: OpenRouterMessage[][] = []
+  const keptUnits: ChatMessage[][] = []
   for (let k = rest.length - 1; k >= 0; k--) {
     const unit = rest[k]
     const unitTokens = unit.reduce((s, m) => s + estimateTokens(m), 0)
@@ -160,6 +186,7 @@ function buildDeveloperConversationPrompt(
     '- search_files(query): search the summary index to find relevant files (FREE)',
     '- read_file(path): read a file to understand the codebase',
     '- list_files(path): list directory contents',
+    '- run_baseline(command, args, cwd): run a candidate verify command BEFORE any changes, to record whether it currently passes',
     '- propose_plan(tasks, summary): propose a detailed plan when ready',
     '',
     'IMPORTANT RULES:',
@@ -207,12 +234,74 @@ function buildDeveloperConversationPrompt(
     '',
     'File summaries (path [lines, imports, exports]: exported symbols):',
     summary,
+    '',
+    'PLANNING DISCIPLINE — you will be rejected if you skip these:',
+    '',
+    '1. READ BEFORE YOU CITE. Every file you list in `context` or `edits` must be one',
+    '   you actually called read_file on this session. Listing a file you have not',
+    '   opened is the most common way a plan fails.',
+    '',
+    '2. ANCHOR EVERY MODIFY. For each edit with op=modify, copy the exact text where',
+    '   the change goes, verbatim from the file, including indentation. It must appear',
+    '   EXACTLY ONCE in that file. If your anchor is ambiguous, extend it with the',
+    '   surrounding lines rather than shortening it.',
+    '',
+    '3. PROVE THE CHANGE. Every task needs at least one verify command with',
+    '   kind=proves-change — one that FAILS right now and passes once the task is',
+    '   done. Run it with run_baseline before you propose it. A command that already',
+    '   passes proves nothing; mark that kind=regression-guard instead.',
+    '',
+    '4. ARGV, NOT SHELL. Commands run without a shell. Write',
+    '   {command: "pnpm", args: ["--filter", "x", "test"]}, never "pnpm x && pnpm y".',
+    '',
+    '5. ONE OWNER PER FILE. Two tasks may only run at the same time if they edit',
+    '   completely different files. If two tasks must touch the same file, put one in',
+    "   the other's dependsOn. If a task reads a file another task edits, it must",
+    '   depend on that task — otherwise it may read a half-written file.',
+    '',
+    '6. PIN SHARED DECISIONS. When two tasks must agree on something neither file',
+    '   shows — a return shape, a field name, which module owns a table — add it to',
+    '   `contracts` with the statement written out in full. Assume the agent reading',
+    '   it has seen nothing else: no "as discussed", no "the above".',
   ].join('\n')
 }
 
 export type ParsePlanResult =
   | { ok: true; plan: DeveloperPlan }
   | { ok: false; error: string }
+
+function describeEdit(edit: EditSpec): string {
+  if (edit.op === 'create') return `Create ${edit.path}: ${edit.change}`
+  if (edit.op === 'delete') return `Delete ${edit.path}: ${edit.change}`
+  return edit.anchor
+    ? `In ${edit.path}, at the text \`${edit.anchor}\`: ${edit.change}`
+    : `In ${edit.path}: ${edit.change}`
+}
+
+/**
+ * Lower a task with structured `context`/`edits`/`verify` to the flat fields
+ * the current executor consumes (§8). Structured fields, when present,
+ * supersede the flat ones; a task that omits them passes through unchanged.
+ */
+function lower(task: PlannedTask): PlannedTask {
+  const context = task.context ?? []
+  const edits = task.edits ?? []
+
+  return {
+    ...task,
+    readFile: context.length ? context.map((c) => c.path) : task.readFile,
+    writeFile: edits.length
+      ? edits.filter((e) => e.op !== 'delete').map((e) => e.path)
+      : task.writeFile,
+    deleteFile: edits.length
+      ? edits.filter((e) => e.op === 'delete').map((e) => e.path)
+      : task.deleteFile,
+    instructions: edits.length ? edits.map(describeEdit) : task.instructions,
+    validation: task.verify?.length
+      ? task.verify.map((v) => [v.command, ...(v.args ?? [])].join(' '))
+      : task.validation,
+  }
+}
 
 /**
  * Parse and validate `propose_plan` arguments (E1).
@@ -225,6 +314,9 @@ export function parseProposePlanArgs(raw: unknown): ParsePlanResult {
       id?: string
       title: string
       description: string
+      context?: PlannedTaskInput['context']
+      edits?: PlannedTaskInput['edits']
+      verify?: PlannedTaskInput['verify']
       instructions?: string[]
       readFile?: string[]
       writeFile?: string[]
@@ -250,10 +342,13 @@ export function parseProposePlanArgs(raw: unknown): ParsePlanResult {
     return { ok: false, error: 'Plan has no tasks. Please propose a plan with at least one task.' }
   }
 
-  const tasks: PlannedTask[] = args.tasks.map((t, i) => ({
+  const tasks: PlannedTask[] = args.tasks.map((t, i) => lower({
     id: t.id?.trim() || `task-${i + 1}`,
     title: t.title,
     description: t.description,
+    context: t.context,
+    edits: t.edits,
+    verify: t.verify,
     instructions: t.instructions ?? [],
     readFile: t.readFile ?? [],
     writeFile: t.writeFile ?? [],
@@ -294,24 +389,9 @@ export function parseProposePlanArgs(raw: unknown): ParsePlanResult {
     }
   }
 
-  // Compute parallel execution waves. Level 0 is everything with no
-  // dependencies; level N is everything whose dependencies all landed in an
-  // earlier level.
-  const independentGroups: string[][] = []
-  const placed = new Set<string>()
-  while (placed.size < tasks.length) {
-    const wave = tasks
-      .filter((t) => !placed.has(t.id) && t.dependsOn.every((dep) => placed.has(dep)))
-      .map((t) => t.id)
-
-    if (wave.length === 0) {
-      independentGroups.push(tasks.filter((t) => !placed.has(t.id)).map((t) => t.id))
-      break
-    }
-
-    for (const id of wave) placed.add(id)
-    independentGroups.push(wave)
-  }
+  // Compute parallel execution waves from the dependency graph. planParallel
+  // also reports write-set conflicts; the caller rejects those before parse.
+  const independentGroups = planParallel(tasks).waves
 
   return {
     ok: true,
@@ -391,6 +471,165 @@ function addFileLevelDependencies(tasks: PlannedTask[]): PlannedTask[] {
   return tasks
 }
 
+/** Canonical key for a baseline observation: argv (tokenized so a bundled
+ *  command string and an argv-form one match) plus the resolved cwd. */
+function baselineKey(
+  command: string,
+  args: readonly string[],
+  cwd: string | undefined,
+  projectDir: string,
+): string {
+  const tokenized = tokenizeCommand(command)
+  const argv = tokenized.ok ? [...tokenized.argv, ...args] : [command, ...args]
+  return JSON.stringify([argv, resolve(projectDir, cwd ?? '.')])
+}
+
+function hasStructuredFields(tasks: readonly PlannedTaskInput[]): boolean {
+  return tasks.some(
+    (t) => (t.edits?.length ?? 0) > 0 || (t.context?.length ?? 0) > 0 || (t.verify?.length ?? 0) > 0,
+  )
+}
+
+/**
+ * Build the evidence the validator checks against: every file read this turn,
+ * and a baseline exit code for each verify entry the model actually ran.
+ */
+function buildEvidence(
+  filesRead: ReadonlyMap<string, string>,
+  baselinesByCommand: ReadonlyMap<string, number>,
+  tasks: readonly PlannedTaskInput[],
+  projectDir: string,
+): PlanEvidence {
+  const baselines = new Map<string, number>()
+  for (const task of tasks) {
+    (task.verify ?? []).forEach((v, i) => {
+      const exit = baselinesByCommand.get(baselineKey(v.command, v.args ?? [], v.cwd, projectDir))
+      if (exit !== undefined) {
+        baselines.set(`${task.id}#${i}`, exit)
+      }
+    })
+  }
+  return { filesRead, baselines }
+}
+
+/** Write harness observations (§1) onto the accepted plan: occurrences of each
+ *  anchor in the file it was read from, and the baseline exit per verify entry. */
+function enrichHarnessEvidence(
+  tasks: PlannedTask[],
+  filesRead: ReadonlyMap<string, string>,
+  baselinesByCommand: ReadonlyMap<string, number>,
+  projectDir: string,
+): void {
+  for (const task of tasks) {
+    for (const edit of task.edits ?? []) {
+      if (edit.anchor) {
+        const content = filesRead.get(edit.path)
+        if (content !== undefined) {
+          edit.anchorOccurrences = content.split(edit.anchor).length - 1
+        }
+      }
+    }
+    for (const v of task.verify ?? []) {
+      const exit = baselinesByCommand.get(baselineKey(v.command, v.args ?? [], v.cwd, projectDir))
+      if (exit !== undefined) {
+        v.baselineExit = exit
+      }
+    }
+  }
+}
+
+/**
+ * Explicit depth for the project tree. Four levels keeps a four-deep package
+ * layout fully named; the shrink-to-fit loop in buildInitialPromptContext only
+ * ever renders shallower than this.
+ */
+const PROJECT_TREE_DEPTH = 4
+
+/**
+ * Build a summary index that can actually fill `budget`.
+ *
+ * buildSummaryIndex truncates every call to a fixed internal raw-size cap
+ * calibrated to the old 4,000-char formatted budget, so one call can only ever
+ * show a sliver of the repo — that was the 7.5% → 5.9% coverage regression.
+ * Re-run it over the entries not yet indexed until the formatted index would
+ * fill the budget or the repo is exhausted. Every call ranks its input the
+ * same way, so the union is the global rank order cut at the budget.
+ */
+function buildIndexWithinBudget(
+  projectDir: string,
+  entries: ProjectFileEntry[],
+  budget: number,
+): SummaryEntry[] {
+  const index: SummaryEntry[] = []
+  const seen = new Set<string>()
+  let remaining = entries
+
+  while (formatSummaryIndexHierarchical(index, budget).length < budget) {
+    const batch = buildSummaryIndex(projectDir, remaining)
+    if (batch.length === 0) break
+    for (const entry of batch) {
+      if (seen.has(entry.path)) continue
+      seen.add(entry.path)
+      index.push(entry)
+    }
+    remaining = remaining.filter(entry => !seen.has(entry.path))
+  }
+
+  return index
+}
+
+export interface InitialPromptContext {
+  tree: string
+  summaryText: string
+  summaryBudget: number
+}
+
+/**
+ * Build the pieces of the Developer's system prompt: a summary index sized to
+ * this model's derived budget, and a project tree that never outgrows it —
+ * the tree is names-only, so the signal-dense index always wins the space.
+ */
+export function buildInitialPromptContext(
+  projectDir: string,
+  summaryIndex: SummaryEntry[],
+  model: string,
+): InitialPromptContext {
+  const summaryBudget = deriveIndexBudget(getModelLimit(model))
+
+  let entries: ProjectFileEntry[] = []
+  let tree = '(unable to read project tree)'
+  try {
+    entries = scanProject(projectDir)
+    tree = buildNestedTree(entries, PROJECT_TREE_DEPTH)
+  } catch {
+    entries = []
+  }
+
+  if (entries.length > 0 && summaryIndex.length === 0) {
+    try {
+      summaryIndex.push(...buildIndexWithinBudget(projectDir, entries, summaryBudget))
+    } catch {
+      // Indexing failed; the prompt falls back to whatever the caller staged.
+    }
+  }
+
+  const summaryText = formatSummaryIndexHierarchical(summaryIndex, summaryBudget)
+
+  // Names-only context must never cost more than the indexed symbols,
+  // exports and previews it accompanies.
+  let depth = PROJECT_TREE_DEPTH
+  while (
+    entries.length > 0 &&
+    depth > 1 &&
+    tree.length > Math.min(summaryText.length, summaryBudget)
+  ) {
+    depth -= 1
+    tree = buildNestedTree(entries, depth)
+  }
+
+  return { tree, summaryText, summaryBudget }
+}
+
 export interface DeveloperTurnInput {
   sessionId: string
   projectDir: string
@@ -398,12 +637,14 @@ export interface DeveloperTurnInput {
   model: string
   apiKey: string
   handle: LaunchHandle
-  messages: OpenRouterMessage[]
+  messages: ChatMessage[]
   summaryIndex: SummaryEntry[]
   onTextDelta?: (text: string) => void
   onThinkingDelta?: (text: string) => void
   isInterrupted?: () => boolean
   signal?: AbortSignal
+  /** Sub-task progress for the UI port. Observability only. */
+  onAgentEvent?: (event: AgentEvent) => void
 }
 
 export type DeveloperTurnResult =
@@ -413,22 +654,197 @@ export type DeveloperTurnResult =
 export async function developerConversationTurn(
   input: DeveloperTurnInput,
 ): Promise<DeveloperTurnResult> {
-  const { sessionId, projectDir, userMessage, model, apiKey, handle, messages, summaryIndex, onTextDelta, onThinkingDelta, isInterrupted, signal } = input
+  const { sessionId, projectDir, userMessage, model, apiKey, handle, messages, summaryIndex, onTextDelta, onThinkingDelta, isInterrupted, signal, onAgentEvent } = input
 
-  if (messages.length === 0) {
-    let tree = ''
-    try {
-      const entries = scanProject(projectDir)
-      tree = buildNestedTree(entries)
-      if (summaryIndex.length === 0) {
-        const indexed = buildSummaryIndex(projectDir, entries)
-        summaryIndex.push(...indexed)
+  const agent = { role: 'developer' } as const
+  const emit = (event: AgentEvent): void => onAgentEvent?.(event)
+  const emitToolEnd = (
+    callId: string,
+    tool: string,
+    ok: boolean,
+    startedAt: number,
+    detail?: string,
+  ): void => {
+    emit({
+      type: 'tool-end',
+      agent,
+      callId,
+      tool,
+      ok,
+      ms: Date.now() - startedAt,
+      ...(detail === undefined ? {} : { detail }),
+    })
+  }
+
+  type Precomputed = { content: string; raw: unknown; ms: number; ok: boolean; detail?: string }
+
+  /**
+   * Run this message's read-only tool calls concurrently, keyed by call id.
+   * Returns empty when there is nothing to gain (zero or one call), so the
+   * common path is unchanged.
+   */
+  const runReadOnlyCalls = async (
+    toolCalls: ToolCall[],
+  ): Promise<Map<string, Precomputed>> => {
+    const out = new Map<string, Precomputed>()
+    const readOnly = toolCalls.filter(tc => READ_ONLY_TOOLS.has(tc.function.name))
+    if (readOnly.length < 2) return out
+
+    for (const toolCall of readOnly) {
+      const toolName = toolCall.function.name
+      let callArgs: unknown
+      try {
+        callArgs = JSON.parse(toolCall.function.arguments)
+      } catch {
+        callArgs = undefined
       }
-    } catch {
-      tree = '(unable to read project tree)'
+      emit({
+        type: 'tool-start',
+        agent,
+        callId: toolCall.id,
+        tool: toolName,
+        summary: summarizeToolCall(toolName, callArgs, projectDir),
+      })
     }
 
-    const summaryText = formatSummaryIndexHierarchical(summaryIndex)
+    const settled = await Promise.all(
+      readOnly.map(async (toolCall): Promise<[string, Precomputed]> => {
+        const started = Date.now()
+        const toolName = toolCall.function.name
+        const parsed = parseToolCall(toolCall)
+        let content: string
+        let raw: unknown
+        if (!parsed.ok) {
+          content = `Error: ${parsed.error}`
+          raw = content
+        } else if (parsed.call.tool === ('search_files' as ToolName)) {
+          const args = parsed.call.args as { query: string }
+          content = searchSummary(summaryIndex, args.query)
+          raw = content
+        } else {
+          // A tool call can block for minutes; keep the row moving meanwhile.
+          const stopHeartbeat = startHeartbeat(emit, agent)
+          try {
+            const result = await handle.callTool(parsed.call.tool, parsed.call.args)
+            content = typeof result === 'string' ? result : JSON.stringify(result)
+            raw = result
+          } catch (e) {
+            content = `Error: ${e instanceof Error ? e.message : String(e)}`
+            raw = content
+          } finally {
+            stopHeartbeat()
+          }
+        }
+        const ms = Date.now() - started
+        const outcome = summarizeToolResult(
+          parsed.ok ? parsed.call.tool : toolName,
+          parsed.ok ? parsed.call.args : undefined,
+          raw,
+          ms,
+        )
+        return [toolCall.id, { content, raw, ms, ok: outcome.ok, detail: outcome.detail }]
+      }),
+    )
+    for (const [id, value] of settled) out.set(id, value)
+    return out
+  }
+
+  /**
+   * One mutating (or single) tool call, end to end. Returns the content to
+   * append as its result. Read-only calls arrive pre-computed from
+   * `runReadOnlyCalls` and never reach here.
+   */
+  const runToolCall = async (toolCall: ToolCall, callStarted: number): Promise<string> => {
+    const toolName = toolCall.function.name
+    const parsed = parseToolCall(toolCall)
+    let resultContent: string
+    let rawResult: unknown = undefined
+
+    if (!parsed.ok) {
+      resultContent = `Error: ${parsed.error}`
+      emitToolEnd(toolCall.id, toolName, false, callStarted, 'bad arguments')
+      return resultContent
+    }
+
+    if (parsed.call.tool === ('search_files' as ToolName)) {
+      const args = parsed.call.args as { query: string }
+      resultContent = searchSummary(summaryIndex, args.query)
+      rawResult = resultContent
+    } else {
+      // A tool call can block for minutes (run_command has a 30s+ timeout).
+      // chat.ts heartbeats provider round-trips; this covers the tool itself,
+      // otherwise the screen is still for exactly as long as the call.
+      const stopHeartbeat = startHeartbeat(emit, agent)
+      try {
+        const result = await handle.callTool(parsed.call.tool, parsed.call.args)
+        resultContent = typeof result === 'string' ? result : JSON.stringify(result)
+        rawResult = result
+        if (parsed.call.tool === 'read_file' && typeof result === 'string') {
+          const readArgs = parsed.call.args as { path?: unknown }
+          if (typeof readArgs.path === 'string') {
+            filesRead.set(readArgs.path, result)
+          }
+        } else if (parsed.call.tool === 'run_baseline' && typeof result === 'string') {
+          recordBaseline(result, parsed.call.args)
+        }
+      } catch (e) {
+        resultContent = `Error: ${e instanceof Error ? e.message : String(e)}`
+        rawResult = resultContent
+      } finally {
+        stopHeartbeat()
+      }
+    }
+
+    const outcome = summarizeToolResult(
+      parsed.call.tool,
+      parsed.call.args,
+      rawResult,
+      Date.now() - callStarted,
+    )
+    emit({
+      type: 'tool-end',
+      agent,
+      callId: toolCall.id,
+      tool: parsed.call.tool,
+      ok: outcome.ok,
+      ms: Date.now() - callStarted,
+      detail: outcome.detail,
+    })
+    return resultContent
+  }
+
+  // Evidence ledger (§4): harness-collected observations for this planning
+  // turn. The model never supplies these values — it only triggers the calls
+  // that produce them.
+  const filesRead = new Map<string, string>()
+  const baselinesByCommand = new Map<string, number>()
+
+  /** Record the observed exit code of a run_baseline call. Harness rejections
+   *  (disallowed command, cwd escape, timeout) arrive as negative exits and are
+   *  not observations of the command itself, so they are not recorded. */
+  const recordBaseline = (result: string, rawArgs: unknown): void => {
+    try {
+      const payload = JSON.parse(result) as { exitCode?: number }
+      if (typeof payload.exitCode !== 'number' || payload.exitCode < 0) return
+      const b = rawArgs as { command?: unknown; args?: unknown; cwd?: unknown }
+      if (typeof b.command !== 'string') return
+      baselinesByCommand.set(
+        baselineKey(
+          b.command,
+          Array.isArray(b.args) ? b.args.map(String) : [],
+          typeof b.cwd === 'string' ? b.cwd : undefined,
+          projectDir,
+        ),
+        payload.exitCode,
+      )
+    } catch {
+      // Not a C1 payload — nothing to record.
+    }
+  }
+
+  if (messages.length === 0) {
+    emit({ type: 'phase', agent, phase: 'indexing' })
+    const { tree, summaryText } = buildInitialPromptContext(projectDir, summaryIndex, model)
     messages.push({
       role: 'system',
       content: buildDeveloperConversationPrompt(projectDir, tree, summaryText),
@@ -446,6 +862,7 @@ export async function developerConversationTurn(
   const MAX_TOTAL_ITERATIONS = 60
   const startedAt = Date.now()
   let totalIterations = 0
+  emit({ type: 'phase', agent, phase: 'planning' })
 
   while (toolCallCount < MAX_TOOL_CALLS) {
     if (isInterrupted?.() || signal?.aborted) {
@@ -460,7 +877,16 @@ export async function developerConversationTurn(
     const compressedMessages = compressMessages(messages, model)
 
     const result = await streamChatCompletion(
-      { apiKey, model, messages: compressedMessages, tools: toolSpecs, signal },
+      {
+        apiKey,
+        model,
+        messages: compressedMessages,
+        tools: toolSpecs,
+        signal,
+        round: totalIterations,
+        roundBudget: MAX_TOTAL_ITERATIONS,
+        onEvent: event => emit({ ...event, agent }),
+      },
       text => onTextDelta?.(text),
       thinking => onThinkingDelta?.(thinking),
     )
@@ -473,7 +899,41 @@ export async function developerConversationTurn(
 
     messages.push(result.message)
 
+    /**
+     * §2: read-only calls in one assistant message are independent — a model
+     * routinely asks for 3-5 files at once. Run them together and hand the
+     * results to the ordered loop below, so the tool-call chain is still
+     * answered in the model's original order.
+     */
+    const precomputed = await runReadOnlyCalls(result.message.tool_calls)
+
+    let planned: DeveloperTurnResult | null = null
+
     for (const toolCall of result.message.tool_calls) {
+      if (planned) break
+      const callStarted = Date.now()
+      const toolName = toolCall.function.name
+      let callArgs: unknown
+      try {
+        callArgs = JSON.parse(toolCall.function.arguments)
+      } catch {
+        callArgs = undefined
+      }
+      // A batched read-only call already announced itself before it ran.
+      if (!precomputed.has(toolCall.id)) {
+        const summary =
+          toolName === 'propose_plan'
+            ? summarizePlanTaskCount(callArgs)
+            : summarizeToolCall(toolName, callArgs, projectDir)
+        emit({
+          type: 'tool-start',
+          agent,
+          callId: toolCall.id,
+          tool: toolName,
+          summary,
+        })
+      }
+
       if (toolCall.function.name === 'propose_plan') {
         let parsed: unknown
         try {
@@ -484,6 +944,41 @@ export async function developerConversationTurn(
             content: 'Error: propose_plan arguments were not valid JSON. Please try again.',
             tool_call_id: toolCall.id,
           })
+          emitToolEnd(toolCall.id, toolName, false, callStarted, 'invalid JSON')
+          continue
+        }
+
+        const proposed = proposePlanTool.schema.safeParse(parsed)
+        if (!proposed.success) {
+          const detail = proposed.error.issues
+            .map((issue) => `${issue.path.join('.') || 'arguments'}: ${issue.message}`)
+            .join('; ')
+          messages.push({
+            role: 'tool',
+            content: `Error: propose_plan arguments were rejected: ${detail}. Fix them and call propose_plan again.`,
+            tool_call_id: toolCall.id,
+          })
+          emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
+          continue
+        }
+
+        const structured = hasStructuredFields(proposed.data.tasks)
+        const rejection: string[] = []
+        if (structured) {
+          const evidence = buildEvidence(filesRead, baselinesByCommand, proposed.data.tasks, projectDir)
+          const validation = validatePlan(proposed.data.tasks, evidence)
+          if (!validation.ok) rejection.push(...validation.errors)
+        }
+        const contractCheck = validateContracts(proposed.data.tasks, proposed.data.contracts)
+        rejection.push(...contractCheck.errors)
+
+        if (rejection.length > 0) {
+          messages.push({
+            role: 'tool',
+            content: `Plan rejected:\n- ${rejection.join('\n- ')}`,
+            tool_call_id: toolCall.id,
+          })
+          emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
           continue
         }
 
@@ -494,19 +989,36 @@ export async function developerConversationTurn(
             content: `Error: ${parsedPlan.error}`,
             tool_call_id: toolCall.id,
           })
+          emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
           continue
         }
         const plan = parsedPlan.plan
-        plan.tasks = addFileLevelDependencies(plan.tasks)
-        // Must run AFTER the file-level pass, which can introduce edges the
-        // planner never declared.
+        if (!structured) {
+          // Flat legacy plans still get file-level ordering inferred for them.
+          // Structured plans declare their own dependsOn and were already
+          // checked for write conflicts by planParallel.
+          plan.tasks = addFileLevelDependencies(plan.tasks)
+        }
         plan.tasks = detectAndRemoveCircularDeps(plan.tasks)
+        enrichHarnessEvidence(plan.tasks, filesRead, baselinesByCommand, projectDir)
+        const warnings = [...planParallel(proposed.data.tasks).warnings, ...contractCheck.warnings]
         messages.push({
           role: 'tool',
-          content: 'Plan proposed. Awaiting user review.',
+          content:
+            warnings.length > 0
+              ? `Plan proposed. Awaiting user review.\nPlan warnings:\n- ${warnings.join('\n- ')}`
+              : 'Plan proposed. Awaiting user review.',
           tool_call_id: toolCall.id,
         })
-        return { type: 'plan', plan }
+        emitToolEnd(
+          toolCall.id,
+          toolName,
+          true,
+          callStarted,
+          `${plan.tasks.length} task${plan.tasks.length === 1 ? '' : 's'}`,
+        )
+        planned = { type: 'plan', plan }
+        continue
       }
 
       const isFree = FREE_TOOLS.has(toolCall.function.name)
@@ -523,32 +1035,50 @@ export async function developerConversationTurn(
           content: 'Error: Tool call budget exhausted. Please produce a plan based on what you have learned so far.',
           tool_call_id: toolCall.id,
         })
+        emitToolEnd(toolCall.id, toolName, false, callStarted, 'budget exhausted')
         continue
       }
 
-      const parsed = parseToolCall(toolCall)
-      let resultContent: string
-
-      if (!parsed.ok) {
-        resultContent = `Error: ${parsed.error}`
-      } else if (parsed.call.tool === ('search_files' as ToolName)) {
-        const args = parsed.call.args as { query: string }
-        resultContent = searchSummary(summaryIndex, args.query)
-      } else {
-        try {
-          const result = await handle.callTool(parsed.call.tool, parsed.call.args)
-          resultContent = typeof result === 'string' ? result : JSON.stringify(result)
-        } catch (e) {
-          resultContent = `Error: ${e instanceof Error ? e.message : String(e)}`
+      const done = precomputed.get(toolCall.id)
+      if (done) {
+        // Already run in the read-only batch above; answer it in the model's
+        // order without touching the handle a second time.
+        if (toolName === 'read_file' && typeof done.raw === 'string') {
+          let readArgs: unknown
+          try {
+            readArgs = JSON.parse(toolCall.function.arguments)
+          } catch {
+            readArgs = undefined
+          }
+          const path = (readArgs as { path?: unknown } | undefined)?.path
+          if (typeof path === 'string') filesRead.set(path, done.raw)
+        } else if (toolName === 'run_baseline') {
+          let baseArgs: unknown
+          try {
+            baseArgs = JSON.parse(toolCall.function.arguments)
+          } catch {
+            baseArgs = undefined
+          }
+          recordBaseline(String(done.raw), baseArgs)
         }
+        emit({
+          type: 'tool-end',
+          agent,
+          callId: toolCall.id,
+          tool: toolName,
+          ok: done.ok,
+          ms: done.ms,
+          ...(done.detail === undefined ? {} : { detail: done.detail }),
+        })
+        messages.push({ role: 'tool', content: done.content, tool_call_id: toolCall.id })
+        continue
       }
 
-      messages.push({
-        role: 'tool',
-        content: resultContent,
-        tool_call_id: toolCall.id,
-      })
+      const content = await runToolCall(toolCall, callStarted)
+      messages.push({ role: 'tool', content, tool_call_id: toolCall.id })
     }
+
+    if (planned) return planned
   }
 
   const fallbackContent = isInterrupted?.()

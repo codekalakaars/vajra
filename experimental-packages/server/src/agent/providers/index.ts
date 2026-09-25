@@ -1,13 +1,14 @@
 // Provider factory — instantiate the right ChatProvider from a model string.
 //
 // Model strings follow the pattern "provider/model-name":
-//   - "openrouter/claude-3.5-sonnet" → OpenRouterProvider
+//   - "zen/kimi-k3" → ZenProvider
+//   - "go/kimi-k3" → ZenProvider (go gateway)
 //   - "anthropic/claude-sonnet-4-20250514" → AnthropicProvider
 //
-// A bare model name (no slash) defaults to OpenRouter for backwards compat.
+// Any other model string (including bare names) is rejected — there is no
+// default gateway.
 
 import type { ChatProvider } from './types.js'
-import { OpenRouterProvider } from './openrouter.js'
 import { AnthropicProvider } from './anthropic.js'
 import { ZenProvider, ZEN_GO_BASE_URL } from './zen.js'
 import { componentLogger } from '../../logger.js'
@@ -15,7 +16,6 @@ import { componentLogger } from '../../logger.js'
 const log = componentLogger('providers')
 
 const providers = new Map<string, () => ChatProvider>([
-  ['openrouter', () => new OpenRouterProvider()],
   ['anthropic', () => new AnthropicProvider()],
   ['zen', () => new ZenProvider()],
   ['go', () => new ZenProvider(ZEN_GO_BASE_URL)],
@@ -30,9 +30,9 @@ const knownModels = new Map<string, Set<string>>([
     'claude-3-opus-20240229',
     'claude-3-haiku-20240307',
   ])],
-  ['openrouter', new Set()], // OpenRouter proxies many models; skip validation
   ['zen', new Set([
     // Free models
+    'space-bunny-free',
     'deepseek-v4-flash-free', 'mimo-v2.5-free', 'nemotron-3-ultra-free',
     'nemotron-3.5-lightning-free', 'nemotron-3-super-free', 'ling-3.0-flash-fin-free',
     'muse-spark-1.3-contributor-free',
@@ -61,21 +61,12 @@ const knownModels = new Map<string, Set<string>>([
 
 /**
  * Parse a model string and return the provider name and raw model name.
- * "openrouter/claude-3.5-sonnet" → { provider: "openrouter", model: "claude-3.5-sonnet" }
- * "openrouter/free" → { provider: "openrouter", model: "openrouter/free" }
- * "nvidia/nemotron-3-ultra-550b-a55b:free" → { provider: "openrouter", model: "nvidia/nemotron-3-ultra-550b-a55b:free" }
- * "claude-3.5-sonnet" → { provider: "openrouter", model: "claude-3.5-sonnet" }
+ * "zen/kimi-k3" → { provider: "zen", model: "kimi-k3" }
+ * "anthropic/claude-3-opus-20240229" → { provider: "anthropic", model: "claude-3-opus-20240229" }
+ * Anything without a known provider prefix is rejected.
  */
 export function parseModelString(model: string): { provider: string; model: string } {
   // Check if it starts with a known provider prefix
-  if (model.startsWith('openrouter/')) {
-    const afterPrefix = model.slice('openrouter/'.length)
-    // Special OpenRouter meta-models (free, auto, auto-beta) need the full slug
-    if (afterPrefix === 'free' || afterPrefix === 'auto' || afterPrefix === 'auto-beta') {
-      return { provider: 'openrouter', model }
-    }
-    return { provider: 'openrouter', model: afterPrefix }
-  }
   if (model.startsWith('anthropic/')) {
     return { provider: 'anthropic', model: model.slice('anthropic/'.length) }
   }
@@ -85,9 +76,10 @@ export function parseModelString(model: string): { provider: string; model: stri
   if (model.startsWith('go/')) {
     return { provider: 'go', model: model.slice('go/'.length) }
   }
-  // No known prefix — default to openrouter (handles bare model names and
-  // OpenRouter-style model IDs like "nvidia/nemotron-3-ultra-550b-a55b:free")
-  return { provider: 'openrouter', model }
+  throw new Error(
+    `Unknown provider in model '${model}'. ` +
+    `Supported prefixes: ${[...providers.keys()].map(p => p + '/').join(', ')}`
+  )
 }
 
 /**
@@ -104,7 +96,6 @@ export function validateModel(providerName: string, modelName: string): string |
 /**
  * Create a ChatProvider from a model string and a map of API keys.
  * The API key for the correct provider is selected based on the model prefix.
- * Falls back to "openrouter" key if provider-specific key is not found.
  */
 export function createProvider(
   model: string,
@@ -127,7 +118,7 @@ export function createProvider(
       `Set ${providerName.toUpperCase()}_API_KEY environment variable.`
     )
   }
-  // Validate model (warn but don't fail — OpenRouter proxies many models)
+  // Validate model (warn but don't fail)
   const validationError = validateModel(providerName, resolvedModel)
   if (validationError) {
     log.warn({ provider: providerName, model: resolvedModel }, validationError)

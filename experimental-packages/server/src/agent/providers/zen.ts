@@ -1,6 +1,6 @@
 // OpenCode Zen provider — OpenCode's curated model gateway.
 //
-// Same OpenAI-compatible API as OpenRouter, different base URL and auth key
+// OpenAI chat-completions API with its own base URL and auth key
 // (OPENCODE_API_KEY), so it shares OpenAiCompatibleProvider.
 
 import { OpenAiCompatibleProvider } from './openai-compatible.js'

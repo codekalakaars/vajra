@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Marked } from 'marked'
 import { markedTerminal } from 'marked-terminal'
+import type { AgentEvent, AgentLabel } from './session/ui.js'
 
 function readPackageVersion(): string {
   try {
@@ -78,8 +79,6 @@ export function renderMarkdown(markdown: string): string {
   }
 }
 
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-
 export interface PlanTaskView {
   title: string
   type: string
@@ -112,20 +111,38 @@ export function planSummaryLines(plan: { tasks: PlanTaskView[] }): string[] {
   return lines
 }
 
+interface ActiveAgent {
+  label: string
+  since: number
+  note: string
+}
+
 export class TerminalStreamer {
   private buffer = ''
-  private spinnerTimer: ReturnType<typeof setInterval> | null = null
-  private spinnerFrame = 0
   private isThinking = false
   private readonly useSpinner: boolean
+  /** Outstanding work, keyed by agent — the live status line's contents. */
+  private active = new Map<string, ActiveAgent>()
+  private statusDrawn = false
+  private quiet: boolean
 
-  constructor(private verbose = false, private version = readPackageVersion()) {
+  constructor(
+    private verbose = false,
+    private version = readPackageVersion(),
+    quiet = false,
+  ) {
     this.useSpinner = Boolean(process.stdout.isTTY)
+    this.quiet = quiet
   }
 
   onTextDelta(text: string): void {
     this.buffer += text
-    this.startSpinner()
+    // Streamed text is not printed until finishLine(); without a status entry
+    // the screen would look dead, so fall back to a generic one.
+    if (this.active.size === 0) {
+      this.active.set('__text', { label: 'working', since: Date.now(), note: '' })
+    }
+    this.drawStatus()
   }
 
   onThinkingDelta(text: string): void {
@@ -141,7 +158,7 @@ export class TerminalStreamer {
 
   /** Flush buffered assistant text as rendered markdown. */
   finishLine(): void {
-    this.stopSpinner()
+    this.clearStatus()
     if (this.isThinking) {
       process.stderr.write('\x1b[0m\n')
       this.isThinking = false
@@ -151,36 +168,158 @@ export class TerminalStreamer {
       process.stdout.write(rendered)
       this.buffer = ''
     }
+    this.drawStatus()
   }
 
   /** Drop any unflushed buffer without printing (error paths). */
   discardBuffer(): void {
-    this.stopSpinner()
+    this.clearStatus()
     this.buffer = ''
     if (this.isThinking) {
       process.stderr.write('\x1b[0m\n')
       this.isThinking = false
     }
+    this.drawStatus()
+  }
+
+  // --- sub-task activity ------------------------------------------------
+
+  private key(agent: AgentLabel): string {
+    return agent.taskId ?? agent.role
+  }
+
+  private label(agent: AgentLabel): string {
+    return agent.taskId ? `[${agent.taskId}]` : agent.role
+  }
+
+  /** Tool lines read `[task] → tool  summary` — the task first, so an
+   *  interleaved stream from four workers stays attributable at a glance. */
+  private toolPrefix(agent: AgentLabel): string {
+    return agent.taskId ? `  ${this.label(agent)} ` : '  '
+  }
+
+  /**
+   * The live status line. One line, rewritten in place, listing every agent
+   * with outstanding work plus its elapsed time. Events alone leave the screen
+   * silent through a 40-second provider call; this is what moves.
+   */
+  private drawStatus(): void {
+    if (!this.useSpinner || this.active.size === 0) return
+    const now = Date.now()
+    const parts = [...this.active.values()].map(
+      a => `${a.label} ${((now - a.since) / 1000).toFixed(1)}s${a.note ? ` ${a.note}` : ''}`,
+    )
+    process.stderr.write(`\r\x1b[2K\x1b[90m◇ ${parts.join(' · ')}\x1b[0m`)
+    this.statusDrawn = true
+  }
+
+  private clearStatus(): void {
+    if (!this.statusDrawn) return
+    process.stderr.write('\r\x1b[2K')
+    this.statusDrawn = false
+  }
+
+  /** Write a real line to stdout without leaving the status line underneath. */
+  private writeLine(text: string): void {
+    this.clearStatus()
+    // Piped output must be clean: no cursor tricks, and no SGR either — a log
+    // full of escape bytes is as unreadable as one full of spinner frames.
+    const line = this.colorize ? text : text.replace(/\x1b\[[0-9;]*m/g, '')
+    process.stdout.write(`${line}\n`)
+    this.drawStatus()
+  }
+
+  /** Colour only where a terminal can render it, or when explicitly forced. */
+  private get colorize(): boolean {
+    return this.useSpinner || process.env.FORCE_COLOR === '1'
+  }
+
+  private phaseText(phase: string): string {
+    switch (phase) {
+      case 'scanning':
+        return 'scanning project'
+      case 'indexing':
+        return 'indexing'
+      case 'planning':
+        return 'planning'
+      case 'validating':
+        return 'validating'
+      case 'executing':
+        return 'executing'
+      default:
+        return phase
+    }
+  }
+
+  agentEvent(event: AgentEvent): void {
+    if (this.quiet) return
+    const key = this.key(event.agent)
+    const label = this.label(event.agent)
+
+    switch (event.type) {
+      case 'phase': {
+        const text = this.phaseText(event.phase)
+        this.active.set(key, { label, since: Date.now(), note: text })
+        this.drawStatus()
+        if (!this.useSpinner) this.writeLine(`\x1b[90m◇ ${label} · ${text}\x1b[0m`)
+        return
+      }
+      case 'llm-start': {
+        this.active.set(key, { label, since: Date.now(), note: 'thinking…' })
+        this.drawStatus()
+        return
+      }
+      case 'heartbeat': {
+        const entry = this.active.get(key)
+        if (entry) {
+          entry.since = Date.now() - event.elapsedMs
+          this.drawStatus()
+        }
+        return
+      }
+      case 'llm-end': {
+        const budget = event.budget ? ` · round ${event.round}/${event.budget}` : ''
+        this.active.delete(key)
+        this.clearStatus()
+        if (!this.useSpinner) this.writeLine(`\x1b[90m◇ ${label} · ${(event.ms / 1000).toFixed(1)}s${budget}\x1b[0m`)
+        else this.drawStatus()
+        return
+      }
+      case 'tool-start': {
+        this.active.set(key, {
+          label,
+          since: Date.now(),
+          note: `${event.tool}${event.summary ? ` ${event.summary}` : ''}`,
+        })
+        this.drawStatus()
+        this.writeLine(
+          `\x1b[90m${this.toolPrefix(event.agent)}→ ${event.tool}${event.summary ? `  ${event.summary}` : ''}\x1b[0m`,
+        )
+        return
+      }
+      case 'tool-end': {
+        const detail = event.detail ?? (event.ok ? 'ok' : 'failed')
+        // A detail that already carries elapsed (run_command's "exit 0 · 1.4s")
+        // must not have the same measurement appended a second time.
+        const outcome = /\d+(?:\.\d+)?s\b/.test(detail) ? detail : `${detail} · ${event.ms}ms`
+        if (event.ok) this.active.delete(key)
+        else this.active.set(key, { label, since: Date.now(), note: `${event.tool} failed` })
+        this.drawStatus()
+        const color = event.ok ? '32' : '31'
+        this.writeLine(
+          `\x1b[${color}m${this.toolPrefix(event.agent)}← ${outcome}\x1b[0m`,
+        )
+        return
+      }
+    }
   }
 
   private startSpinner(): void {
-    if (!this.useSpinner || this.spinnerTimer) return
-    this.spinnerFrame = 0
-    const tick = () => {
-      const frame = SPINNER_FRAMES[this.spinnerFrame % SPINNER_FRAMES.length]
-      this.spinnerFrame++
-      process.stderr.write(`\r\x1b[90m${frame}\x1b[0m`)
-    }
-    tick()
-    this.spinnerTimer = setInterval(tick, 80)
-    this.spinnerTimer.unref?.()
+    this.drawStatus()
   }
 
   private stopSpinner(): void {
-    if (!this.spinnerTimer) return
-    clearInterval(this.spinnerTimer)
-    this.spinnerTimer = null
-    process.stderr.write('\r\x1b[2K')
+    this.clearStatus()
   }
 
   info(message: string): void {

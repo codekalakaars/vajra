@@ -27,6 +27,9 @@ vendor/
 .env
 .env.local
 
+# Session store
+.vajra/
+
 # SQLite
 *.db
 *.db-shm

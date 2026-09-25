@@ -8,13 +8,6 @@ export interface ModelPreset {
   hint: string
 }
 
-/** OpenRouter models — only listed when OPENROUTER_API_KEY is set. */
-export const OPENROUTER_PRESETS: ModelPreset[] = [
-  { id: 'openai/gpt-4o-mini', hint: 'Fast' },
-  { id: 'openai/gpt-4o', hint: 'Fast' },
-  { id: 'anthropic/claude-3-haiku', hint: 'Fast' },
-]
-
 /** OpenCode Zen free models — only listed when OPENCODE_API_KEY is set. */
 export const ZEN_FREE_PRESETS: ModelPreset[] = [
   { id: 'zen/mimo-v2.6-flash-free', hint: 'Free (Zen)' },
@@ -31,13 +24,11 @@ export const ZEN_FREE_PRESETS: ModelPreset[] = [
 
 /**
  * Models the user can actually reach with the keys they have configured.
- * - OPENCODE_API_KEY → Zen free presets (zen/*)
- * - OPENROUTER_API_KEY → OpenRouter presets (openai/*, anthropic/*)
+ * - OPENCODE_API_KEY → Zen free presets (zen/*, go/*)
  */
 export function listAvailableModels(env: NodeJS.ProcessEnv = process.env): ModelPreset[] {
   const out: ModelPreset[] = []
   if (env.OPENCODE_API_KEY?.trim()) out.push(...ZEN_FREE_PRESETS)
-  if (env.OPENROUTER_API_KEY?.trim()) out.push(...OPENROUTER_PRESETS)
   return out
 }
 
@@ -47,9 +38,14 @@ export function resolveDefaultModel(env: NodeJS.ProcessEnv = process.env): strin
   return fromEnv && fromEnv.trim() ? fromEnv.trim() : DEFAULT_MODEL
 }
 
+/** Only the OpenCode Zen gateway is supported (zen/* and go/* models). */
+export function isSupportedModel(model: string): boolean {
+  return model.startsWith('zen/') || model.startsWith('go/')
+}
+
 /**
  * Pick the credential that matches the model's transport.
- * zen/* and go/* go to OpenCode; everything else goes through OpenRouter.
+ * zen/* and go/* go to OpenCode; every other model id is unsupported.
  * An explicit --api-key always wins.
  */
 export function resolveApiKeyForModel(
@@ -59,13 +55,13 @@ export function resolveApiKeyForModel(
 ): string | undefined {
   const trimmed = explicitKey?.trim()
   if (trimmed) return trimmed
-  if (model.startsWith('zen/') || model.startsWith('go/')) {
+  if (isSupportedModel(model)) {
     return env.OPENCODE_API_KEY || undefined
   }
-  return env.OPENROUTER_API_KEY || undefined
+  return undefined
 }
 
-/** Trim and validate a model id (OpenRouter ids contain no whitespace or '='). */
+/** Trim and validate a model id (no whitespace, no '=', zen/* or go/* only). */
 export function normalizeModelId(model: string): string {
   const cleaned = model.trim()
   if (!cleaned) {
@@ -73,6 +69,9 @@ export function normalizeModelId(model: string): string {
   }
   if (/[\s=]/.test(cleaned)) {
     throw new Error(`Invalid model id: '${model}'`)
+  }
+  if (!isSupportedModel(cleaned)) {
+    throw new Error(`Unsupported model '${cleaned}': only zen/* and go/* are supported`)
   }
   return cleaned
 }
@@ -162,6 +161,40 @@ export function writeEnvKey(envPath: string, key: string, value: string): void {
     envContent += `${key}=${value}\n`
   }
   writeFileSync(envPath, envContent)
+}
+
+/** Env keys holding user defaults, written by the TUI's Defaults screen. */
+export const DEFAULT_MODEL_KEY = 'VAJRA_MODEL'
+export const DEFAULT_DIR_KEY = 'VAJRA_PROJECT_DIR'
+
+/** Resolve the default project directory. Falls back to the current directory. */
+export function resolveDefaultDir(env: NodeJS.ProcessEnv = process.env): string {
+  const fromEnv = env[DEFAULT_DIR_KEY]
+  return fromEnv && fromEnv.trim() ? fromEnv.trim() : process.cwd()
+}
+
+/** True when the value came from `.env` rather than the built-in fallback. */
+export function isPersistedDefault(
+  key: typeof DEFAULT_MODEL_KEY | typeof DEFAULT_DIR_KEY,
+  envPath = findEnvPath(),
+): boolean {
+  const value = readEnvFile(envPath)[key]
+  return Boolean(value && value.trim())
+}
+
+/**
+ * Persist defaults so they survive a restart. Writes to the same `.env` the
+ * CLI reads at startup and returns its path, so the UI can show where it went.
+ */
+export function saveDefaults(values: { model?: string; projectDir?: string }): string {
+  const envPath = findEnvPath()
+  if (values.model !== undefined) {
+    writeEnvKey(envPath, DEFAULT_MODEL_KEY, normalizeModelId(values.model))
+  }
+  if (values.projectDir !== undefined) {
+    writeEnvKey(envPath, DEFAULT_DIR_KEY, resolve(values.projectDir))
+  }
+  return envPath
 }
 
 /** Parse `KEY=VALUE` for `vajra config -s`. Returns null if malformed. */

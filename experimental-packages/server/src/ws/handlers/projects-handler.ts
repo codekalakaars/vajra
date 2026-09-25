@@ -10,14 +10,16 @@ function getProjectId(params: unknown): string {
 
 export function registerSessionHandlers(router: RpcRouter<ServerContext>): void {
   router.register('projects.create', async (params: SessionCreateParams, ctx) => {
-    const defaultModel = process.env.VAJRA_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free'
+    const defaultModel = process.env.VAJRA_MODEL || 'zen/space-bunny-free'
     const model = params.model?.trim() || defaultModel
 
-    const { provider, resolvedModel } = createProvider(model, ctx.apiKeys)
+    const { provider } = createProvider(model, ctx.apiKeys)
 
+    // Store the full prefixed model: the manager re-parses it from the DB
+    // (attach/sendMessage), and a stripped bare name has no provider.
     const withDefaultModel = {
       ...params,
-      model: resolvedModel,
+      model,
       provider,
     }
     const result = await ctx.projects.create(withDefaultModel, (projectId) => ctx.connection.subscribe(projectId))

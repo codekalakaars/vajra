@@ -26,10 +26,21 @@ export interface SandboxReport {
 export interface SandboxSession {
   handle: LaunchHandle
   report: SandboxReport
-  /** Swap app-level task file permissions used before each forwarded call. */
+  /** Swap app-level task file permissions for the session handle. */
   setTaskPermissions: (lookup: (path: string) => TaskFilePermissions | null) => void
-  /** Parent-side dirty hook: fired after a successful mutating tool. */
+  /** Parent-side dirty hook for the session handle: fired after a successful mutating tool. */
   setOnMutate: (fn: () => void) => void
+  /**
+   * Register per-task permission lookup and dirty hook, returning a handle
+   * whose tool calls consult that task's state only (P1).
+   */
+  handleForTask(
+    taskId: string,
+    lookup: (path: string) => TaskFilePermissions | null,
+    onMutate: () => void,
+  ): LaunchHandle
+  /** Drop a task's scoped permission lookup and dirty hook. */
+  releaseTask: (taskId: string) => void
   close: () => void
 }
 
@@ -116,6 +127,39 @@ function resolveSandboxConfig(projectDir: string, allowUnenforced: boolean): San
 }
 
 /**
+ * App-level permission gate applied in the parent before a call is forwarded.
+ * With no lookup for the scope the call is unrestricted; with a lookup, paths
+ * it does not know about are denied.
+ */
+function assertToolPermission(
+  lookup: ((path: string) => TaskFilePermissions | null) | undefined,
+  tool: string,
+  args: unknown,
+): void {
+  if (!lookup) return
+  if (tool === 'list_files' || tool === 'search_files') return
+  const a = (args ?? {}) as { path?: unknown }
+  if (typeof a.path !== 'string') return
+  const perm = lookup(a.path)
+  const op =
+    tool === 'read_file'
+      ? 'read'
+      : tool === 'write_file' || tool === 'create_dir'
+        ? 'write'
+        : tool === 'edit_file'
+          ? 'edit'
+          : tool === 'delete_file'
+            ? 'delete'
+            : null
+  if (op && perm && !perm[op]) {
+    throw new Error(`Access denied: ${a.path}`)
+  }
+  if (op && !perm) {
+    throw new Error(`Access denied: ${a.path}`)
+  }
+}
+
+/**
  * Fork the sandboxed worker and return a LaunchHandle that proxies tool calls
  * over IPC. Throws if the worker refuses to start or applySandbox fails.
  */
@@ -136,13 +180,16 @@ export async function launchSandboxSession(
     env: buildWorkerEnv(),
   })
 
-  let taskPermissionLookup: ((path: string) => TaskFilePermissions | null) | null = null
-  let onMutate: (() => void) | null = null
+  // Session-wide state for the shared handle lives under a reserved scope key
+  // so setTaskPermissions/setOnMutate cannot collide with a real task id.
+  const SESSION_SCOPE = '__session'
+  const taskLookups = new Map<string, (path: string) => TaskFilePermissions | null>()
+  const taskOnMutate = new Map<string, () => void>()
 
   let nextCallId = 1
   const pending = new Map<
     string,
-    { resolve: (value: unknown) => void; reject: (err: Error) => void }
+    { resolve: (value: unknown) => void; reject: (err: Error) => void; scope: string }
   >()
 
   const reportPromise = new Promise<SandboxReport>((resolveReport, rejectReport) => {
@@ -182,7 +229,7 @@ export async function launchSandboxSession(
         if (!entry) return
         pending.delete(message.callId)
         if (message.ok) {
-          if (message.mutated) onMutate?.()
+          if (message.mutated) taskOnMutate.get(entry.scope)?.()
           entry.resolve(message.result)
         } else {
           entry.reject(new Error(message.error ?? 'Tool call failed in sandbox worker'))
@@ -213,34 +260,13 @@ export async function launchSandboxSession(
     throw new Error(`Sandbox not enforced: ${report.mechanism}`)
   }
 
-  const handle: LaunchHandle = {
+  const makeHandle = (scope: string): LaunchHandle => ({
     callTool: async (tool: string, args: unknown) => {
-      if (taskPermissionLookup && tool !== 'list_files' && tool !== 'search_files') {
-        const a = (args ?? {}) as { path?: unknown }
-        if (typeof a.path === 'string') {
-          const perm = taskPermissionLookup(a.path)
-          const op =
-            tool === 'read_file'
-              ? 'read'
-              : tool === 'write_file' || tool === 'create_dir'
-                ? 'write'
-                : tool === 'edit_file'
-                  ? 'edit'
-                  : tool === 'delete_file'
-                    ? 'delete'
-                    : null
-          if (op && perm && !perm[op]) {
-            throw new Error(`Access denied: ${a.path}`)
-          }
-          if (op && !perm) {
-            throw new Error(`Access denied: ${a.path}`)
-          }
-        }
-      }
+      assertToolPermission(taskLookups.get(scope), tool, args)
 
       const callId = String(nextCallId++)
       return new Promise((resolve, reject) => {
-        pending.set(callId, { resolve, reject })
+        pending.set(callId, { resolve, reject, scope })
         child.send({ type: 'call', callId, tool, args }, (err) => {
           if (err) {
             pending.delete(callId)
@@ -249,16 +275,27 @@ export async function launchSandboxSession(
         })
       })
     },
-  }
+  })
+
+  const handle = makeHandle(SESSION_SCOPE)
 
   return {
     handle,
     report,
     setTaskPermissions: (lookup) => {
-      taskPermissionLookup = lookup
+      taskLookups.set(SESSION_SCOPE, lookup)
     },
     setOnMutate: (fn) => {
-      onMutate = fn
+      taskOnMutate.set(SESSION_SCOPE, fn)
+    },
+    handleForTask: (taskId, lookup, onMutate) => {
+      taskLookups.set(taskId, lookup)
+      taskOnMutate.set(taskId, onMutate)
+      return makeHandle(taskId)
+    },
+    releaseTask: (taskId) => {
+      taskLookups.delete(taskId)
+      taskOnMutate.delete(taskId)
     },
     close: () => {
       for (const [, entry] of pending) entry.reject(new Error('Sandbox session closed'))

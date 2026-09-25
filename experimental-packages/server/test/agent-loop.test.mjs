@@ -1,6 +1,6 @@
 // Tests for agent/loop.ts — the simplified summary-only orchestration.
 //
-// Mocks the OpenRouter client entirely (no network, no API key) and
+// Mocks the chat client entirely (no network, no API key) and
 // exercises the loop's logic: streaming summary, error recovery.
 
 import { test } from 'node:test'
@@ -78,7 +78,7 @@ test('agentLoop emits assistantDelta events', async (t) => {
   writeFileSync(join(project, 'hello.txt'), 'hello world')
 
   try {
-    // The actual loop requires a real OpenRouter API key to run.
+    // The actual loop requires a real API key to run.
     // This test verifies the module loads and exports the expected shape.
     const loopModule = require('../dist/agent/loop.js')
     assert.ok(loopModule.agentLoop, 'agentLoop should be exported')

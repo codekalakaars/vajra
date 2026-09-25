@@ -14,21 +14,10 @@ const TOOL_RESULT_MAX_CHARS = 500
 
 // Maximum context sizes by model (in tokens)
 const MODEL_LIMITS: Record<string, number> = {
-  'nvidia/nemotron-3-ultra-550b-a55b:free': 1000000,
-  'nvidia/nemotron-3-super-120b-a12b:free': 262144,
-  'nvidia/nemotron-3.5-lightning:free': 1000000,
-  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': 256000,
-  'dots-studio/dots-3-note-preview:free': 512000,
-  'google/gemma-4-31b-it:free': 262144,
-  'google/gemma-4-26b-a4b-it:free': 262144,
-  'nex-agi/nex-n2.5-pro:free': 262144,
-  'poolside/laguna-s-2.1:free': 262144,
-  'poolside/laguna-xs-2.1:free': 262144,
-  'cohere/north-mini-code:free': 256000,
-  'inclusionai/ling-3.0-flash-vl:free': 262144,
   'anthropic/claude-3.5-sonnet': 200000,
   'anthropic/claude-3-opus': 200000,
   // Zen models
+  'space-bunny-free': 128000,
   'deepseek-v4-flash-free': 128000,
   'mimo-v2.5-free': 128000,
   'nemotron-3-ultra-free': 1000000,

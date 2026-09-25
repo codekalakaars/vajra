@@ -2,13 +2,13 @@
 
 import { toolDefinitions, toOpenAiToolSpecs, roleTools, type ToolName } from '@codekalakaars/vajra-protocol'
 
-/** OpenAI-compatible function tool spec (same shape OpenRouter accepts). */
+/** OpenAI-compatible function tool spec. */
 export interface OpenAiToolSpec {
   type: 'function'
   function: { name: string; description: string; parameters: unknown }
 }
 
-/** Provider tool-call fragment (OpenRouter / OpenAI streaming shape). */
+/** Provider tool-call fragment (OpenAI streaming shape). */
 export interface RawToolCall {
   id: string
   type?: string

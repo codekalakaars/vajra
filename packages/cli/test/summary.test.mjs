@@ -26,7 +26,7 @@ test('isMaskedName matches permissions.rs rule', () => {
 test('buildSummaryIndex never includes .env when isMasked is set', () => {
   const dir = mkdtempSync(join(tmpdir(), 'summary-'))
   try {
-    writeFileSync(join(dir, '.env'), 'OPENROUTER_API_KEY=sk-or-v1-SUPERSECRET123\nDB_PASSWORD=hunter2\n')
+    writeFileSync(join(dir, '.env'), 'SERVICE_API_KEY=sk-or-v1-SUPERSECRET123\nDB_PASSWORD=hunter2\n')
     writeFileSync(join(dir, 'app.js'), 'export function main() {}\nexport const x = 1\n')
 
     const entries = [
@@ -39,7 +39,7 @@ test('buildSummaryIndex never includes .env when isMasked is set', () => {
     assert.ok(!paths.includes('.env'), '.env must not be indexed')
     assert.ok(paths.includes('app.js'))
 
-    const search = searchSummary(summary, 'env secret OPENROUTER')
+    const search = searchSummary(summary, 'env secret SERVICE')
     assert.ok(!search.includes('SUPERSECRET'), 'search must not leak .env preview')
     assert.ok(!search.includes('.env\n') && !search.includes('.env ['), 'search must not list .env')
   } finally {

@@ -4,7 +4,8 @@
 
 import type { ProjectFileEntry } from '@codekalakaars/vajra-protocol'
 
-const MAX_DEPTH = 3
+/** Default render depth (directory levels below the root) for buildNestedTree. */
+export const DEFAULT_TREE_DEPTH = 4
 
 interface TreeNode {
   name: string
@@ -35,8 +36,14 @@ function buildTree(entries: ProjectFileEntry[]): TreeNode {
   return root
 }
 
-function renderNode(node: TreeNode, depth: number, prefix: string, lines: string[]): void {
-  if (depth > MAX_DEPTH) return
+function renderNode(
+  node: TreeNode,
+  depth: number,
+  prefix: string,
+  lines: string[],
+  maxDepth: number,
+): void {
+  if (depth > maxDepth) return
 
   const sorted = [...node.children.entries()].sort(([a, aNode], [b, bNode]) => {
     if (aNode.isDir !== bNode.isDir) return aNode.isDir ? -1 : 1
@@ -51,8 +58,8 @@ function renderNode(node: TreeNode, depth: number, prefix: string, lines: string
 
     if (child.isDir) {
       lines.push(`${prefix}${connector}${name}/`)
-      if (depth < MAX_DEPTH) {
-        renderNode(child, depth + 1, prefix + childPrefix, lines)
+      if (depth < maxDepth) {
+        renderNode(child, depth + 1, prefix + childPrefix, lines, maxDepth)
       } else {
         lines.push(`${prefix}${childPrefix}...`)
       }
@@ -62,13 +69,20 @@ function renderNode(node: TreeNode, depth: number, prefix: string, lines: string
   }
 }
 
-export function buildNestedTree(entries: ProjectFileEntry[]): string {
+export function buildNestedTree(
+  entries: ProjectFileEntry[],
+  maxDepth: number = DEFAULT_TREE_DEPTH,
+): string {
   if (entries.length === 0) return '(empty project)'
+
+  const depth = Number.isFinite(maxDepth) && maxDepth >= 0
+    ? Math.floor(maxDepth)
+    : DEFAULT_TREE_DEPTH
 
   const tree = buildTree(entries)
   const lines: string[] = []
 
-  renderNode(tree, 0, '', lines)
+  renderNode(tree, 0, '', lines, depth)
 
   return lines.join('\n')
 }

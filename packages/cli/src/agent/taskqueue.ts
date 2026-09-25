@@ -202,6 +202,36 @@ export class TaskQueue {
     task.startedAt = null
   }
 
+  /**
+   * Hand a task back to the queue without counting a retry: used when an
+   * interrupt lands after assignment but before any work happened, so the
+   * record shows "never started" instead of a completed task.
+   */
+  returnToPending(taskId: string): void {
+    const task = this.tasks.get(taskId)
+    if (!task) return
+    if (task.status === 'done' || task.status === 'failed' || task.status === 'skipped') return
+    task.status = 'pending'
+    task.assignedAgentId = null
+    task.startedAt = null
+    task.completedAt = null
+    task.validationPassed = null
+  }
+
+  /**
+   * Mark a task as already finished without running it. A resumed session must
+   * report the work it inherited, not silently re-run or drop it.
+   */
+  markAlreadyDone(taskId: string): void {
+    const task = this.tasks.get(taskId)
+    if (!task) return
+    task.status = 'done'
+    task.assignedAgentId = null
+    task.startedAt = task.startedAt ?? null
+    task.completedAt = task.completedAt ?? null
+    task.validationPassed = task.validationPassed ?? null
+  }
+
   skipTask(taskId: string): void {
     const task = this.tasks.get(taskId)
     if (!task) return

@@ -4,10 +4,15 @@
 // database operations. It is safe for both synchronous (CLI) and
 // asynchronous (server) consumers.
 
-export { buildNestedTree } from './tree.js'
+export { buildNestedTree, DEFAULT_TREE_DEPTH } from './tree.js'
 
 export {
   type SummaryEntry,
+  MIN_INDEX_BUDGET_CHARS,
+  MAX_INDEX_BUDGET_CHARS,
+  DEFAULT_INDEX_BUDGET_CHARS,
+  deriveIndexBudget,
+  SYMBOL_CAP,
   SKIP_DIRS,
   SKIP_EXTENSIONS,
   SKIP_SUFFIXES,
