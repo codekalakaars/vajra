@@ -27,5 +27,3 @@ export {
   type WorktreeInfo,
   type WorktreeResult,
 } from './worktree.js'
-export { SandboxDaemon, type DaemonConfig } from './daemon.js'
-export { SandboxClient, type ClientConfig } from './client.js'
