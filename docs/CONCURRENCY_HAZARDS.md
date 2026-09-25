@@ -32,21 +32,24 @@ shared `Map`s (`taskErrors`, `taskAgents`, `noOpTasks`).
 
 ## Status
 
-Six of the eight hazards are addressed; **two remain open.** Checked against the
-code, not against the commit message.
+All eight hazards are addressed. Each row names the mechanism that now holds —
+checked against the code, not against a commit message.
 
-| # | Hazard | State | Evidence |
-| --- | --- | --- | --- |
-| 1 | Concurrent shell commands contend on shared external state — **P0** | **OPEN** | nothing serialises `run_command`: `master.ts:98` and `execute.ts:390` dispatch straight through, and `execute.ts:319` runs a tool-call group under `Promise.all`, so two commands can overlap inside one task as well as across tasks |
-| 2 | A worker crash fails every in-flight task at once — P0 | addressed | `launch.ts:275-296` respawns on exit, bounded by `maxSpawnRetries` |
-| 3 | The parallel-safety guarantee is computed and then discarded — P0 | addressed | `writeSetOf` is exported and `planParallel` feeds real write sets into `contentionWarnings` |
-| 4 | Tasks blocked on locks occupy worker slots — P1 | **OPEN** | admission happens first, then `await fileLocks.acquireOrWait(...)` at `service.ts:683` — a blocked task still holds its slot |
-| 5 | The validation server has no port assignment — P1 | addressed | `allocateServerPort()` binds an ephemeral port (`tasks/server.ts:49`) |
-| 6 | `persist()` re-hashes the whole plan on every transition — P1 | addressed | hashing is per changed file (`persist/session.ts:142-164`); `fileHashes` is carried, not recomputed |
-| 7 | The read cache is not invalidated by `run_command` — P2 | addressed | `readCache.clear()` on command completion (`handle.ts:199,204`) |
-| 8 | Git state for the staleness gate is captured mid-flight — P2 | addressed | the gate re-reads HEAD at check time rather than trusting the stored value (`session/resume.ts:93-98`) |
+| # | Hazard | Mechanism that holds now |
+| --- | --- | --- |
+| 1 | Concurrent shell commands contend on shared external state — P0 | `withCommandResourceLock` (`service.ts:85`) serialises any `run_command` whose executable maps to a shared resource — git, npm, npx, pnpm, yarn, cargo (`service.ts:63`) — through a `FileLockManager`, and plan `rollback` commands go through the same path (`service.ts:857`). Commands outside that map are not serialised: see the residual note below |
+| 2 | A worker crash fails every in-flight task at once — P0 | `launch.ts:275` respawns the worker on exit, bounded by `maxSpawnRetries` (`launch.ts:286`) |
+| 3 | The parallel-safety guarantee is computed and then discarded — P0 | `writeSetOf` is exported (`plan-validate.ts:80`) and `planParallel` feeds real write sets into `contentionWarnings` (`plan-validate.ts:175`) |
+| 4 | Tasks blocked on locks occupy worker slots — P1 | admission is gated: `canAdmitTask` (`service.ts:902`) requires `fileLocks.canAcquire(...)`, and the admission loop consults it (`master.ts:235`), so a task whose paths are locked is never admitted and never holds a slot |
+| 5 | The validation server has no port assignment — P1 | `allocateServerPort()` binds an ephemeral port (`tasks/server.ts:49`), and admission reserves `<resource:validation-server>` so two tasks cannot pick the same one |
+| 6 | `persist()` re-hashes the whole plan on every transition — P1 | hashing is per changed file (`persist/session.ts:142`); `fileHashes` is carried forward, not recomputed |
+| 7 | The read cache is not invalidated by `run_command` — P2 | the cache generation is bumped on command completion (`handle.ts:199,204`) |
+| 8 | Git state for the staleness gate is captured mid-flight — P2 | the gate re-reads HEAD at check time instead of trusting the stored value (`session/resume.ts:93`) |
 
-Hazard 1 is the one that bites hardest: a concurrent `pnpm install` corrupts
-`node_modules`, and a second `git` command fails on `.git/index.lock`. Hazard 4
-is a throughput problem — blocked tasks starve the pool. Both are tracked as open
-work in [BACKLOG.md](BACKLOG.md).
+**Residual on hazard 1, stated so it is not rediscovered:** serialisation is
+keyed on an executable allow-list. A command that mutates shared state without
+being in `COMMAND_RESOURCE_PATHS` — `python`, `make`, `docker-compose`, a bare
+`node script.js` that writes into the tree — still runs unguarded. Widening the
+map is cheap; a blanket per-directory lock was tried and rejected because it also
+serialises read-only commands, giving up the parallelism the rest of this
+scheduler works to get.
