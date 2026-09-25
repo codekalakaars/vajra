@@ -118,6 +118,7 @@ export declare function runCommand(command: string, args?: Array<string> | undef
  */
 export declare function runShell(command: string, cwd?: string | undefined | null): CommandResult
 export declare function runCommandAsync(command: string, args?: Array<string> | undefined | null, cwd?: string | undefined | null): Promise<CommandResult>
+export declare function runCommandAsyncTimeout(command: string, args: Array<string> | undefined | null, cwd: string | undefined | null, timeoutMs: number): Promise<CommandResult>
 export declare function runShellAsync(command: string, cwd?: string | undefined | null): Promise<CommandResult>
 /** Locate an executable on PATH, returning its full path. */
 export declare function which(command: string): string | null

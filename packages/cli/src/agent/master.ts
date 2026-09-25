@@ -166,6 +166,8 @@ export interface MasterLoopDeps<T> {
   onTaskEvent: (event: TaskEvent) => void
   /** Defaults to `task.maxRetries ?? 2`. */
   defaultMaxRetries?: number
+  /** Admission-time resource check; false means the task must wait. */
+  canAdmitTask?: (task: TaskState) => boolean
   /** Default for `decideFailure`'s `maxRetries` when a task sets none. */
   abortAfterFailures?: number
   /** The LLM decision loop, when enabled. */
@@ -229,7 +231,9 @@ export async function masterLoop(deps: MasterLoopDeps<TaskState>): Promise<Maste
     while (!isInterrupted() && !outcome.aborted && running.size < maxWorkers) {
       // An in-flight task is still 'pending' until it clears its own setup, so
       // the in-flight map is the real filter.
-      const next = queue.getReadyTasks().find(t => !running.has(t.id))
+      const next = queue.getReadyTasks().find(
+        t => !running.has(t.id) && (deps.canAdmitTask?.(t) ?? true),
+      )
       if (!next) return
       const tracked = runOne(next)
         .catch(() => {

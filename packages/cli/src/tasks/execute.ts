@@ -6,7 +6,7 @@ import { getWorkerToolSpecs } from '../agent/tools.js'
 import type { ChangeHistory, FileLockManager } from '@codekalakaars/vajra-sandbox'
 import type { AgentEvent, AgentLabel, SessionStreamer } from '../session/ui.js'
 import { startHeartbeat, summarizeToolCall, summarizeToolResult } from '../session/ui.js'
-import { needsServer, findServerEntry } from './server.js'
+import { allocateServerPort, findServerEntry, needsServer, probeServerPort, substituteServerPort } from './server.js'
 
 /**
  * Tools that only observe. These may run concurrently within one assistant
@@ -95,6 +95,7 @@ async function killProcessGroup(
   // Consume piped stdout/stderr so the buffer cannot fill and stall the server.
   serverProcess.stdout?.resume()
   serverProcess.stderr?.resume()
+  if (serverProcess.exitCode !== null || serverProcess.signalCode !== null) return
   try {
     if (serverProcess.pid) {
       // Negative pid signals the process group (spawn used detached: true).
@@ -118,6 +119,28 @@ async function killProcessGroup(
       clearTimeout(t)
       resolve()
     })
+  })
+}
+
+function waitForServerStartup(
+  serverProcess: ReturnType<typeof import('node:child_process').spawn>,
+  timeoutMs: number,
+): Promise<boolean> {
+  return new Promise(resolve => {
+    let settled = false
+    const finish = (started: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      serverProcess.off('error', onError)
+      serverProcess.off('exit', onExit)
+      resolve(started)
+    }
+    const onError = () => finish(false)
+    const onExit = () => finish(false)
+    const timer = setTimeout(() => finish(true), timeoutMs)
+    serverProcess.once('error', onError)
+    serverProcess.once('exit', onExit)
   })
 }
 
@@ -308,28 +331,50 @@ export async function executeTask(
     if (task.validation.length > 0) {
       emit({ type: 'phase', agent, phase: 'validating' })
       let serverProcess: ReturnType<typeof import('node:child_process').spawn> | null = null
-
-      if (needsServer(task.validation)) {
-        const serverEntry = await findServerEntry(projectDir)
-        if (serverEntry) {
-          const { spawn } = await import('node:child_process')
-          serverProcess = spawn('node', [serverEntry], {
-            cwd: projectDir,
-            stdio: 'pipe',
-            detached: true,
-          })
-          serverProcess.stdout?.resume()
-          serverProcess.stderr?.resume()
-          // Wait for server to start
-          await new Promise(resolve => setTimeout(resolve, 2000))
-        }
+      let serverPort: number | null = null
+      const serverEntry = needsServer(task.validation)
+        ? await findServerEntry(projectDir)
+        : null
+      const serverLockPath = '<resource:validation-server>'
+      const serverLockOwner = `validation-server:${agent.taskId ?? agentId}`
+      if (serverEntry && fileLocks) {
+        await fileLocks.acquireOrWait([serverLockPath], serverLockOwner, 'write')
       }
 
       try {
+        if (serverEntry) {
+          const { spawn } = await import('node:child_process')
+          for (let attempt = 0; attempt < 3; attempt++) {
+            serverPort = await allocateServerPort()
+            let serverError = ''
+            const candidate = spawn('node', [serverEntry], {
+              cwd: projectDir,
+              stdio: 'pipe',
+              detached: true,
+              env: { ...process.env, PORT: String(serverPort) },
+            })
+            candidate.on('error', () => {})
+            candidate.stdout?.resume()
+            candidate.stderr?.on('data', chunk => {
+              serverError += String(chunk)
+            })
+            const started = await waitForServerStartup(candidate, 2000)
+            if (started && await probeServerPort(serverPort!)) {
+              serverProcess = candidate
+              break
+            }
+            await killProcessGroup(candidate)
+            await new Promise(resolve => setTimeout(resolve, 25))
+            if ((!started && !serverError.includes('EADDRINUSE')) || attempt === 2) break
+          }
+          if (!serverProcess) return false
+        }
+
         for (const cmd of task.validation) {
           const validationStarted = Date.now()
+          const validationCommand = serverPort === null ? cmd : substituteServerPort(cmd, serverPort)
           const validationArgs = {
-            command: cmd,
+            command: validationCommand,
             timeoutMs: task.timeoutSeconds * 1000,
           }
           emit({
@@ -385,6 +430,9 @@ export async function executeTask(
       } finally {
         if (serverProcess) {
           await killProcessGroup(serverProcess)
+        }
+        if (serverEntry && fileLocks) {
+          fileLocks.releaseFiles([serverLockPath], serverLockOwner)
         }
       }
     }

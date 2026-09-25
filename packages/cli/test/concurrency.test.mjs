@@ -4,13 +4,18 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
+import { FileLockManager, resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
 
 const serviceUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'session', 'service.js')).href
 const persistUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'persist', 'index.js')).href
 const queueUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'agent', 'taskqueue.js')).href
-const { runSession, resolveMaxWorkers } = await import(serviceUrl)
-const { listSessions, loadSession } = await import(persistUrl)
+const {
+  commandResourcePath,
+  runSession,
+  resolveMaxWorkers,
+  withCommandResourceLock,
+} = await import(serviceUrl)
+const { hashFile, listSessions, loadSession } = await import(persistUrl)
 const { TaskQueue } = await import(queueUrl)
 
 const LATENCY_MS = 400
@@ -268,6 +273,63 @@ test('resolveMaxWorkers defaults to the config and honours the flag', () => {
   assert.equal(resolveMaxWorkers(Number.NaN), configured)
 })
 
+test('shared command resources serialise while unrelated resources stay parallel', async () => {
+  assert.equal(commandResourcePath('git status'), 'resource:git')
+  assert.equal(commandResourcePath('/usr/bin/npm install'), 'resource:node_modules')
+  assert.equal(commandResourcePath('npx vitest'), 'resource:node_modules')
+  assert.equal(commandResourcePath('ignored', ['git', 'status']), 'resource:git')
+  assert.equal(commandResourcePath('pnpm install'), 'resource:node_modules')
+  assert.equal(commandResourcePath('yarn install'), 'resource:node_modules')
+  assert.equal(commandResourcePath('cargo build'), 'resource:cargo')
+  assert.equal(commandResourcePath('node build.js'), null)
+
+  const locks = new FileLockManager()
+  let activeGit = 0
+  let maxActiveGit = 0
+  let activeTotal = 0
+  let maxActiveTotal = 0
+  const handle = {
+    async callTool(_tool, args) {
+      const command = String(args.command)
+      activeTotal++
+      maxActiveTotal = Math.max(maxActiveTotal, activeTotal)
+      if (command.startsWith('git')) {
+        activeGit++
+        maxActiveGit = Math.max(maxActiveGit, activeGit)
+      }
+      try {
+        await sleep(40)
+        if (args.fail) throw new Error('command failed')
+        return 'ok'
+      } finally {
+        if (command.startsWith('git')) activeGit--
+        activeTotal--
+      }
+    },
+  }
+
+  const gitA = withCommandResourceLock(handle, locks, 'task-a')
+  const gitB = withCommandResourceLock(handle, locks, 'task-b')
+  const cargo = withCommandResourceLock(handle, locks, 'task-c')
+  await Promise.all([
+    gitA.callTool('run_command', { command: 'git status' }),
+    gitB.callTool('run_command', { command: 'git diff' }),
+    cargo.callTool('run_command', { command: 'cargo check' }),
+  ])
+
+  assert.equal(maxActiveGit, 1)
+  assert.equal(maxActiveTotal, 2)
+
+  await assert.rejects(
+    gitA.callTool('run_command', { command: 'npm install', fail: true }),
+    /command failed/,
+  )
+  assert.equal(
+    await gitB.callTool('run_command', { command: 'pnpm install' }),
+    'ok',
+  )
+})
+
 test('TaskQueue.returnToPending undoes assignment without counting a retry', () => {
   const queue = new TaskQueue('session-1', 60)
   queue.addTask({
@@ -350,6 +412,10 @@ test('independent tasks run concurrently: time of the slowest, not the sum', asy
   for (const tsk of planTasks) {
     assert.equal(persisted.tasks[tsk.id].status, 'done')
     assert.equal(typeof persisted.tasks[tsk.id].completedAt, 'number')
+    assert.equal(
+      persisted.fileHashes[tsk.writeFile[0]],
+      hashFile(join(projectDir, tsk.writeFile[0])),
+    )
   }
 })
 
@@ -394,17 +460,19 @@ test('a forced failure in one task leaves the others changes intact', async t =>
   assert.ok(persisted.tasks['bad'].completedAt, 'failure is recorded before the run ends')
 })
 
-test('a task that throws releases its file locks instead of deadlocking peers', async t => {
+test('a task that throws releases its locks and settles dependent work', async t => {
   const projectDir = tempProject('vajra-conc-lock-')
   t.after(() => rmSync(projectDir, { recursive: true, force: true }))
 
   // `../escape.txt` resolves outside the project, so ChangeHistory.recordBefore
-  // throws *after* this task already holds the write lock on that path.
-  // The waiter parks on the same lock: without a finally-release it never
-  // wakes and the run never settles.
+  // throws after this task acquires the write lock. The dependent task must
+  // still be able to proceed after the finally-release.
   const planTasks = [
     task('escape', 'Write outside the project', { writeFile: ['../escape-target.txt'] }),
-    task('waiter', 'Create the same path', { createDir: ['../escape-target.txt'] }),
+    task('waiter', 'Create the same path', {
+      createDir: ['../escape-target.txt'],
+      dependsOn: ['escape'],
+    }),
   ]
   const ui = makeUI()
   const session = startSession({ projectDir, planTasks, ui, latencyMs: 100, timeoutMs: 30_000 })
@@ -423,7 +491,7 @@ test('a task that throws releases its file locks instead of deadlocking peers', 
   assert.ok(persisted, 'session should be persisted')
   assert.equal(persisted.tasks.escape.status, 'failed')
   assert.match(persisted.tasks.escape.error ?? '', /outside project directory/)
-  assert.equal(persisted.tasks.waiter.status, 'done')
+  assert.equal(persisted.tasks.waiter.status, 'skipped')
 })
 
 test('interrupt leaves a persisted record of what completed', async t => {

@@ -15,6 +15,8 @@ import { pathToFileURL } from 'node:url'
 const root = join(import.meta.dirname, '..', 'dist')
 const {
   SESSION_SCHEMA_VERSION,
+  DIRECTORY_FILE_HASH,
+  MISSING_FILE_HASH,
   appendMessage,
   deleteSession,
   latestSession,
@@ -243,6 +245,34 @@ test('a deleted file is reported rather than treated as unchanged', t => {
 
   const report = assessStaleness(session, dir)
   assert.equal(report.verdict.kind, 'files-missing')
+  assert.deepEqual(report.verdict.paths, ['one.txt'])
+})
+
+test('directory state is tracked separately from missing files', t => {
+  const dir = project()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const session = makeSession(dir, {
+    fileHashes: { 'one.txt': DIRECTORY_FILE_HASH },
+  })
+  rmSync(join(dir, 'one.txt'))
+  mkdirSync(join(dir, 'one.txt'))
+  assert.equal(assessStaleness(session, dir).verdict.kind, 'clean')
+  rmSync(join(dir, 'one.txt'), { recursive: true })
+  assert.equal(assessStaleness(session, dir).verdict.kind, 'files-missing')
+})
+
+test('a missing recorded path stays stable and recreation is detected', t => {
+  const dir = project()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const session = makeSession(dir, {
+    fileHashes: { 'one.txt': MISSING_FILE_HASH },
+  })
+  rmSync(join(dir, 'one.txt'))
+
+  assert.equal(assessStaleness(session, dir).verdict.kind, 'clean')
+  writeFileSync(join(dir, 'one.txt'), 'recreated\n', 'utf-8')
+  const report = assessStaleness(session, dir)
+  assert.equal(report.verdict.kind, 'user-edited')
   assert.deepEqual(report.verdict.paths, ['one.txt'])
 })
 

@@ -174,28 +174,54 @@ export async function launchSandboxSession(
   const config = resolveSandboxConfig(projectDir, allowUnenforced)
   const job: LaunchJob = buildLaunchJob(config, sessionId)
 
-  const child: ChildProcess = fork(resolveWorkerPath(), [], {
-    cwd: projectDir,
-    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-    env: buildWorkerEnv(),
-  })
-
-  // Session-wide state for the shared handle lives under a reserved scope key
-  // so setTaskPermissions/setOnMutate cannot collide with a real task id.
   const SESSION_SCOPE = '__session'
   const taskLookups = new Map<string, (path: string) => TaskFilePermissions | null>()
   const taskOnMutate = new Map<string, () => void>()
-
-  let nextCallId = 1
   const pending = new Map<
     string,
     { resolve: (value: unknown) => void; reject: (err: Error) => void; scope: string }
   >()
+  let nextCallId = 1
+  let activeChild: ChildProcess | null = null
+  let closed = false
+  let ready: Promise<SandboxReport>
+  let restartAttempts = 0
 
-  const reportPromise = new Promise<SandboxReport>((resolveReport, rejectReport) => {
-    const timer = setTimeout(() => {
-      rejectReport(new Error(`Sandbox worker did not report within ${timeoutMs}ms`))
-    }, timeoutMs)
+  const stopWorker = (child: ChildProcess | null): void => {
+    if (!child) return
+    try {
+      child.kill('SIGTERM')
+    } catch {}
+  }
+
+  const failPending = (error: Error): void => {
+    const entries = [...pending.values()]
+    pending.clear()
+    for (const entry of entries) entry.reject(error)
+  }
+
+  const startWorker = (): { child: ChildProcess; report: Promise<SandboxReport> } => {
+    const spawnedChild = fork(resolveWorkerPath(), [], {
+      cwd: projectDir,
+      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+      env: buildWorkerEnv(),
+    })
+    let reported = false
+    let reportSettled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let resolveReport!: (report: SandboxReport) => void
+    let rejectReport!: (error: Error) => void
+
+    const report = new Promise<SandboxReport>((resolve, reject) => {
+      resolveReport = resolve
+      rejectReport = reject
+      timer = setTimeout(() => {
+        if (reportSettled) return
+        reportSettled = true
+        stopWorker(spawnedChild)
+        rejectReport(new Error(`Sandbox worker did not report within ${timeoutMs}ms`))
+      }, timeoutMs)
+    })
 
     const onMessage = (message: {
       type?: string
@@ -206,20 +232,29 @@ export async function launchSandboxSession(
       result?: unknown
       error?: string
       mutated?: boolean
-    }) => {
-      if (!message) return
+    }): void => {
+      if (!message || spawnedChild !== activeChild) return
 
       if (message.type === 'sandbox-report' && message.report) {
-        clearTimeout(timer)
-        child.off('message', onMessage)
-        child.on('message', onRuntimeMessage)
+        if (reportSettled) return
+        if (requireEnforced && !message.report.enforced) {
+          reportSettled = true
+          if (timer) clearTimeout(timer)
+          stopWorker(spawnedChild)
+          rejectReport(new Error(`Sandbox not enforced: ${message.report.mechanism}`))
+          return
+        }
+        reportSettled = true
+        reported = true
+        if (timer) clearTimeout(timer)
         resolveReport(message.report)
         return
       }
 
       if (message.type === 'refused') {
-        clearTimeout(timer)
-        child.off('message', onMessage)
+        if (reportSettled) return
+        reportSettled = true
+        if (timer) clearTimeout(timer)
         rejectReport(new Error(message.message ?? 'Sandbox worker refused to start'))
         return
       }
@@ -237,26 +272,77 @@ export async function launchSandboxSession(
       }
     }
 
-    const onRuntimeMessage = (message: Parameters<typeof onMessage>[0]) => onMessage(message)
+    const onExit = (code: number | null): void => {
+      if (timer) clearTimeout(timer)
+      const error = new Error(`Sandbox worker exited (code ${code})`)
+      if (!reportSettled) {
+        reportSettled = true
+        rejectReport(error)
+      }
+      if (spawnedChild !== activeChild) return
+      activeChild = null
+      failPending(error)
+      if (closed || !reported) return
+      if (restartAttempts >= job.resourceLimits.maxSpawnRetries) {
+        ready = Promise.reject(new Error('Sandbox worker exhausted its restart attempts'))
+        void ready.catch(() => {})
+        return
+      }
 
-    const onExit = (code: number | null) => {
-      clearTimeout(timer)
-      const err = new Error(`Sandbox worker exited (code ${code})`)
-      rejectReport(err)
-      for (const [, entry] of pending) entry.reject(err)
-      pending.clear()
+      restartAttempts++
+      try {
+        const restarted = startWorker()
+        activeChild = restarted.child
+        ready = restarted.report
+        void ready.catch(() => {})
+      } catch (e) {
+        ready = Promise.reject(e instanceof Error ? e : new Error(String(e)))
+        void ready.catch(() => {})
+      }
     }
 
-    child.on('message', onMessage)
-    child.once('exit', onExit)
+    const onError = (error: Error) => {
+      if (!reportSettled) {
+        reportSettled = true
+        if (timer) clearTimeout(timer)
+        rejectReport(error)
+      }
+      if (spawnedChild === activeChild && reported) onExit(-1)
+    }
 
-    child.send({ type: 'job', job })
-  })
+    spawnedChild.on('error', onError)
+    spawnedChild.on('message', onMessage)
+    spawnedChild.once('exit', onExit)
+    try {
+      spawnedChild.send({ type: 'job', job })
+    } catch (e) {
+      stopWorker(spawnedChild)
+      if (!reportSettled) {
+        reportSettled = true
+        if (timer) clearTimeout(timer)
+        rejectReport(e instanceof Error ? e : new Error(String(e)))
+      }
+    }
+    return { child: spawnedChild, report }
+  }
 
-  const report = await reportPromise
+  const initialWorker = startWorker()
+  activeChild = initialWorker.child
+  ready = initialWorker.report
+  let report: SandboxReport
+  try {
+    report = await ready
+  } catch (e) {
+    const current = activeChild
+    activeChild = null
+    stopWorker(current)
+    throw e
+  }
 
   if (requireEnforced && !report.enforced) {
-    child.kill('SIGTERM')
+    const current = activeChild
+    activeChild = null
+    stopWorker(current)
     throw new Error(`Sandbox not enforced: ${report.mechanism}`)
   }
 
@@ -264,16 +350,31 @@ export async function launchSandboxSession(
     callTool: async (tool: string, args: unknown) => {
       assertToolPermission(taskLookups.get(scope), tool, args)
 
-      const callId = String(nextCallId++)
-      return new Promise((resolve, reject) => {
-        pending.set(callId, { resolve, reject, scope })
-        child.send({ type: 'call', callId, tool, args }, (err) => {
-          if (err) {
+      for (;;) {
+        const observedReady = ready
+        await observedReady
+        if (closed) throw new Error('Sandbox session closed')
+        const current = activeChild
+        if (!current || !current.connected) {
+          if (ready !== observedReady) continue
+          throw new Error('Sandbox worker unavailable')
+        }
+
+        const callId = String(nextCallId++)
+        return new Promise((resolve, reject) => {
+          pending.set(callId, { resolve, reject, scope })
+          try {
+            current.send({ type: 'call', callId, tool, args }, (err) => {
+              if (!err) return
+              pending.delete(callId)
+              reject(err instanceof Error ? err : new Error(String(err)))
+            })
+          } catch (e) {
             pending.delete(callId)
-            reject(err instanceof Error ? err : new Error(String(err)))
+            reject(e instanceof Error ? e : new Error(String(e)))
           }
         })
-      })
+      }
     },
   })
 
@@ -298,16 +399,19 @@ export async function launchSandboxSession(
       taskOnMutate.delete(taskId)
     },
     close: () => {
-      for (const [, entry] of pending) entry.reject(new Error('Sandbox session closed'))
-      pending.clear()
-      if (child.connected) {
-        try {
-          child.send({ type: 'shutdown' })
-        } catch {
-          // ignore
+      if (closed) return
+      closed = true
+      failPending(new Error('Sandbox session closed'))
+      const current = activeChild
+      activeChild = null
+      if (current) {
+        if (current.connected) {
+          try {
+            current.send({ type: 'shutdown' })
+          } catch {}
         }
+        stopWorker(current)
       }
-      child.kill('SIGTERM')
     },
   }
 }

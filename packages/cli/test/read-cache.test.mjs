@@ -101,7 +101,25 @@ test('external change (run_command) is picked up on the next read', async (t) =>
     }),
   )
   assert.equal(res.exitCode, 0)
+  setMtime(f.file, T0)
   assert.equal(await h.callTool('read_file', { path: f.file }), 'version D')
+})
+
+test('shared fallback handles invalidate one another after commands', async (t) => {
+  const f = fixture()
+  t.after(f.cleanup)
+  writeFileSync(f.file, 'version A')
+  setMtime(f.file, T0)
+  const cache = { read: new Map(), generation: 0 }
+  const first = createToolHandle(f.dir, { cache })
+  const second = createToolHandle(f.dir, { cache })
+  assert.equal(await first.callTool('read_file', { path: f.file }), 'version A')
+  const result = JSON.parse(await second.callTool('run_command', {
+    command: `node -e "require('node:fs').writeFileSync(process.argv[1], 'version B')" ${f.file}`,
+  }))
+  assert.equal(result.exitCode, 0)
+  setMtime(f.file, T0)
+  assert.equal(await first.callTool('read_file', { path: f.file }), 'version B')
 })
 
 test('masked files: always the stub, content never cached', async (t) => {
