@@ -11,9 +11,7 @@ so they can work on your code without reading your secrets.
 | `@codekalakaars/vajra-sandbox` | Standalone TypeScript sandbox — file locks, permissions, daemon, CLI |
 | `@codekalakaars/vajra-protocol` | Shared RPC types, tool definitions, push event shapes |
 | `@codekalakaars/vajra-cli` | Shipping product — multi-agent task execution from the terminal |
-| `@codekalakaars/vajra-agent-core` | Shared pure agent helpers (summary/tree/tools) used by the CLI and server |
-| `@codekalakaars/vajra-server` | *(experimental)* WebSocket + SQLite backend, agent loop, session management |
-| `@codekalakaars/vajra-web` | *(experimental)* React SPA — chat UI, session management, real-time streaming |
+| `@codekalakaars/vajra-agent-core` | Shared pure agent helpers (summary/tree/tools) used by the CLI |
 
 ## Status
 
@@ -23,7 +21,6 @@ so they can work on your code without reading your secrets.
 | Env-file parsing, sample generation, redaction | Implemented; project `.env` entries are masked out of the file index |
 | Per-file permission config | Implemented |
 | Sandbox enforcement (CLI `vajra run`) | Confined worker calls `applySandbox` — Linux (Landlock) and macOS (Seatbelt); **none on Windows** |
-| Sandbox enforcement (server path) | Experimental worker only; not the shipping path |
 | Multi-agent orchestration | Developer/master/worker roles with plan confirmation |
 | TypeScript harness | Implemented |
 
@@ -98,7 +95,6 @@ Enforced today on the CLI path (`vajra run`):
 Not enforced yet:
 
 - **Nothing on Windows.** `applySandbox` refuses rather than pretending.
-- The experimental server/web path is not the shipping product; see Status above.
 
 Confinement is process-wide and irreversible.
 
