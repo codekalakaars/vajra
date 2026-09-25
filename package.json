@@ -34,7 +34,6 @@
     "test:rust": "cargo test --manifest-path packages/core/Cargo.toml",
     "lint": "cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnings",
     "dev": "turbo run dev --filter=@codekalakaars/vajra-cli --filter=@codekalakaars/vajra-protocol --filter=@codekalakaars/vajra-sandbox --filter=@codekalakaars/vajra-agent-core",
-    "dev:experimental": "turbo run dev --filter=@codekalakaars/vajra-server --filter=@codekalakaars/vajra-web",
     "cli": "pnpm --filter @codekalakaars/vajra-cli build && node packages/cli/dist/index.js",
     "dev:all": "pnpm -r --parallel dev",
     "build:all": "turbo run build",
