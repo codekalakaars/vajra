@@ -110,11 +110,43 @@ pub fn apply(config: &SandboxConfig) -> Result<(Vec<String>, Option<String>), St
         ("/lib", rx),
         ("/lib64", rx),
         ("/etc", ro),
-        ("/proc", ro),
-        ("/dev", rw),
     ] {
         if Path::new(path).exists() && add_path_rule(ruleset_fd, path, bits).is_err() {
             notes.push(format!("could not add rule for {}", path));
+        }
+    }
+
+    // 9.8: Narrow /proc to specific entries that toolchains need
+    if Path::new("/proc").exists() {
+        // Grant read access to /proc itself for basic process info
+        let _ = add_path_rule(ruleset_fd, "/proc", ro);
+        // Grant read access to /proc/self for the process's own info
+        if Path::new("/proc/self").exists() {
+            let _ = add_path_rule(ruleset_fd, "/proc/self", ro);
+        }
+        // Grant read access to /proc/cpuinfo for build tools
+        if Path::new("/proc/cpuinfo").exists() {
+            let _ = add_path_rule(ruleset_fd, "/proc/cpuinfo", ro);
+        }
+        // Grant read access to /proc/meminfo for build tools
+        if Path::new("/proc/meminfo").exists() {
+            let _ = add_path_rule(ruleset_fd, "/proc/meminfo", ro);
+        }
+    }
+
+    // 9.8: Narrow /dev to individual device files with read/write only
+    if Path::new("/dev").exists() {
+        // Grant /dev/null for output redirection
+        if Path::new("/dev/null").exists() {
+            let _ = add_path_rule(ruleset_fd, "/dev/null", acc::READ_FILE | acc::WRITE_FILE);
+        }
+        // Grant /dev/urandom for randomness
+        if Path::new("/dev/urandom").exists() {
+            let _ = add_path_rule(ruleset_fd, "/dev/urandom", acc::READ_FILE);
+        }
+        // Grant /dev/random as fallback
+        if Path::new("/dev/random").exists() {
+            let _ = add_path_rule(ruleset_fd, "/dev/random", acc::READ_FILE);
         }
     }
 
@@ -195,11 +227,13 @@ mod tests {
     }
 
     #[test]
-    fn directory_write_grants_creation_not_file_write() {
+    fn directory_write_grants_creation_and_child_write() {
+        // WRITE_FILE on a directory rule is required for open(O_WRONLY|O_CREAT)
+        // of children — MAKE_REG alone is not enough on this kernel/Landlock ABI.
         let bits = perms_to_bits(&perms(true, true, false, false), true, u64::MAX, &unnarrowed());
         assert_ne!(bits & acc::MAKE_REG, 0);
         assert_ne!(bits & acc::MAKE_DIR, 0);
-        assert_eq!(bits & acc::WRITE_FILE, 0);
+        assert_ne!(bits & acc::WRITE_FILE, 0);
     }
 
     #[test]

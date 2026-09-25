@@ -142,93 +142,95 @@ export class SandboxDaemon {
   }
 
   private handleRequest(agent: ConnectedAgent, request: DaemonRequest): void {
+    const requestId = request.id as string | number | undefined
+    const reply = (response: DaemonResponse) => this.sendResponse(agent, response, requestId)
     switch (request.type) {
       case 'identify':
         agent.name = String(request.name || 'unknown')
         agent.pid = Number(request.pid) || undefined
-        this.sendResponse(agent, { ok: true })
+        reply({ ok: true })
         break
       case 'lock':
-        this.handleLock(agent, request)
+        this.handleLock(agent, request, reply)
         break
       case 'unlock':
-        this.handleUnlock(agent, request)
+        this.handleUnlock(agent, request, reply)
         break
       case 'check-permission':
-        this.handleCheckPermission(agent, request)
+        this.handleCheckPermission(agent, request, reply)
         break
       case 'check-tool':
-        this.handleCheckTool(agent, request)
+        this.handleCheckTool(agent, request, reply)
         break
       case 'status':
-        this.handleStatus(agent)
+        this.handleStatus(agent, reply)
         break
       case 'list-locks':
-        this.handleListLocks(agent)
+        this.handleListLocks(agent, reply)
         break
       case 'list-agents':
-        this.handleListAgents(agent)
+        this.handleListAgents(agent, reply)
         break
       default:
-        this.sendResponse(agent, {
+        reply({
           ok: false,
           error: `Unknown request type: ${request.type}`,
         })
     }
   }
 
-  private handleLock(agent: ConnectedAgent, request: DaemonRequest): void {
+  private handleLock(agent: ConnectedAgent, request: DaemonRequest, reply: (r: DaemonResponse) => void): void {
     const file = String(request.file || '')
     const mode = (String(request.mode || 'shared') as LockMode)
 
     if (!file) {
-      this.sendResponse(agent, { ok: false, error: 'Missing file path' })
+      reply({ ok: false, error: 'Missing file path' })
       return
     }
 
     const result = this.locks.acquire(file, agent.id, mode)
-    this.sendResponse(agent, { ...result, lock: result.lock ?? undefined })
+    reply({ ...result, lock: result.lock ?? undefined })
   }
 
-  private handleUnlock(agent: ConnectedAgent, request: DaemonRequest): void {
+  private handleUnlock(agent: ConnectedAgent, request: DaemonRequest, reply: (r: DaemonResponse) => void): void {
     const file = String(request.file || '')
     if (!file) {
-      this.sendResponse(agent, { ok: false, error: 'Missing file path' })
+      reply({ ok: false, error: 'Missing file path' })
       return
     }
 
     const released = this.locks.releaseFile(file, agent.id)
-    this.sendResponse(agent, { ok: released })
+    reply({ ok: released })
   }
 
-  private handleCheckPermission(agent: ConnectedAgent, request: DaemonRequest): void {
+  private handleCheckPermission(agent: ConnectedAgent, request: DaemonRequest, reply: (r: DaemonResponse) => void): void {
     const file = String(request.file || '')
     const operation = String(request.operation || 'read') as keyof FilePermissions
 
     if (!file) {
-      this.sendResponse(agent, { ok: false, error: 'Missing file path' })
+      reply({ ok: false, error: 'Missing file path' })
       return
     }
 
     const perm = this.resolveFilePermission(file)
     const allowed = perm[operation] ?? false
 
-    this.sendResponse(agent, { ok: true, allowed, permissions: perm })
+    reply({ ok: true, allowed, permissions: perm })
   }
 
-  private handleCheckTool(agent: ConnectedAgent, request: DaemonRequest): void {
+  private handleCheckTool(agent: ConnectedAgent, request: DaemonRequest, reply: (r: DaemonResponse) => void): void {
     const tool = String(request.tool || '')
     if (this.allowedTools === null) {
-      this.sendResponse(agent, { ok: true, allowed: true })
+      reply({ ok: true, allowed: true })
       return
     }
 
     const allowed = this.allowedTools.includes(tool)
-    this.sendResponse(agent, { ok: true, allowed })
+    reply({ ok: true, allowed })
   }
 
-  private handleStatus(agent: ConnectedAgent): void {
-    this.sendResponse(agent, {
+  private handleStatus(agent: ConnectedAgent, reply: (r: DaemonResponse) => void): void {
+    reply({
       ok: true,
       status: {
         projectDir: this.config.projectDir,
@@ -249,15 +251,15 @@ export class SandboxDaemon {
     })
   }
 
-  private handleListLocks(agent: ConnectedAgent): void {
-    this.sendResponse(agent, {
+  private handleListLocks(agent: ConnectedAgent, reply: (r: DaemonResponse) => void): void {
+    reply({
       ok: true,
       locks: this.locks.list(),
     })
   }
 
-  private handleListAgents(agent: ConnectedAgent): void {
-    this.sendResponse(agent, {
+  private handleListAgents(agent: ConnectedAgent, reply: (r: DaemonResponse) => void): void {
+    reply({
       ok: true,
       agents: [...this.agents.values()].map((a) => ({
         id: a.id,
@@ -281,8 +283,9 @@ export class SandboxDaemon {
     return result
   }
 
-  private sendResponse(agent: ConnectedAgent, response: DaemonResponse): void {
-    const data = JSON.stringify(response) + '\n'
+  private sendResponse(agent: ConnectedAgent, response: DaemonResponse, requestId?: string | number): void {
+    const payload: DaemonResponse = requestId !== undefined ? { ...response, id: requestId } : response
+    const data = JSON.stringify(payload) + '\n'
     agent.socket.write(data)
   }
 }

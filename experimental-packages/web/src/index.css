@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+.scroll-hidden::-webkit-scrollbar { display: none; }
+.scroll-hidden { scrollbar-width: none; }
+
+:root {
+  --bg: #0a0a0a;
+  --chrome: #111111;
+  --raised: #1a1a1a;
+  --overlay: #222222;
+  --muted: #141414;
+  --border: #2a2a2a;
+  --text: #e5e5e5;
+  --text-muted: #737373;
+  --placeholder: #525252;
+  --input: #333333;
+  --code: #080808;
+}
+
+.prose pre { background: var(--code); border: 1px solid var(--border); border-radius: 0.25rem; }
+.prose code { color: #d4d4d4; }
+.prose p { margin-bottom: 0.5rem; }
+.prose h1, .prose h2, .prose h3 { color: var(--text); }
+.prose table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+.prose th, .prose td { padding: 0.5rem 0.75rem; border: 1px solid var(--border); text-align: left; }
+.prose th { background: var(--code); font-weight: 600; color: var(--text); }
+.prose td { color: var(--text-muted); }
+.prose tr:nth-child(even) { background: var(--muted); }
+.prose blockquote { border-left: 2px solid var(--border); padding-left: 1rem; color: var(--text-muted); margin: 1rem 0; }
+.prose ul { list-style-type: disc; padding-left: 1.5rem; margin: 0.5rem 0; }
+.prose ol { list-style-type: decimal; padding-left: 1.5rem; margin: 0.5rem 0; }
+.prose li { margin: 0.25rem 0; }
+.prose strong { color: var(--text); }
+.prose a { color: var(--text); text-decoration: underline; }
+.prose a:hover { color: #a3a3a3; }
+
+::selection { background: #404040; color: #e5e5e5; }
+
+/* Remove tap highlight on buttons and links only */
+button, a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Allow text selection in inputs and textareas */
+input, textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Subtle focus ring for accessibility */
+input:focus, textarea:focus, select:focus, button:focus-visible {
+  outline: 2px solid #525252;
+  outline-offset: 1px;
+}

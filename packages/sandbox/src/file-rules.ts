@@ -7,7 +7,7 @@
 // Glob support is intentionally minimal: *, **, ?, and ! negation. No brace
 // expansion, no character classes — keep config files human-readable.
 
-import type { FilePermissions, PermissionsConfig, ProjectFileEntry } from '@codekalakaars/protocol'
+import type { FilePermissions, PermissionsConfig, ProjectFileEntry } from './types.js'
 import type { SandboxConfig, FileRule } from './config.js'
 
 // ---- Memoization cache for glob matching ----
@@ -228,21 +228,71 @@ export function resolveFilePermission(
  * Build a PermissionsConfig (the shape vajra-core expects) from a
  * SandboxConfig. The result contains a `files` map with one entry per
  * unique path that has non-default permissions.
+ *
+ * This materializes glob rules into concrete per-path entries so the OS
+ * layer enforces them too, not just the in-process check.
  */
 export function resolveFilePermissions(config: SandboxConfig): PermissionsConfig {
-  // We need to produce a PermissionsConfig. The challenge: vajra-core
-  // applies rules per-path, but our glob patterns can match many paths.
-  // We resolve this by keeping the defaultPermissions as the base and
-  // encoding the glob rules so the worker can evaluate them at call time.
-  //
-  // For now, we return the config with the default permissions and let the
-  // worker evaluate rules per tool call. This is the safe approach: the
-  // worker re-validates everything anyway.
+  const files: Record<string, FilePermissions> = {}
+
+  // Scan the project directory to find all files
+  const projectDir = config.projectDir
+  const entries = scanProjectFiles(projectDir)
+
+  // For each file, resolve its permissions using the glob rules
+  const compiled = new CompiledRules(config.defaultPermissions, config.fileRules)
+
+  for (const entry of entries) {
+    const perm = compiled.resolve(entry)
+    // Only include files with non-default permissions
+    if (
+      perm.read !== config.defaultPermissions.read ||
+      perm.write !== config.defaultPermissions.write ||
+      perm.edit !== config.defaultPermissions.edit ||
+      perm.delete !== config.defaultPermissions.delete
+    ) {
+      files[entry] = perm
+    }
+  }
+
   return {
     version: 1,
     default: { ...config.defaultPermissions },
-    files: {},
+    files,
   }
+}
+
+/**
+ * Scan a project directory and return all file paths (relative to project root).
+ */
+function scanProjectFiles(projectDir: string): string[] {
+  const files: string[] = []
+  const SKIP_DIRS = new Set(['node_modules', '.git', 'target', '.next', 'dist', 'build', '__pycache__'])
+
+  function walk(dir: string, relative: string) {
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = require('node:fs').readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') && entry.name !== '.sample.env') continue
+      if (SKIP_DIRS.has(entry.name)) continue
+
+      const path = relative ? `${relative}/${entry.name}` : entry.name
+
+      if (entry.isDirectory()) {
+        walk(require('node:path').join(dir, entry.name), path)
+      } else if (entry.isFile()) {
+        files.push(path)
+      }
+    }
+  }
+
+  walk(projectDir, '')
+  return files
 }
 
 /**
@@ -265,4 +315,55 @@ export function filterFileEntries(
     const perm = compiled.resolve(entry.path)
     return perm.read
   })
+}
+
+/**
+ * Check if a tool call is allowed by the sandbox file rules.
+ *
+ * Returns a denial message string if the tool is denied, or null if allowed.
+ */
+export function checkToolPermission(
+  tool: string,
+  args: Record<string, unknown>,
+  fileRules: readonly FileRule[],
+  defaultPermissions: FilePermissions,
+  projectDir: string,
+): string | null {
+  if (fileRules.length === 0) return null
+
+  const compiled = new CompiledRules(defaultPermissions, fileRules)
+
+  // Extract file paths from tool args based on tool type
+  const filePaths: string[] = []
+  if (typeof args.path === 'string') filePaths.push(args.path)
+  if (typeof args.filePath === 'string') filePaths.push(args.filePath)
+
+  // For run_command, check the working directory
+  if (tool === 'run_command' && typeof args.cwd === 'string') {
+    filePaths.push(args.cwd)
+  }
+
+  if (filePaths.length === 0) return null
+
+  for (const filePath of filePaths) {
+    // Make path relative to project dir
+    const relativePath = filePath.startsWith(projectDir)
+      ? filePath.slice(projectDir.length + 1)
+      : filePath
+
+    const perm = compiled.resolve(relativePath)
+
+    // Check if the tool requires a specific permission
+    if (tool === 'read_file' || tool === 'list_files' || tool === 'search_files') {
+      if (!perm.read) return `Access denied: read not allowed for '${relativePath}'`
+    } else if (tool === 'write_file' || tool === 'create_dir') {
+      if (!perm.write) return `Access denied: write not allowed for '${relativePath}'`
+    } else if (tool === 'edit_file') {
+      if (!perm.edit) return `Access denied: edit not allowed for '${relativePath}'`
+    } else if (tool === 'delete_file') {
+      if (!perm.delete) return `Access denied: delete not allowed for '${relativePath}'`
+    }
+  }
+
+  return null
 }

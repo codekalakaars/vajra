@@ -1,5 +1,7 @@
 // Client SDK for connecting to the sandbox daemon.
 // Sends JSON requests over Unix socket, parses newline-delimited JSON responses.
+// Responses are correlated by request id so concurrent calls cannot resolve
+// each other's pending promises.
 
 import { connect, type Socket } from 'node:net'
 import type { LockMode } from './file-locks.js'
@@ -13,13 +15,21 @@ export interface ClientConfig {
 interface DaemonResponse {
   ok: boolean
   error?: string
+  id?: string | number
   [key: string]: unknown
+}
+
+interface PendingRequest {
+  resolve: (response: DaemonResponse) => void
+  reject: (error: Error) => void
+  timer: ReturnType<typeof setTimeout>
 }
 
 export class SandboxClient {
   private socket: Socket | null = null
   private buffer = ''
-  private pendingResolve: ((response: DaemonResponse) => void) | null = null
+  private pending = new Map<string | number, PendingRequest>()
+  private nextId = 1
   private timeoutMs: number
 
   constructor(private config: ClientConfig) {
@@ -42,10 +52,13 @@ export class SandboxClient {
           this.buffer = this.buffer.slice(nl + 1)
           try {
             const response: DaemonResponse = JSON.parse(line)
-            if (this.pendingResolve) {
-              const resolve = this.pendingResolve
-              this.pendingResolve = null
-              resolve(response)
+            const id = response.id
+            if (id === undefined) continue
+            const entry = this.pending.get(id)
+            if (entry) {
+              this.pending.delete(id)
+              clearTimeout(entry.timer)
+              entry.resolve(response)
             }
           } catch {}
         }
@@ -54,6 +67,11 @@ export class SandboxClient {
   }
 
   async disconnect(): Promise<void> {
+    for (const entry of this.pending.values()) {
+      clearTimeout(entry.timer)
+      entry.reject(new Error('Disconnected'))
+    }
+    this.pending.clear()
     return new Promise((resolve) => {
       if (this.socket) {
         this.socket.end(() => resolve())
@@ -70,20 +88,22 @@ export class SandboxClient {
         return
       }
 
-      this.pendingResolve = resolve
-
-      const timeout = setTimeout(() => {
-        this.pendingResolve = null
+      const id = this.nextId++
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
         reject(new Error('Request timed out'))
       }, this.timeoutMs)
 
-      this.socket.write(JSON.stringify(request) + '\n', () => {
-        const check = setInterval(() => {
-          if (!this.pendingResolve) {
-            clearTimeout(timeout)
-            clearInterval(check)
+      this.pending.set(id, { resolve, reject, timer })
+      this.socket.write(JSON.stringify({ ...request, id }) + '\n', (err) => {
+        if (err) {
+          const entry = this.pending.get(id)
+          if (entry) {
+            this.pending.delete(id)
+            clearTimeout(entry.timer)
+            entry.reject(err)
           }
-        }, 10)
+        }
       })
     })
   }
