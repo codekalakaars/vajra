@@ -1,0 +1,220 @@
+{
+  "summary": "Fix 10 bugs in the React Todo App: state mutation, missing keys, form handling, filter logic, division by zero, input validation, and localStorage issues.",
+  "tasks": [
+    {
+      "title": "Fix state mutation in addTodo",
+      "description": "The addTodo function directly mutates the state array with todos.push(), which React doesn't detect. Use immutable update instead.",
+      "instructions": [
+        "Read src/App.jsx to find the addTodo function",
+        "Replace lines 24-25 (todos.push(newTodo); setTodos(todos)) with:",
+        "  setTodos(prev => [...prev, newTodo])",
+        "This creates a new array instead of mutating the existing one",
+        "Also update localStorage.setItem to use the new array"
+      ],
+      "readFile": ["src/App.jsx"],
+      "writeFile": ["src/App.jsx"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["npm test"],
+      "dependsOn": [],
+      "type": "modify",
+      "timeout": 60,
+      "retries": 2,
+      "rollback": ["git checkout src/App.jsx"],
+      "skipIf": ["command passes: npm test"]
+    },
+    {
+      "title": "Fix missing unique keys in TodoList",
+      "description": "Using array index as key causes incorrect component reuse when items are deleted. Use todo.id instead.",
+      "instructions": [
+        "Read src/TodoList.jsx to find the map function",
+        "Change line 28 from key={index} to key={todo.id}",
+        "This ensures React can correctly track each component"
+      ],
+      "readFile": ["src/TodoList.jsx"],
+      "writeFile": ["src/TodoList.jsx"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["npm test"],
+      "dependsOn": [],
+      "type": "modify",
+      "timeout": 30,
+      "retries": 1,
+      "rollback": ["git checkout src/TodoList.jsx"],
+      "skipIf": []
+    },
+    {
+      "title": "Fix missing form prevention in TodoForm",
+      "description": "The form submit handler doesn't prevent default, causing page reload. Add e.preventDefault().",
+      "instructions": [
+        "Read src/TodoForm.jsx to find the handleSubmit function",
+        "Add e.preventDefault() as the first line of the function",
+        "This prevents the browser from reloading the page on form submit"
+      ],
+      "readFile": ["src/TodoForm.jsx"],
+      "writeFile": ["src/TodoForm.jsx"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["npm test"],
+      "dependsOn": [],
+      "type": "modify",
+      "timeout": 30,
+      "retries": 1,
+      "rollback": ["git checkout src/TodoForm.jsx"],
+      "skipIf": []
+    },
+    {
+      "title": "Fix incorrect filter logic in App",
+      "description": "The active/completed filters are swapped. 'active' shows completed todos and vice versa.",
+      "instructions": [
+        "Read src/App.jsx to find the filteredTodos logic",
+        "Swap the conditions on lines 48-49:",
+        "  Change 'if (filter === 'active') return todo.completed' to 'return !todo.completed'",
+        "  Change 'if (filter === 'completed') return !todo.completed' to 'return todo.completed'",
+        "This ensures active filter shows incomplete todos and completed shows complete ones"
+      ],
+      "readFile": ["src/App.jsx"],
+      "writeFile": ["src/App.jsx"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["npm test"],
+      "dependsOn": [],
+      "type": "modify",
+      "timeout": 60,
+      "retries": 2,
+      "rollback": ["git checkout src/App.jsx"],
+      "skipIf": []
+    },
+    {
+      "title": "Fix division by zero in TodoStats",
+      "description": "The percentage calculation divides by zero when there are no todos, showing NaN%.",
+      "instructions": [
+        "Read src/TodoStats.jsx to find the percentage calculation",
+        "Add a guard clause: if (total === 0) return 0",
+        "Change line 8 to: const percentage = total === 0 ? 0 : Math.round((completed / total) * 100)",
+        "This prevents NaN when no todos exist"
+      ],
+      "readFile": ["src/TodoStats.jsx"],
+      "writeFile": ["src/TodoStats.jsx"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["npm test"],
+      "dependsOn": [],
+      "type": "modify",
+      "timeout": 30,
+      "retries": 1,
+      "rollback": ["git checkout src/TodoStats.jsx"],
+      "skipIf": []
+    },
+    {
+      "title": "Add input validation to TodoForm",
+      "description": "Empty todos can be added because there's no validation on the input text.",
+      "instructions": [
+        "Read src/TodoForm.jsx to find the handleSubmit function",
+        "After the e.preventDefault() line, add validation:",
+        "  if (!text.trim()) return",
+        "This prevents adding empty or whitespace-only todos"
+      ],
+      "readFile": ["src/TodoForm.jsx"],
+      "writeFile": ["src/TodoForm.jsx"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["npm test"],
+      "dependsOn": [],
+      "type": "modify",
+      "timeout": 30,
+      "retries": 1,
+      "rollback": ["git checkout src/TodoForm.jsx"],
+      "skipIf": []
+    },
+    {
+      "title": "Fix clearCompleted to only remove completed todos",
+      "description": "The clearCompleted function removes all todos instead of just completed ones.",
+      "instructions": [
+        "Read src/App.jsx to find the clearCompleted function",
+        "Replace setTodos([]) with setTodos(todos.filter(t => !t.completed))",
+        "This keeps only the non-completed todos",
+        "Also update localStorage.setItem to use the filtered array"
+      ],
+      "readFile": ["src/App.jsx"],
+      "writeFile": ["src/App.jsx"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["npm test"],
+      "dependsOn": [],
+      "type": "modify",
+      "timeout": 60,
+      "retries": 2,
+      "rollback": ["git checkout src/App.jsx"],
+      "skipIf": []
+    },
+    {
+      "title": "Add input validation to TodoList edit",
+      "description": "The handleSave function doesn't validate empty text when editing todos.",
+      "instructions": [
+        "Read src/TodoList.jsx to find the handleSave function",
+        "Add validation before calling onEdit:",
+        "  if (!editText.trim()) return",
+        "This prevents editing todos to empty strings"
+      ],
+      "readFile": ["src/TodoList.jsx"],
+      "writeFile": ["src/TodoList.jsx"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["npm test"],
+      "dependsOn": [],
+      "type": "modify",
+      "timeout": 30,
+      "retries": 1,
+      "rollback": ["git checkout src/TodoList.jsx"],
+      "skipIf": []
+    },
+    {
+      "title": "Fix localStorage dependency array",
+      "description": "The useEffect for loading todos doesn't save updates because todos is missing from the dependency array.",
+      "instructions": [
+        "Read src/App.jsx to find the useEffect on line 14",
+        "This is tricky - we can't add todos to the dependency array or it creates an infinite loop",
+        "Instead, create a separate useEffect that saves to localStorage whenever todos changes:",
+        "  useEffect(() => { localStorage.setItem('todos', JSON.stringify(todos)) }, [todos])",
+        "Remove the localStorage.setItem calls from addTodo, toggleTodo, deleteTodo, editTodo, and clearCompleted",
+        "Keep only the setTodos calls in those functions"
+      ],
+      "readFile": ["src/App.jsx"],
+      "writeFile": ["src/App.jsx"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["npm test"],
+      "dependsOn": [],
+      "type": "modify",
+      "timeout": 60,
+      "retries": 2,
+      "rollback": ["git checkout src/App.jsx"],
+      "skipIf": []
+    },
+    {
+      "title": "Fix toggleTodo state mutation",
+      "description": "The toggleTodo function mutates state by modifying todo objects directly.",
+      "instructions": [
+        "Read src/App.jsx to find the toggleTodo function",
+        "Replace the forEach loop with a map that creates new objects:",
+        "  const updated = todos.map(todo =>",
+        "    todo.id === id ? { ...todo, completed: !todo.completed } : todo",
+        "  )",
+        "  setTodos(updated)",
+        "This creates new objects instead of mutating existing ones"
+      ],
+      "readFile": ["src/App.jsx"],
+      "writeFile": ["src/App.jsx"],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": ["npm test"],
+      "dependsOn": [],
+      "type": "modify",
+      "timeout": 60,
+      "retries": 2,
+      "rollback": ["git checkout src/App.jsx"],
+      "skipIf": []
+    }
+  ]
+}

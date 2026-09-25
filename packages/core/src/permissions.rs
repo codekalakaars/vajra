@@ -48,8 +48,22 @@ fn should_skip_dir(name: &str) -> bool {
     matches!(name, ".git" | "node_modules" | "target")
 }
 
+const PUBLIC_ENV_SUFFIXES: &[&str] = &[
+    "example", "sample", "template", "defaults", "default", "dist",
+];
+
 fn is_masked(name: &str) -> bool {
-    name == ".env" || name == ".env.local"
+    if name == ".env" {
+        return true;
+    }
+    let Some(rest) = name.strip_prefix(".env.") else {
+        return false;
+    };
+    !rest.split('.').any(|segment| {
+        PUBLIC_ENV_SUFFIXES
+            .iter()
+            .any(|public| public.eq_ignore_ascii_case(segment))
+    })
 }
 
 #[napi]
@@ -186,8 +200,8 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_legacy_on_disk_format() {
-        let dir = scratch("legacy-format");
+    fn reads_the_on_disk_format() {
+        let dir = scratch("on-disk-format");
         std::fs::write(
             dir.join(CONFIG_FILE),
             r#"{"version":1,"default":{"read":true,"write":false,"edit":false,"delete":false},"files":{}}"#,
@@ -239,6 +253,11 @@ mod tests {
 
         let env = entries.iter().find(|e| e.name == ".env").unwrap();
         assert!(env.is_masked);
+        assert!(is_masked(".env.local"));
+        assert!(is_masked(".env.production"));
+        assert!(is_masked(".env.development"));
+        assert!(!is_masked(".env.example"));
+        assert!(!is_masked(".env.sample"));
         assert!(!entries.iter().find(|e| e.name == "app.js").unwrap().is_masked);
     }
 

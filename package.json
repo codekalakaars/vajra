@@ -1,6 +1,6 @@
 {
   "name": "@codekalakaars/vajra-core",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Cross-platform native operations for Vajra",
   "main": "index.js",
   "types": "index.d.ts",
@@ -33,7 +33,9 @@
     "test": "node --test \"test/*.test.mjs\"",
     "test:rust": "cargo test --manifest-path packages/core/Cargo.toml",
     "lint": "cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnings",
-    "dev": "turbo run dev --filter=@vajra/server --filter=@vajra/web",
+    "dev": "turbo run dev --filter=@codekalakaars/vajra-cli --filter=@codekalakaars/vajra-protocol --filter=@codekalakaars/vajra-sandbox --filter=@codekalakaars/vajra-agent-core",
+    "dev:experimental": "turbo run dev --filter=@codekalakaars/vajra-server --filter=@codekalakaars/vajra-web",
+    "cli": "pnpm --filter @codekalakaars/vajra-cli build && node packages/cli/dist/index.js",
     "dev:all": "pnpm -r --parallel dev",
     "build:all": "turbo run build",
     "test:all": "turbo run test"

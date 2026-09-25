@@ -21,7 +21,6 @@ Not in scope:
 - the absence of confinement on Windows
 - `.env` files being readable inside a sandboxed project — masking is not
   ported yet and the README says so
-- anything in [`legacy/`](legacy/), which is unmaintained reference code
 
 ## Reporting a Vulnerability
 

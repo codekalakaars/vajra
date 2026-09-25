@@ -42,22 +42,27 @@ export class FileLockManager {
   /**
    * Check if acquiring locks on files would succeed without blocking.
    *
-   * For 'read': returns false only if a 'write' lock exists on any file.
-   * For 'write': returns false if ANY lock (read or write) exists on any file.
+   * For 'read': returns false only if a 'write' lock exists on any file
+   *   (held by a *different* owner — same-owner locks are re-entrant).
+   * For 'write': returns false if ANY lock (read or write) from a
+   *   *different* owner exists on any file. Same-owner read locks can be
+   *   upgraded to write.
    */
-  canAcquire(files: string[], mode: LockMode): boolean {
+  canAcquire(files: string[], mode: LockMode, owner?: string): boolean {
     for (const file of files) {
       const fileLocks = this.locks.get(file)
       if (!fileLocks || fileLocks.length === 0) continue
 
       if (mode === 'write') {
-        // Write requires no existing locks (read or write)
-        return false
+        // Write requires no locks from *other* owners. Same-owner locks
+        // are fine (allows upgrading read → write).
+        const hasOtherOwner = fileLocks.some((l) => l.owner !== owner)
+        if (hasOtherOwner) return false
+      } else {
+        // Read blocks only if a write lock exists from a different owner
+        const hasOtherWrite = fileLocks.some((l) => l.mode === 'write' && l.owner !== owner)
+        if (hasOtherWrite) return false
       }
-
-      // Read blocks only if a write lock exists
-      const hasWrite = fileLocks.some((l) => l.mode === 'write')
-      if (hasWrite) return false
     }
     return true
   }
@@ -68,15 +73,31 @@ export class FileLockManager {
    *
    * This is non-blocking — it attempts acquisition and returns the result.
    * Use `acquireOrWait` for a blocking acquire.
+   *
+   * When acquiring write locks, any existing read locks held by the same
+   * owner are upgraded to write (re-entrant upgrade).
    */
   tryAcquire(files: string[], owner: string, mode: LockMode): boolean {
-    if (!this.canAcquire(files, mode)) return false
+    if (!this.canAcquire(files, mode, owner)) return false
 
     const now = Date.now()
     for (const file of files) {
       const fileLocks = this.locks.get(file) ?? []
-      fileLocks.push({ owner, mode, acquiredAt: now })
-      this.locks.set(file, fileLocks)
+
+      // If upgrading from read to write, remove the old read lock first
+      if (mode === 'write') {
+        const existingIdx = fileLocks.findIndex((l) => l.owner === owner && l.mode === 'read')
+        if (existingIdx !== -1) {
+          fileLocks.splice(existingIdx, 1)
+        }
+      }
+
+      // Avoid duplicate locks from the same owner on the same file
+      const alreadyHeld = fileLocks.some((l) => l.owner === owner && l.mode === mode)
+      if (!alreadyHeld) {
+        fileLocks.push({ owner, mode, acquiredAt: now })
+        this.locks.set(file, fileLocks)
+      }
 
       // Update reverse index
       let ownerSet = this.ownerFiles.get(owner)
@@ -226,15 +247,28 @@ export class FileLockManager {
 
   /** Release all locks held by an owner. Called on agent disconnect. */
   releaseAll(owner: string): string[] {
+    const files = this.ownerFiles.get(owner)
+    if (!files) return []
+
     const released: string[] = []
-    for (const [file, locks] of this.locks) {
-      const idx = locks.findIndex((l) => l.owner === owner)
-      if (idx !== -1) {
-        locks.splice(idx, 1)
-        released.push(file)
-        if (locks.length === 0) this.locks.delete(file)
+    for (const file of files) {
+      const fileLocks = this.locks.get(file)
+      if (!fileLocks) continue
+
+      const remaining = fileLocks.filter((l) => l.owner !== owner)
+      if (remaining.length === 0) {
+        this.locks.delete(file)
+      } else {
+        this.locks.set(file, remaining)
       }
+      released.push(file)
     }
+
+    this.ownerFiles.delete(owner)
+
+    // Notify waiters for each released file
+    this.notifyWaitersForFiles(files)
+
     return released
   }
 

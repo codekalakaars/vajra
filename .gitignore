@@ -26,11 +26,9 @@ vendor/
 # Env
 .env
 .env.local
-# the legacy demo app ships a fake .env on purpose; generated files stay out
-!legacy/examples/demo-app/.env
-legacy/examples/demo-app/.sample.env
-legacy/examples/demo-app/.vajra.toml
-legacy/examples/demo-app/.vajra-perms.json
+
+# Session store
+.vajra/
 
 # SQLite
 *.db
@@ -45,3 +43,4 @@ legacy/examples/demo-app/.vajra-perms.json
 # Added by cargo
 
 /target
+.vajra-profile-*.sh
