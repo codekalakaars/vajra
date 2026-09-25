@@ -3,16 +3,17 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 // Measured against this repo itself: the regression these tests pin (index
 // budget never reaching the model, tree outgrowing the summary) passed every
 // existing test, so only real numbers on a real tree catch it.
 const repoRoot = join(import.meta.dirname, '..', '..', '..')
-const url = (p) => pathToFileURL(join(repoRoot, p)).href
 
-const { buildInitialPromptContext } = await import(url('packages/cli/dist/agent/developer.js'))
-const { scanProject } = await import(url('packages/cli/dist/native.js'))
+// Imported by package subpath, not by a path into dist/. The package root is a
+// side-effecting executable — importing it would run the CLI — so these two
+// internals are published as explicit subpaths instead.
+const { buildInitialPromptContext } = await import('@codekalakaars/vajra-cli/agent/developer')
+const { scanProject } = await import('@codekalakaars/vajra-cli/native')
 const { buildNestedTree, deriveIndexBudget, MIN_INDEX_BUDGET_CHARS, MAX_INDEX_BUDGET_CHARS } =
   await import('@codekalakaars/vajra-agent-core')
 
@@ -91,5 +92,30 @@ test('when the tree cannot fit it shallows out instead of starving the index', (
   assert.ok(
     fixtureCtx.tree.length < buildNestedTree(scanned, 4).length,
     `tree must be shallower than depth 4, got ${fixtureCtx.tree.length} vs ${buildNestedTree(scanned, 4).length}`,
+  )
+})
+
+test('every model at or above 128k gets the same budget, and on this repo it costs nothing', () => {
+  // deriveIndexBudget saturates: 128k, 200k and 256k windows all clamp to
+  // MAX_INDEX_BUDGET_CHARS, so a larger window buys no more index. That is only
+  // defensible while the cap is not the binding constraint — measured here
+  // rather than assumed. The repo lost the experimental packages (454 files),
+  // so the whole index now renders in roughly a third of the cap.
+  const saturated = [128000, 200000, 256000].map(deriveIndexBudget)
+  assert.deepEqual([...new Set(saturated)], [MAX_INDEX_BUDGET_CHARS])
+
+  const full = []
+  const fullCtx = buildInitialPromptContext(repoRoot, full, 'zen/space-bunny-free')
+  const rendered = fullCtx.summaryText.length
+
+  assert.ok(
+    rendered * 2 < MAX_INDEX_BUDGET_CHARS,
+    `the cap is now binding: the full index renders ${rendered} chars against a ` +
+      `${MAX_INDEX_BUDGET_CHARS} budget, so raising it would buy real coverage ` +
+      'and the saturation decision needs revisiting',
+  )
+  assert.ok(
+    full.length > 0 && full.length <= files.length,
+    `indexed ${full.length} entries from ${files.length} scanned files`,
   )
 })
