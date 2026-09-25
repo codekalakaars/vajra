@@ -10,6 +10,7 @@ import {
   deleteFile as nativeDeleteFile,
   createDir as nativeCreateDir,
   runCommandAsync as nativeRunCommandAsync,
+  runCommandAsyncTimeout as nativeRunCommandAsyncTimeout,
   loadEnvFile as nativeLoadEnvFile,
   redact as nativeRedact,
 } from '@codekalakaars/vajra-core'
@@ -96,6 +97,15 @@ export function runCommandAsync(
   cwd?: string,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return nativeRunCommandAsync(command, args, cwd)
+}
+
+export function runCommandAsyncTimeout(
+  command: string,
+  args: string[] | undefined,
+  cwd: string | undefined,
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  return nativeRunCommandAsyncTimeout(command, args, cwd, timeoutMs)
 }
 
 export function loadEnvFile(path: string): EnvVar[] {

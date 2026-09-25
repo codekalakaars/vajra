@@ -46,7 +46,7 @@ function printSession(session: PersistedSession, projectDir: string): void {
   console.log(`  updated   ${new Date(session.updatedAt).toISOString()}`)
   console.log(`  phase     ${session.phase}`)
   console.log(`  model     ${session.config.model || '(unset)'}`)
-  if (session.git) console.log(`  git       ${session.git.head.slice(0, 8)}${session.git.dirty ? ' (dirty)' : ''}`)
+  if (session.git) console.log(`  git       ${session.git.head.slice(0, 8)} (snapshot${session.git.dirty ? ', dirty' : ''})`)
 
   const tasks = Object.entries(session.tasks ?? {})
   if (tasks.length > 0) {

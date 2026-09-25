@@ -8,6 +8,11 @@ export interface SkipEvaluation {
   warnings: string[]
 }
 
+export type SkipCommandRunner = (
+  command: string,
+  args: string[],
+) => Promise<{ code: number }>
+
 /**
  * Evaluate skipIf conditions.
  *
@@ -18,6 +23,7 @@ export interface SkipEvaluation {
 export async function evaluateSkipIfDetailed(
   conditions: string[],
   projectDir: string,
+  runCommand?: SkipCommandRunner,
 ): Promise<SkipEvaluation> {
   const warnings: string[] = []
   if (conditions.length === 0) {
@@ -67,7 +73,9 @@ export async function evaluateSkipIfDetailed(
       }
       try {
         const [name, ...args] = tokenized.argv
-        const result = await runCommandAsync(name, args, projectDir)
+        const result = runCommand
+          ? await runCommand(name, args)
+          : await runCommandAsync(name, args, projectDir)
         if (result.code !== 0) {
           allPassed = false
         }
@@ -87,8 +95,12 @@ export async function evaluateSkipIfDetailed(
 }
 
 /** Back-compat helper: true only when every recognised condition holds. */
-export async function evaluateSkipIf(conditions: string[], projectDir: string): Promise<boolean> {
-  const result = await evaluateSkipIfDetailed(conditions, projectDir)
+export async function evaluateSkipIf(
+  conditions: string[],
+  projectDir: string,
+  runCommand?: SkipCommandRunner,
+): Promise<boolean> {
+  const result = await evaluateSkipIfDetailed(conditions, projectDir, runCommand)
   for (const w of result.warnings) {
     console.warn(`⚠ ${w}`)
   }

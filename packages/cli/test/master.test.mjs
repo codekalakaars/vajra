@@ -338,6 +338,40 @@ test('the Manager runs independent tasks concurrently and tops the pool back up'
   assert.equal(outcome.aborted, false)
 })
 
+test('the Manager skips tasks whose resources are locked and admits independent work', async () => {
+  const queue = queueWith([
+    plannedTask('a', { writeFile: ['shared.txt'] }),
+    plannedTask('b', { writeFile: ['shared.txt'] }),
+    plannedTask('c', { writeFile: ['other.txt'] }),
+  ])
+  const held = new Set()
+  const order = []
+
+  await masterLoop({
+    queue,
+    maxWorkers: 2,
+    isInterrupted: () => false,
+    canAdmitTask: task => task.writeFile.every(path => !held.has(path)),
+    runTask: async task => {
+      order.push(task.id)
+      for (const path of task.writeFile) held.add(path)
+      await sleep(task.id === 'a' ? 50 : 10)
+      for (const path of task.writeFile) held.delete(path)
+      queue.completeTask(task.id, true)
+      return true
+    },
+    taskWasNoOp: () => false,
+    rollbackTask: async () => {},
+    failTask: () => {},
+    parkTask: () => {},
+    rebaselineTask: async () => {},
+    onTaskEvent: () => {},
+  })
+
+  assert.ok(order.indexOf('c') < order.indexOf('b'), `b started before independent c: ${order}`)
+  assert.deepEqual(new Set(order), new Set(['a', 'b', 'c']))
+})
+
 test('the Manager stops scheduling once the plan is aborted', async () => {
   const queue = queueWith([plannedTask('a'), plannedTask('b'), plannedTask('c')])
   const started = []

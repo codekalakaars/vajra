@@ -13,6 +13,38 @@ export type PlanValidation = { ok: true } | { ok: false; errors: string[] }
 
 const SHELL_METACHARS = /[&|;<>`$(){}[\]!*?~\n]/
 
+function canonicalPlanPath(path: string, baseDir?: string): string {
+  const slashPath = path.replace(/\\/g, '/')
+  const driveAbsolute = /^[A-Za-z]:\//.test(slashPath)
+  const absolute = slashPath.startsWith('/') || driveAbsolute
+  const rootParts = driveAbsolute ? 1 : 0
+  const parts: string[] = []
+  for (const part of slashPath.split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (parts.length > rootParts && parts[parts.length - 1] !== '..') parts.pop()
+      else if (!absolute) parts.push(part)
+      continue
+    }
+    parts.push(part)
+  }
+  const result = driveAbsolute
+    ? parts.join('/')
+    : absolute
+      ? `/${parts.join('/')}`
+      : parts.join('/') || '.'
+  if (!baseDir || !absolute) return result
+
+  const base = canonicalPlanPath(baseDir)
+  const comparableBase = /^[A-Za-z]:\//i.test(base) ? base.toLowerCase() : base
+  const comparableResult = /^[A-Za-z]:\//i.test(result) ? result.toLowerCase() : result
+  if (comparableResult === comparableBase) return '.'
+  if (comparableResult.startsWith(`${comparableBase}/`)) {
+    return result.slice(base.length + 1)
+  }
+  return result
+}
+
 /**
  * Paths a task may reference without having read them: files created by a task
  * it transitively depends on. Without this, a plan that creates a file in task A
@@ -22,6 +54,7 @@ const SHELL_METACHARS = /[&|;<>`$(){}[\]!*?~\n]/
 function createdByDependencies(
   task: PlannedTaskInput,
   byId: ReadonlyMap<string, PlannedTaskInput>,
+  baseDir?: string,
 ): Set<string> {
   const paths = new Set<string>()
   const seen = new Set<string>()
@@ -36,7 +69,7 @@ function createdByDependencies(
     if (!dep) continue
 
     for (const edit of dep.edits ?? []) {
-      if (edit.op === 'create') paths.add(edit.path)
+      if (edit.op === 'create') paths.add(canonicalPlanPath(edit.path, baseDir))
     }
     queue.push(...(dep.dependsOn ?? []))
   }
@@ -44,9 +77,20 @@ function createdByDependencies(
   return paths
 }
 
-/** Paths a task writes. Deletes count: two tasks must not race on removal. */
-export function writeSetOf(task: PlannedTaskInput): Set<string> {
-  return new Set((task.edits ?? []).map((e) => e.path))
+export function writeSetOf(task: PlannedTaskInput, baseDir?: string): Set<string> {
+  return new Set([
+    ...(task.edits ?? []).map((edit) => canonicalPlanPath(edit.path, baseDir)),
+    ...(task.writeFile ?? []).map(path => canonicalPlanPath(path, baseDir)),
+    ...(task.deleteFile ?? []).map(path => canonicalPlanPath(path, baseDir)),
+    ...(task.createDir ?? []).map(path => canonicalPlanPath(path, baseDir)),
+  ])
+}
+
+function readSetOf(task: PlannedTaskInput, baseDir?: string): Set<string> {
+  return new Set([
+    ...(task.context ?? []).map((ref) => canonicalPlanPath(ref.path, baseDir)),
+    ...(task.readFile ?? []).map(path => canonicalPlanPath(path, baseDir)),
+  ])
 }
 
 export interface ParallelPlan {
@@ -62,7 +106,10 @@ export interface ParallelPlan {
  * Group tasks into waves by dependency depth, then verify that everything
  * sharing a wave is genuinely independent.
  */
-export function planParallel(tasks: readonly PlannedTaskInput[]): ParallelPlan {
+export function planParallel(
+  tasks: readonly PlannedTaskInput[],
+  baseDir?: string,
+): ParallelPlan {
   const byId = new Map(tasks.map((t) => [t.id, t]))
   const placed = new Set<string>()
   const waves: string[][] = []
@@ -89,8 +136,10 @@ export function planParallel(tasks: readonly PlannedTaskInput[]): ParallelPlan {
       for (let j = i + 1; j < wave.length; j++) {
         const a = byId.get(wave[i])!
         const b = byId.get(wave[j])!
-        const aWrites = writeSetOf(a)
-        const bWrites = writeSetOf(b)
+        const aWrites = writeSetOf(a, baseDir)
+        const bWrites = writeSetOf(b, baseDir)
+        const aReads = readSetOf(a, baseDir)
+        const bReads = readSetOf(b, baseDir)
 
         // write/write — they would clobber each other
         for (const path of aWrites) {
@@ -103,18 +152,18 @@ export function planParallel(tasks: readonly PlannedTaskInput[]): ParallelPlan {
         }
 
         // read/write — the reader may observe a half-written file
-        for (const ref of b.context ?? []) {
-          if (aWrites.has(ref.path)) {
+        for (const path of bReads) {
+          if (aWrites.has(path)) {
             errors.push(
-              `Task '${b.id}' reads '${ref.path}' while '${a.id}' edits it, with no ` +
+              `Task '${b.id}' reads '${path}' while '${a.id}' edits it, with no ` +
                 `ordering between them. Add '${a.id}' to '${b.id}'.dependsOn.`,
             )
           }
         }
-        for (const ref of a.context ?? []) {
-          if (bWrites.has(ref.path)) {
+        for (const path of aReads) {
+          if (bWrites.has(path)) {
             errors.push(
-              `Task '${a.id}' reads '${ref.path}' while '${b.id}' edits it, with no ` +
+              `Task '${a.id}' reads '${path}' while '${b.id}' edits it, with no ` +
                 `ordering between them. Add '${b.id}' to '${a.id}'.dependsOn.`,
             )
           }
@@ -123,15 +172,15 @@ export function planParallel(tasks: readonly PlannedTaskInput[]): ParallelPlan {
     }
   }
 
-  return { waves, errors, warnings: contentionWarnings(tasks) }
+  return { waves, errors, warnings: contentionWarnings(tasks, baseDir) }
 }
 
 const CONTENTION_THRESHOLD = 3
 
-function contentionWarnings(tasks: readonly PlannedTaskInput[]): string[] {
+function contentionWarnings(tasks: readonly PlannedTaskInput[], baseDir?: string): string[] {
   const perPath = new Map<string, string[]>()
   for (const task of tasks) {
-    for (const path of writeSetOf(task)) {
+    for (const path of writeSetOf(task, baseDir)) {
       perPath.set(path, [...(perPath.get(path) ?? []), task.id])
     }
   }
@@ -158,16 +207,20 @@ function contentionWarnings(tasks: readonly PlannedTaskInput[]): string[] {
 export function validatePlan(
   tasks: readonly PlannedTaskInput[],
   evidence: PlanEvidence,
+  baseDir?: string,
 ): PlanValidation {
   const errors: string[] = []
   const ids = new Set(tasks.map((t) => t.id))
   const byId = new Map(tasks.map((t) => [t.id, t]))
+  const filesRead = new Map(
+    [...evidence.filesRead].map(([path, content]) => [canonicalPlanPath(path, baseDir), content]),
+  )
 
   for (const task of tasks) {
     const where = `Task '${task.id}'`
-    const willExist = createdByDependencies(task, byId)
+    const willExist = createdByDependencies(task, byId, baseDir)
     /** A path is available if it was read, or a dependency creates it. */
-    const available = (path: string) => evidence.filesRead.has(path) || willExist.has(path)
+    const available = (path: string) => filesRead.has(canonicalPlanPath(path, baseDir)) || willExist.has(canonicalPlanPath(path, baseDir))
 
     // --- dependencies -----------------------------------------------------
     for (const dep of task.dependsOn ?? []) {
@@ -198,7 +251,7 @@ export function validatePlan(
     }
 
     for (const edit of task.edits ?? []) {
-      const content = evidence.filesRead.get(edit.path)
+      const content = filesRead.get(canonicalPlanPath(edit.path, baseDir))
 
       if (edit.op === 'create') {
         if (content !== undefined) {
@@ -206,7 +259,7 @@ export function validatePlan(
             `${where} wants to create '${edit.path}', but that file already exists. ` +
               `Use op: 'modify' with an anchor.`,
           )
-        } else if (willExist.has(edit.path)) {
+        } else if (willExist.has(canonicalPlanPath(edit.path, baseDir))) {
           errors.push(
             `${where} creates '${edit.path}', but a task it depends on already creates it. ` +
               `Use op: 'modify' here.`,
@@ -217,7 +270,7 @@ export function validatePlan(
 
       if (content === undefined) {
         // A dependency creates it, so there is nothing to anchor against yet.
-        if (willExist.has(edit.path)) continue
+        if (willExist.has(canonicalPlanPath(edit.path, baseDir))) continue
         errors.push(
           `${where} edits '${edit.path}', but you never read it. ` +
             `Call read_file on it before proposing an edit.`,
@@ -297,7 +350,7 @@ export function validatePlan(
     })
   }
 
-  errors.push(...planParallel(tasks).errors)
+  errors.push(...planParallel(tasks, baseDir).errors)
 
   return errors.length === 0 ? { ok: true } : { ok: false, errors }
 }

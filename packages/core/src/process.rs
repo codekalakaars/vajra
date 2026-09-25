@@ -1,7 +1,12 @@
 use napi::bindgen_prelude::AsyncTask;
 use napi::{Env, Error, Task};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 #[napi(object)]
 pub struct CommandResult {
@@ -19,6 +24,102 @@ fn finish(command: &str, output: std::io::Result<std::process::Output>) -> Resul
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         code: output.status.code().unwrap_or(-1),
+    })
+}
+
+fn read_stream<R: Read + Send + 'static>(mut stream: R) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = stream.read_to_end(&mut output);
+        output
+    })
+}
+
+fn collect_stream(handle: thread::JoinHandle<Vec<u8>>, timeout: Duration) -> Vec<u8> {
+    let deadline = Instant::now() + timeout;
+    while !handle.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    if handle.is_finished() {
+        handle.join().unwrap_or_default()
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(unix)]
+fn terminate_process(child: &mut Child) {
+    let pid = child.id() as i32;
+    unsafe {
+        let _ = libc::kill(-pid, libc::SIGKILL);
+    }
+    let _ = child.kill();
+}
+
+#[cfg(not(unix))]
+fn terminate_process(child: &mut Child) {
+    let _ = child.kill();
+}
+
+fn run_command_with_timeout(
+    command: &str,
+    args: Option<Vec<String>>,
+    cwd: Option<String>,
+    timeout_ms: u64,
+) -> Result<CommandResult, Error> {
+    let mut cmd = Command::new(command);
+    if let Some(args) = args {
+        cmd.args(&args);
+    }
+    if let Some(cwd) = cwd {
+        cmd.current_dir(&cwd);
+    }
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            #[cfg(target_os = "linux")]
+            let _ = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+            Ok(())
+        });
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| Error::from_reason(format!("Failed to execute '{}': {}", command, e)))?;
+    let stdout = read_stream(child.stdout.take().expect("stdout pipe"));
+    let stderr = read_stream(child.stderr.take().expect("stderr pipe"));
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(1));
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                terminate_process(&mut child);
+                let _ = child.wait();
+                let _ = collect_stream(stdout, Duration::from_millis(250));
+                let _ = collect_stream(stderr, Duration::from_millis(250));
+                return Ok(CommandResult {
+                    stdout: String::new(),
+                    stderr: "Command timed out".to_string(),
+                    code: 124,
+                });
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(e) => return Err(Error::from_reason(format!("Failed to wait for '{}': {}", command, e))),
+        }
+    };
+
+    let stdout = collect_stream(stdout, Duration::from_secs(5));
+    let stderr = collect_stream(stderr, Duration::from_secs(5));
+    Ok(CommandResult {
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
+        code: status.code().unwrap_or(-1),
     })
 }
 
@@ -70,6 +171,7 @@ pub struct RunTask {
     args: Option<Vec<String>>,
     cwd: Option<String>,
     shell: bool,
+    timeout_ms: Option<u64>,
 }
 
 impl Task for RunTask {
@@ -79,6 +181,13 @@ impl Task for RunTask {
     fn compute(&mut self) -> napi::Result<Self::Output> {
         if self.shell {
             run_shell(self.command.clone(), self.cwd.clone())
+        } else if let Some(timeout_ms) = self.timeout_ms {
+            run_command_with_timeout(
+                &self.command,
+                self.args.clone(),
+                self.cwd.clone(),
+                timeout_ms,
+            )
         } else {
             run_command(self.command.clone(), self.args.clone(), self.cwd.clone())
         }
@@ -100,6 +209,23 @@ pub fn run_command_async(
         args,
         cwd,
         shell: false,
+        timeout_ms: None,
+    })
+}
+
+#[napi(ts_return_type = "Promise<CommandResult>")]
+pub fn run_command_async_timeout(
+    command: String,
+    args: Option<Vec<String>>,
+    cwd: Option<String>,
+    timeout_ms: u32,
+) -> AsyncTask<RunTask> {
+    AsyncTask::new(RunTask {
+        command,
+        args,
+        cwd,
+        shell: false,
+        timeout_ms: Some(timeout_ms as u64),
     })
 }
 
@@ -110,6 +236,7 @@ pub fn run_shell_async(command: String, cwd: Option<String>) -> AsyncTask<RunTas
         args: None,
         cwd,
         shell: true,
+        timeout_ms: None,
     })
 }
 
