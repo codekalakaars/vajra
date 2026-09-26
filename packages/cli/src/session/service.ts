@@ -537,10 +537,26 @@ export async function runSession(
   // instead of asking the Developer to plan all over again.
   let preselected: DeveloperTurnResult | null =
     resumedPhase === 'awaiting-approval' && resumedPlan ? { type: 'plan', plan: resumedPlan } : null
-  // Mid-execution: go straight back to the work that did not finish.
+  // Mid-execution: go straight back into the work that did not finish.
   if (resumedPhase === 'executing' && resumedPlan) {
     preselected = { type: 'plan', plan: resumedPlan }
     options.autoConfirm = true
+  }
+
+  // A resumed conversation with no plan to replay starts at the prompt.
+  // Without this, userMessage is '' and turn 1 sends an empty user turn to
+  // the model — which then "replies" to nothing and pollutes the transcript.
+  if (resuming && !preselected && !userMessage) {
+    userMessage = await ui.askUserMessage()
+    if (!userMessage) {
+      ui.warning('Empty message. Type "exit" to quit.')
+      userMessage = 'exit'
+    }
+    if (isExitCommand(userMessage)) {
+      ui.info('Goodbye!')
+      exited = true
+      return finish(0)
+    }
   }
 
   let turn = 0
