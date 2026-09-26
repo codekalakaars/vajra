@@ -13,6 +13,10 @@ export interface TuiSessionOptions {
   timeout?: number
   autoConfirm?: boolean
   allowUnenforced?: boolean
+  /** Resume this persisted session instead of starting a new one. */
+  resumeFrom?: string
+  /** Skip the staleness gate — only ever set from an explicit user choice. */
+  force?: boolean
 }
 
 function SessionApp({
@@ -170,6 +174,8 @@ export async function startSession(options: TuiSessionOptions): Promise<void> {
         timeout: options.timeout,
         autoConfirm: options.autoConfirm,
         allowUnenforced: options.allowUnenforced,
+        resumeFrom: options.resumeFrom,
+        force: options.force,
         signal: controller.signal,
         onSandboxClose: close => {
           forceCloseSandbox = close
