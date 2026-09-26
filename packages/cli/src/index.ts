@@ -153,27 +153,27 @@ program
   .description('List, inspect and remove persisted sessions')
   .argument('[subcommand]', 'show <id> | rm <id>', 'list')
   .argument('[id]', 'Session id for show/rm')
-  .option(
-    '-d, --dir <directory>',
-    'Project directory (defaults to the directory saved in the TUI, else cwd)',
-    resolveDefaultDir(),
-  )
+  .option('-d, --dir <directory>', 'Only sessions for this project (default: every project)')
   .action((subcommand, id, options) => {
-    const projectDir = resolve(options.dir)
+    const filter = options.dir ? resolve(options.dir) : undefined
     const action = String(subcommand ?? 'list')
 
     if (action === 'list') {
-      const sessions = listSessions(projectDir)
+      const sessions = listSessions(filter)
       if (sessions.length === 0) {
-        console.log(`No sessions recorded for ${projectDir}`)
+        console.log(filter ? `No sessions recorded for ${filter}` : 'No sessions recorded')
         return
       }
-      console.log('ID                                 PHASE          PROGRESS  AGE      PLAN')
+      console.log('ID                                 PHASE          PROGRESS  AGE      PROJECT              PLAN')
       for (const s of sessions) {
         const age = formatAge(Date.now() - s.updatedAt)
         const progress = `${s.done}/${s.total}`
+        const cwd = process.cwd()
+        const project = s.projectDir.startsWith(`${cwd}/`)
+          ? s.projectDir.slice(cwd.length + 1)
+          : s.projectDir
         console.log(
-          `${s.sessionId.padEnd(34)} ${s.phase.padEnd(14)} ${progress.padEnd(9)} ${age.padEnd(8)} ${s.planTitle ?? s.status}`,
+          `${s.sessionId.padEnd(34)} ${s.phase.padEnd(14)} ${progress.padEnd(9)} ${age.padEnd(8)} ${project.padEnd(20)} ${s.planTitle ?? s.status}`,
         )
       }
       return
@@ -184,12 +184,12 @@ program
         console.error('Usage: vajra sessions show <id>')
         process.exit(1)
       }
-      const session = loadSession(id, projectDir)
+      const session = loadSession(id)
       if (!session) {
-        console.error(`No session '${id}' in ${projectDir}`)
+        console.error(`No session '${id}'`)
         process.exit(1)
       }
-      printSession(session, projectDir)
+      printSession(session, session.projectDir)
       return
     }
 
@@ -198,8 +198,8 @@ program
         console.error('Usage: vajra sessions rm <id>')
         process.exit(1)
       }
-      if (!deleteSession(id, projectDir)) {
-        console.error(`No session '${id}' in ${projectDir}`)
+      if (!deleteSession(id)) {
+        console.error(`No session '${id}'`)
         process.exit(1)
       }
       console.log(`Removed session ${id}`)
@@ -229,6 +229,13 @@ program
       console.error(`No sessions recorded for ${projectDir}`)
       process.exit(1)
     }
+    // An explicit id is global: resume against the project the session was
+    // recorded in, wherever the shell happens to be sitting.
+    const stored = loadSession(sessionId)
+    if (!stored) {
+      console.error(`No session '${sessionId}'`)
+      process.exit(1)
+    }
     const model = options.model
     await runCommand({
       resumeFrom: sessionId,
@@ -236,7 +243,7 @@ program
       model,
       apiKey: resolveApiKeyForModel(model, options.apiKey),
       verbose: false,
-      projectDir,
+      projectDir: id ? stored.projectDir : projectDir,
     })
   })
 

@@ -62,8 +62,8 @@ importers:
         version: 19.2.8
     devDependencies:
       '@types/node':
-        specifier: ^20.0.0
-        version: 20.19.43
+        specifier: ^22.5.4
+        version: 22.20.1
       '@types/react':
         specifier: ^19.2.18
         version: 19.2.18
@@ -145,9 +145,6 @@ packages:
     resolution: {integrity: sha512-0i0mVUa4kKk+/B3RwEwPMf9CB+T7ul56hn5FFHNA4VUNTOoLBEd6aNf3FaKfCatDNZ6cicCEf6if9QUTVyzzcA==}
     cpu: [arm64]
     os: [win32]
-
-  '@types/node@20.19.43':
-    resolution: {integrity: sha512-6oYBAi5ikg4Pl+kGsoYtawUMBT2zZMCvPNF7pVLnHZfd1zf38DRiWn/gT01RYCdUqkv7Fhr+C9ot4/tb+2sVvA==}
 
   '@types/node@22.20.1':
     resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
@@ -541,10 +538,6 @@ snapshots:
 
   '@turbo/windows-arm64@2.10.12':
     optional: true
-
-  '@types/node@20.19.43':
-    dependencies:
-      undici-types: 6.21.0
 
   '@types/node@22.20.1':
     dependencies:

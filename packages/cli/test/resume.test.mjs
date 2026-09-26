@@ -1,16 +1,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { isolateEachTest } from './_isolate.mjs'
+
+isolateEachTest('vajra-resume-')
 
 const root = join(import.meta.dirname, '..', 'dist')
 const {
@@ -25,6 +26,7 @@ const {
   loadSession,
   saveSession,
   hashFile,
+  openDb,
   repoFingerprint,
   loadSummaryIndexCache,
   saveSummaryIndexCache,
@@ -118,19 +120,26 @@ test('v2 records the config, phase and hashes a resume must reproduce', t => {
 test('a v1 record still loads and migrates forward', t => {
   const dir = project()
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  mkdirSync(join(dir, '.vajra', 'sessions'), { recursive: true })
-  writeFileSync(
-    join(dir, '.vajra', 'sessions', 'legacy.json'),
-    JSON.stringify({
-      version: 1,
-      sessionId: 'legacy',
-      projectDir: dir,
-      createdAt: 1_700_000_000_000,
-      plan: PLAN,
-      evidence: null,
-      tasks: { t1: { status: 'done' } },
-    }),
-  )
+  // A v1 payload could arrive from an old export; the store keeps it readable.
+  openDb()
+    .prepare(
+      'INSERT INTO sessions (session_id, project_dir, created_at, updated_at, data) VALUES (?, ?, ?, ?, ?)',
+    )
+    .run(
+      'legacy',
+      dir,
+      1_700_000_000_000,
+      1_700_000_000_000,
+      JSON.stringify({
+        version: 1,
+        sessionId: 'legacy',
+        projectDir: dir,
+        createdAt: 1_700_000_000_000,
+        plan: PLAN,
+        evidence: null,
+        tasks: { t1: { status: 'done' } },
+      }),
+    )
 
   const loaded = loadSession('legacy', dir)
   assert.ok(loaded, 'a v1 record must not become unreadable')
@@ -161,9 +170,10 @@ test('a truncated trailing line is ignored, not resurrected', t => {
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   saveSession(makeSession(dir))
   appendMessage('sess-1', dir, { role: 'user', content: 'first' })
-  // Simulate a crash mid-write.
-  const file = join(dir, '.vajra', 'sessions', 'sess-1.messages.jsonl')
-  writeFileSync(file, `${readFileSync(file, 'utf-8')}{"role":"assis`, 'utf-8')
+  // Simulate a crash mid-write: a row whose payload never got a full JSON value.
+  openDb()
+    .prepare('INSERT INTO messages (session_id, seq, payload) VALUES (?, ?, ?)')
+    .run('sess-1', 2, '{"role":"assis')
 
   const messages = loadMessages('sess-1', dir)
   assert.equal(messages.length, 1)
@@ -407,7 +417,7 @@ test('a saved session survives a full round-trip through the index cache', t => 
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   saveSession(makeSession(dir))
   appendMessage('sess-1', dir, { role: 'user', content: 'go' })
-  assert.ok(existsSync(join(dir, '.vajra', 'sessions', 'sess-1.json')))
+  assert.ok(loadSession('sess-1', dir), 'the record round-trips through the store')
   assert.equal(loadSession('sess-1', dir).plan.tasks.length, 2)
   assert.equal(loadMessages('sess-1', dir).length, 1)
 })

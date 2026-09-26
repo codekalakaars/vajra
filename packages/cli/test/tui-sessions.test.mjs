@@ -4,6 +4,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { useTempVajraHome } from './_isolate.mjs'
+
+useTempVajraHome('vajra-tui-sessions-')
 
 /**
  * The TUI menu is a terminal app, so what is testable here is the contract it
