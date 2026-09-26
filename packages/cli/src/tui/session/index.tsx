@@ -4,7 +4,7 @@ import { runSession } from '../../session/service.js'
 import { resolveApiKeyForModel } from '../../env.js'
 import { SessionStore } from './store.js'
 import { InkSessionUI } from './ink-ui.js'
-import { StatusHeader, Transcript, TaskList, ChatInput, FinishedScreen, WorkingHint, DeveloperRow } from './components.js'
+import { StatusHeader, Transcript, TaskList, ChatInput, FinishedScreen, WorkingHint } from './components.js'
 
 export interface TuiSessionOptions {
   version: string
@@ -104,7 +104,6 @@ function SessionApp({
         interrupted={state.interrupted}
       />
       <Transcript state={state} />
-      <DeveloperRow activity={state.developer} />
       <TaskList tasks={state.tasks} index={state.executionIndex} total={state.executionTotal} />
       {state.finished ? (
         <FinishedScreen exitCode={state.exitCode} />
