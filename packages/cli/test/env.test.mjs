@@ -1,59 +1,25 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
-import { chdir } from 'node:process'
 
-const envUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'env.js')).href
-const {
-  writeEnvKey,
-  findEnvPath,
-  parseSetPair,
-  resolveApiKeyForModel,
-  resolveDefaultModel,
-  readEnvFile,
-  listAvailableModels,
-  loadEnvIntoProcess,
-  normalizeModelId,
-} = await import(envUrl)
+const dist = join(import.meta.dirname, '..', 'dist')
+const { parseSetPair, resolveApiKeyForModel, normalizeModelId, listAvailableModels } =
+  await import(pathToFileURL(join(dist, 'env.js')).href)
+const { writeAuth, readAuth, clearAuth } = await import(pathToFileURL(join(dist, 'auth.js')).href)
 
-test('writeEnvKey creates and updates a KEY=VALUE line', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'env-'))
+/** A private VAJRA_HOME so auth.json lookups never touch the real one. */
+function inHome(fn) {
+  const home = mkdtempSync(join(tmpdir(), 'vajra-auth-'))
+  const env = { VAJRA_HOME: home }
   try {
-    const envPath = join(dir, '.env')
-    writeEnvKey(envPath, 'FOO', 'bar')
-    assert.equal(readFileSync(envPath, 'utf-8'), 'FOO=bar\n')
-
-    writeEnvKey(envPath, 'FOO', 'baz')
-    assert.equal(readFileSync(envPath, 'utf-8'), 'FOO=baz\n')
-
-    writeEnvKey(envPath, 'OTHER', '1')
-    const content = readFileSync(envPath, 'utf-8')
-    assert.match(content, /^FOO=baz$/m)
-    assert.match(content, /^OTHER=1$/m)
+    return fn(home, env)
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    rmSync(home, { recursive: true, force: true })
   }
-})
-
-test('findEnvPath prefers an existing .env walking up from cwd', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'envfind-'))
-  const prev = process.cwd()
-  try {
-    writeFileSync(join(dir, '.env'), 'MARKER=1\n')
-    const nested = join(dir, 'a', 'b')
-    // ensure nested exists under dir
-    mkdirSync(nested, { recursive: true })
-    chdir(nested)
-    const found = findEnvPath()
-    assert.equal(found, join(dir, '.env'))
-  } finally {
-    chdir(prev)
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
+}
 
 test('parseSetPair parses KEY=VALUE', () => {
   assert.deepEqual(parseSetPair('FOO=bar'), { key: 'FOO', value: 'bar' })
@@ -63,31 +29,37 @@ test('parseSetPair parses KEY=VALUE', () => {
   assert.equal(parseSetPair(''), null)
 })
 
-test('resolveDefaultModel prefers VAJRA_MODEL then DEFAULT_MODEL', () => {
-  assert.equal(
-    resolveDefaultModel({ VAJRA_MODEL: 'a/b', DEFAULT_MODEL: 'c/d' }),
-    'a/b',
-  )
-  assert.equal(
-    resolveDefaultModel({ DEFAULT_MODEL: 'c/d' }),
-    'c/d',
-  )
-  assert.equal(
-    resolveDefaultModel({}),
-    'zen/space-bunny-free',
-  )
+test('resolveApiKeyForModel: explicit > env > auth.json', () => {
+  inHome((_home, env) => {
+    writeAuth({ OPENCODE_API_KEY: 'stored-key' }, env)
+
+    assert.equal(
+      resolveApiKeyForModel('zen/mimo-v2.5-free', undefined, env),
+      'stored-key',
+      'stored key is used when the shell has none',
+    )
+    assert.equal(
+      resolveApiKeyForModel('zen/mimo-v2.5-free', undefined, { ...env, OPENCODE_API_KEY: 'env-key' }),
+      'env-key',
+      'a shell-exported key beats auth.json',
+    )
+    assert.equal(
+      resolveApiKeyForModel('zen/mimo-v2.5-free', 'explicit', { ...env, OPENCODE_API_KEY: 'env-key' }),
+      'explicit',
+      '--api-key always wins',
+    )
+    // Unsupported model ids get no credential at all.
+    assert.equal(resolveApiKeyForModel('openai/gpt-4o', undefined, env), undefined)
+  })
 })
 
-test('resolveApiKeyForModel only routes zen/* and go/* to the OpenCode key', () => {
-  const env = {
-    OPENCODE_API_KEY: 'oc-key',
-  }
-  assert.equal(resolveApiKeyForModel('zen/mimo-v2.5-free', undefined, env), 'oc-key')
-  assert.equal(resolveApiKeyForModel('go/mimo-v2.5', undefined, env), 'oc-key')
-  assert.equal(resolveApiKeyForModel('zen/mimo-v2.5-free', 'explicit', env), 'explicit')
-  // Unsupported model ids get no credential at all.
-  assert.equal(resolveApiKeyForModel('openai/gpt-4o', undefined, env), undefined)
-  assert.equal(resolveApiKeyForModel('openai/gpt-4o', undefined, {}), undefined)
+test('resolveApiKeyForModel routes only zen/* and go/* to the OpenCode key', () => {
+  inHome((_home, env) => {
+    writeAuth({ OPENCODE_API_KEY: 'stored-key' }, env)
+    assert.equal(resolveApiKeyForModel('zen/mimo-v2.5-free', undefined, env), 'stored-key')
+    assert.equal(resolveApiKeyForModel('go/mimo-v2.5', undefined, env), 'stored-key')
+    assert.equal(resolveApiKeyForModel('openai/gpt-4o', undefined, env), undefined)
+  })
 })
 
 test('normalizeModelId rejects anything but zen/* and go/*', () => {
@@ -100,44 +72,31 @@ test('normalizeModelId rejects anything but zen/* and go/*', () => {
 })
 
 test('listAvailableModels filters presets by configured keys', () => {
-  const zenOnly = listAvailableModels({ OPENCODE_API_KEY: 'oc-key' })
-  assert.ok(zenOnly.length > 0)
-  assert.ok(zenOnly.every(m => m.id.startsWith('zen/')))
+  inHome((_home, env) => {
+    const zenOnly = listAvailableModels({ ...env, OPENCODE_API_KEY: 'oc-key' })
+    assert.ok(zenOnly.length > 0)
+    assert.ok(zenOnly.every(m => m.id.startsWith('zen/')))
 
-  // No other provider key unlocks anything.
-  assert.deepEqual(listAvailableModels({}), [])
-  assert.deepEqual(listAvailableModels({ OPENCODE_API_KEY: '  ' }), [])
+    // No key at all: no presets.
+    assert.deepEqual(listAvailableModels(env), [])
+
+    // A key in auth.json unlocks the same presets the env var does —
+    // even when the env var is blank.
+    writeAuth({ OPENCODE_API_KEY: 'oc-key' }, env)
+    assert.ok(listAvailableModels(env).length > 0)
+    assert.ok(listAvailableModels({ ...env, OPENCODE_API_KEY: '  ' }).length > 0)
+  })
 })
 
-test('loadEnvIntoProcess copies keys from the discovered .env into env', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'envload-'))
-  const prev = process.cwd()
-  try {
-    writeFileSync(join(dir, '.env'), 'OPENCODE_API_KEY=oc-from-file\nEMPTY_KEY=\n')
-    chdir(dir)
-    const fakeEnv = {}
-    const usedPath = loadEnvIntoProcess(fakeEnv)
-    assert.equal(usedPath, join(dir, '.env'))
-    assert.equal(fakeEnv.OPENCODE_API_KEY, 'oc-from-file')
-    assert.equal(fakeEnv.EMPTY_KEY, undefined)
-    // available models now see the loaded key
-    assert.ok(listAvailableModels(fakeEnv).some(m => m.id.startsWith('zen/')))
-  } finally {
-    chdir(prev)
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
+test('auth store: write, merge, clear', () => {
+  inHome((_home, env) => {
+    assert.deepEqual(readAuth(env), {})
 
-test('readEnvFile ignores comments and blanks', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'envread-'))
-  try {
-    const p = join(dir, '.env')
-    writeFileSync(p, '# comment\n\nFOO=bar\n  SPACED = value  \n')
-    const vals = readEnvFile(p)
-    assert.equal(vals.FOO, 'bar')
-    assert.equal(vals['SPACED'], 'value')
-    assert.equal(vals['# comment'], undefined)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+    writeAuth({ OPENCODE_API_KEY: '  sk-test-123  ' }, env)
+    assert.deepEqual(readAuth(env), { OPENCODE_API_KEY: 'sk-test-123' }, 'values are trimmed')
+
+    assert.equal(clearAuth(env), true)
+    assert.deepEqual(readAuth(env), {})
+    assert.equal(clearAuth(env), false, 'second clear is a no-op')
+  })
 })

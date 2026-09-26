@@ -1,20 +1,19 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander'
-import * as dotenv from 'dotenv'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
+import { parseSetPair, resolveApiKeyForModel } from './env.js'
 import {
-  findEnvPath,
-  loadEnvIntoProcess,
-  parseSetPair,
-  readEnvFile,
-  resolveApiKeyForModel,
+  configSource,
+  readConfig,
   resolveDefaultDir,
   resolveDefaultModel,
-  writeEnvKey,
-} from './env.js'
+  writeConfig,
+} from './config.js'
+import { readAuth, writeAuth, clearAuth } from './auth.js'
+import { resolveVajraHome, authPath } from './home.js'
 import { runCommand } from './run.js'
 import { startTUI } from './tui/index.js'
 import { videoCommand } from './video.js'
@@ -78,7 +77,6 @@ function printSession(session: PersistedSession, projectDir: string): void {
   }
 }
 
-// Find root .env file (go up from dist/ to packages/cli, then to repo root)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
@@ -94,14 +92,6 @@ function readPackageVersion(): string {
 }
 
 const CLI_VERSION = readPackageVersion()
-const envPath = findEnvPath()
-
-// Load .env from the discovered path (cwd-first when a local .env exists)
-dotenv.config({ path: envPath })
-// Also load from current working directory if different
-dotenv.config()
-// Force-load keys present in the file (dotenv does not override existing vars)
-loadEnvIntoProcess()
 
 const program = new Command()
 
@@ -250,78 +240,147 @@ program
     })
   })
 
+function maskKey(value: string): string {
+  if (value.length <= 12) return '***'
+  return `${value.slice(0, 8)}...${value.slice(-4)}`
+}
+
 program
   .command('config')
-  .description('Show or set configuration')
-  .option('-g, --get <key>', 'Get a config value')
-  .option('-s, --set <key=value>', 'Set a config value (e.g. -s FOO=bar)')
-  .option('-l, --list', 'List all config values')
+  .description('Show or set configuration (~/.vajra/config.json)')
+  .option('-g, --get <key>', 'Get a config value (model | projectDir)')
+  .option('-s, --set <key=value>', 'Set a config value (e.g. -s model=zen/mimo-v2.5-free)')
+  .option('-l, --list', 'List all config values with their source')
   .action((options) => {
-    const envPath = findEnvPath()
-    const envExists = existsSync(envPath)
+    const alias: Record<string, 'model' | 'projectDir'> = {
+      model: 'model',
+      VAJRA_MODEL: 'model',
+      projectDir: 'projectDir',
+      VAJRA_PROJECT_DIR: 'projectDir',
+    }
 
     if (options.get) {
-      const key = options.get
-      const value = process.env[key]
-      if (value) {
-        console.log(value)
-      } else {
-        console.error(`Config key '${key}' not found`)
+      const key = alias[options.get]
+      if (!key) {
+        if (options.get.includes('KEY')) {
+          console.error(`Secrets are stored separately. Use: vajra auth status`)
+        } else {
+          console.error(`Config key '${options.get}' not found (known: model, projectDir)`)
+        }
         process.exit(1)
       }
+      const value = key === 'model' ? resolveDefaultModel() : resolveDefaultDir()
+      console.log(value)
       return
     }
 
     if (options.set) {
       const parsed = parseSetPair(options.set)
       if (!parsed) {
-        console.error(`Invalid --set value '${options.set}'. Usage: vajra config -s KEY=VALUE`)
+        console.error(`Invalid --set value '${options.set}'. Usage: vajra config -s model=zen/mimo-v2.5-free`)
         process.exit(1)
       }
       const { key, value } = parsed
       if (!value) {
-        console.error(`Value is required for key '${key}'. Usage: vajra config -s KEY=VALUE`)
+        console.error(`Value is required for key '${key}'. Usage: vajra config -s model=…`)
+        process.exit(1)
+      }
+      const target = alias[key]
+      if (!target) {
+        if (key.includes('KEY')) {
+          console.error('Secrets do not belong in config.json. Use: vajra auth login <key>')
+        } else {
+          console.error(`Unknown config key '${key}' (known: model, projectDir)`)
+        }
         process.exit(1)
       }
 
-      writeEnvKey(envPath, key, value)
-      console.log(`Set ${key}=${key.includes('KEY') ? '***' : value}`)
+      writeConfig({ [target]: value })
+      console.log(`Set ${key}=${value}`)
+      console.log(`  → ${resolveVajraHome()}/config.json`)
       return
     }
 
-    // Default: list all config
+    // Default: list resolved config with provenance
+    const config = readConfig()
+    const openCodeKey = process.env.OPENCODE_API_KEY?.trim() || readAuth().OPENCODE_API_KEY
+
     console.log('\n\x1b[1mVajra Configuration\x1b[0m\n')
-
-    // Read from .env file directly to show all configured keys
-    const knownKeys = [
-      'OPENCODE_API_KEY',
-      'DEFAULT_MODEL',
-      'VAJRA_MODEL',
-      'VAJRA_PROJECT_DIR',
-    ]
-
-    const envFromFile = readEnvFile(envPath)
-
-    const allKeys = [...new Set([...knownKeys, ...Object.keys(envFromFile)])]
-
-    for (const key of allKeys) {
-      const value = process.env[key] || envFromFile[key]
-      if (value) {
-        const masked = key.includes('KEY') ? value.slice(0, 8) + '...' + value.slice(-4) : value
-        console.log(`  \x1b[36m${key}\x1b[0m = ${masked}`)
-      } else {
-        console.log(`  \x1b[36m${key}\x1b[0m = \x1b[90m(not set)\x1b[0m`)
-      }
+    const row = (key: string, value: string, source: string): void => {
+      console.log(`  \x1b[36m${key.padEnd(18)}\x1b[0m ${value} \x1b[90m(${source})\x1b[0m`)
     }
+    row('model', resolveDefaultModel(), configSource('model'))
+    row('projectDir', resolveDefaultDir(), configSource('projectDir'))
+    row(
+      'OPENCODE_API_KEY',
+      openCodeKey ? maskKey(openCodeKey) : '(not set)',
+      openCodeKey
+        ? process.env.OPENCODE_API_KEY?.trim()
+          ? 'env'
+          : `auth.json`
+        : '-',
+    )
 
     console.log('')
-    console.log(`  \x1b[36m.env file\x1b[0m = ${envExists ? envPath : '(not found)'}`)
+    console.log(`  \x1b[36mvajra home\x1b[0m      = ${resolveVajraHome()}`)
+    console.log(`  \x1b[36mconfig file\x1b[0m     = ${resolveVajraHome()}/config.json`)
     console.log('')
     console.log('  Usage:')
-    console.log('    vajra config              Show all config')
-    console.log('    vajra config -g KEY       Get a value')
-    console.log('    vajra config -s KEY=VAL   Set a value')
+    console.log('    vajra config              Show all config (with sources)')
+    console.log('    vajra config -g model     Get a value')
+    console.log('    vajra config -s model=…   Set a value')
+    console.log('    vajra auth login <key>    Store an API key (never in config.json)')
     console.log('')
+  })
+
+program
+  .command('auth')
+  .description('Manage API credentials (~/.vajra/auth.json, mode 0600)')
+  .argument('[subcommand]', 'login <key> | status | logout', 'status')
+  .argument('[key]', 'API key for login')
+  .action((subcommand, key) => {
+    const action = String(subcommand ?? 'status')
+
+    if (action === 'login') {
+      const apiKey = typeof key === 'string' && key.trim() ? key.trim() : ''
+      if (!apiKey) {
+        console.error('Usage: vajra auth login <key>')
+        process.exit(1)
+      }
+      const path = writeAuth({ OPENCODE_API_KEY: apiKey })
+      console.log(`Stored OPENCODE_API_KEY (${maskKey(apiKey)})`)
+      console.log(`  → ${path} (mode 0600)`)
+      return
+    }
+
+    if (action === 'logout') {
+      if (clearAuth()) {
+        console.log(`Removed credentials from ${authPath()}`)
+        if (process.env.OPENCODE_API_KEY?.trim()) {
+          console.log('\x1b[33mNote: OPENCODE_API_KEY is still exported in this shell; unset it there too.\x1b[0m')
+        }
+      } else {
+        console.log('No stored credentials to remove')
+      }
+      return
+    }
+
+    if (action === 'status') {
+      const fromEnv = process.env.OPENCODE_API_KEY?.trim()
+      const stored = readAuth().OPENCODE_API_KEY
+      const source = fromEnv ? 'env' : stored ? 'auth.json' : null
+      if (!source) {
+        console.log('Not logged in')
+        console.log('  Set one with: vajra auth login <key>')
+        process.exit(1)
+      }
+      console.log(`OPENCODE_API_KEY ${maskKey(fromEnv ?? stored ?? '')} (from ${source})`)
+      console.log(`  auth file: ${authPath()}`)
+      return
+    }
+
+    console.error(`Unknown subcommand '${action}'. Usage: vajra auth [login <key>|status|logout]`)
+    process.exit(1)
   })
 
 // Add video command
