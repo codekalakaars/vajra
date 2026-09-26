@@ -1,9 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import { syncBuiltinESMExports } from 'node:module'
-import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -13,14 +10,35 @@ const {
   saveSession,
   loadSession,
   listSessions,
-  sessionFile,
-  sessionsDir,
+  deleteSession,
+  appendMessage,
+  loadMessages,
+  openDb,
+  closeDb,
   deriveSessionStatus,
   evidenceToRecord,
   evidenceFromRecord,
 } = await import(storeUrl)
 
 const SESSION_ID = '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0'
+
+/** Each test gets a private VAJRA_HOME, so its store is its own world. */
+function isolated(t, fn) {
+  const home = mkdtempSync(join(tmpdir(), 'vajra-home-'))
+  const previous = process.env.VAJRA_HOME
+  process.env.VAJRA_HOME = home
+  t.after(() => {
+    try {
+      closeDb()
+    } catch {
+      // Already closed or never opened.
+    }
+    if (previous === undefined) delete process.env.VAJRA_HOME
+    else process.env.VAJRA_HOME = previous
+    rmSync(home, { recursive: true, force: true })
+  })
+  return fn(home)
+}
 
 function makeProject() {
   return mkdtempSync(join(tmpdir(), 'vajra-persist-'))
@@ -56,21 +74,6 @@ function evidenceFixture() {
 }
 
 /** listSessions() rows carry the extra v2 columns; one fixture for them all. */
-function summaryFixture(projectDir, over = {}) {
-  return {
-    sessionId: SESSION_ID,
-    createdAt: 1_700_000_000_000,
-    updatedAt: 1_700_000_000_500,
-    status: 'pending',
-    phase: 'conversing',
-    planTitle: 'Add parser',
-    projectDir,
-    done: 0,
-    total: 1,
-    ...over,
-  }
-}
-
 function configFixture() {
   return { model: 'zen/test-model', timeoutSeconds: 300, allowUnenforced: false }
 }
@@ -93,155 +96,96 @@ function sessionFixture(projectDir, over = {}) {
   }
 }
 
-test('save/load round-trip preserves plan, evidence and task state (P4)', t => {
-  const project = makeProject()
-  t.after(() => rmSync(project, { recursive: true, force: true }))
-
-  saveSession(sessionFixture(project))
-  const file = sessionFile(project, SESSION_ID)
-  assert.ok(file.endsWith(join('.vajra', 'sessions', `${SESSION_ID}.json`)), file)
-
-  const loaded = loadSession(SESSION_ID, project)
-  assert.ok(loaded, 'session loads after save')
-  assert.equal(loaded.version, 2)
-  assert.equal(loaded.sessionId, SESSION_ID)
-  assert.equal(loaded.projectDir, project)
-  assert.deepEqual(loaded.config, configFixture())
-  assert.equal(loaded.phase, 'conversing')
-  assert.equal(loaded.updatedAt, 1_700_000_000_500)
-  assert.deepEqual(loaded.fileHashes, { 'src/index.ts': 'abc123' })
-  assert.equal(loaded.summaryFingerprint, 'fp-1')
-  assert.deepEqual(loaded.plan, planFixture())
-  assert.deepEqual(loaded.evidence, evidenceFixture())
-  assert.deepEqual(loaded.tasks, { a: { status: 'pending' } })
-
-  // A second save with progressed task state round-trips too (P5).
-  saveSession(
-    sessionFixture(project, {
-      plan: null,
-      evidence: null,
-      tasks: { a: { status: 'done', startedAt: 5, completedAt: 9 } },
-    }),
-  )
-  const reloaded = loadSession(SESSION_ID, project)
-  assert.deepEqual(reloaded.tasks, { a: { status: 'done', startedAt: 5, completedAt: 9 } })
-  assert.equal(reloaded.plan, null)
-  assert.equal(reloaded.evidence, null)
-})
-
-test('a successful save leaves exactly one file — tmp is renamed away', t => {
-  const project = makeProject()
-  t.after(() => rmSync(project, { recursive: true, force: true }))
-
-  saveSession(sessionFixture(project))
-  const names = readdirSync(sessionsDir(project))
-  assert.deepEqual(names, [`${SESSION_ID}.json`])
-})
-
-test('saveSession writes via tmp + rename: a failed rename keeps the previous good file', t => {
-  const project = makeProject()
-  t.after(() => rmSync(project, { recursive: true, force: true }))
-
-  saveSession(sessionFixture(project))
-  const file = sessionFile(project, SESSION_ID)
-  const before = readFileSync(file, 'utf-8')
-
-  const realRename = fs.renameSync
-  let sawTmp = null
-  fs.renameSync = (src, dest) => {
-    sawTmp = { src, dest }
-    throw new Error('simulated crash before rename')
-  }
-  syncBuiltinESMExports()
-  try {
-    assert.throws(
-      () => saveSession(sessionFixture(project, { createdAt: 2_000_000_000_000 })),
-      /simulated crash before rename/,
+/** Insert a raw row, bypassing saveSession's validation (corruption cases). */
+function injectRow(row) {
+  openDb()
+    .prepare(
+      'INSERT INTO sessions (session_id, project_dir, created_at, updated_at, data) VALUES (?, ?, ?, ?, ?)',
     )
-  } finally {
-    fs.renameSync = realRename
-    syncBuiltinESMExports()
-  }
-
-  assert.ok(sawTmp, 'renameSync was called with a tmp source')
-  assert.notEqual(sawTmp.src, file)
-  assert.match(sawTmp.src, /\.tmp$/)
-  assert.equal(sawTmp.dest, file)
-  // Previous good file untouched, crashed tmp cleaned up, nothing half-written.
-  assert.equal(readFileSync(file, 'utf-8'), before)
-  assert.deepEqual(readdirSync(sessionsDir(project)), [`${SESSION_ID}.json`])
-  assert.equal(loadSession(SESSION_ID, project).createdAt, 1_700_000_000_000)
-})
-
-/** Simulate a writer that crashed between "tmp written" and "renamed". */
-function crashBeforeRename(target, partialJson) {
-  const script = `
-    const { writeFileSync } = require('node:fs')
-    writeFileSync(${JSON.stringify(target)}, ${JSON.stringify(partialJson)})
-    process.kill(process.pid, 'SIGKILL')
-  `
-  const result = spawnSync(process.execPath, ['-e', script])
-  assert.equal(result.signal, 'SIGKILL', 'crash helper must die before renaming')
+    .run(row.sessionId, row.projectDir, row.createdAt, row.updatedAt, row.data)
 }
 
-test('interrupted write with no previous file: tmp present, target absent', t => {
-  const project = makeProject()
-  t.after(() => rmSync(project, { recursive: true, force: true }))
+test('save/load round-trip preserves plan, evidence and task state (P4)', t => {
+  isolated(t, (home) => {
+    const project = makeProject()
+    t.after(() => rmSync(project, { recursive: true, force: true }))
 
-  const target = sessionFile(project, SESSION_ID)
-  fs.mkdirSync(sessionsDir(project), { recursive: true })
-  const tmp = `${target}.${process.pid}.1.tmp`
-  crashBeforeRename(tmp, '{"version":1,"sessionId":"0f1e')
+    saveSession(sessionFixture(project))
+    assert.ok(existsSync(join(home, 'vajra.db')), 'the store lives in VAJRA_HOME')
 
-  assert.equal(fs.existsSync(target), false)
-  assert.equal(loadSession(SESSION_ID, project), null)
-  assert.deepEqual(listSessions(project), [])
-  assert.deepEqual(readdirSync(sessionsDir(project)), [`${SESSION_ID}.json.${process.pid}.1.tmp`])
+    const loaded = loadSession(SESSION_ID, project)
+    assert.ok(loaded, 'session loads after save')
+    assert.equal(loaded.version, 2)
+    assert.equal(loaded.sessionId, SESSION_ID)
+    assert.equal(loaded.projectDir, project)
+    assert.deepEqual(loaded.config, configFixture())
+    assert.equal(loaded.phase, 'conversing')
+    assert.equal(loaded.updatedAt, 1_700_000_000_500)
+    assert.deepEqual(loaded.fileHashes, { 'src/index.ts': 'abc123' })
+    assert.equal(loaded.summaryFingerprint, 'fp-1')
+    assert.deepEqual(loaded.plan, planFixture())
+    assert.deepEqual(loaded.evidence, evidenceFixture())
+    assert.deepEqual(loaded.tasks, { a: { status: 'pending' } })
+
+    // A second save with progressed task state round-trips too (P5).
+    saveSession(
+      sessionFixture(project, {
+        plan: null,
+        evidence: null,
+        tasks: { a: { status: 'done', startedAt: 5, completedAt: 9 } },
+      }),
+    )
+    const reloaded = loadSession(SESSION_ID, project)
+    assert.deepEqual(reloaded.tasks, { a: { status: 'done', startedAt: 5, completedAt: 9 } })
+    assert.equal(reloaded.plan, null)
+    assert.equal(reloaded.evidence, null)
+  })
 })
 
-test('interrupted write leaves the previous good file intact', t => {
-  const project = makeProject()
-  t.after(() => rmSync(project, { recursive: true, force: true }))
+test('a re-save upserts the same row instead of fragmenting the record', t => {
+  isolated(t, () => {
+    const project = makeProject()
+    t.after(() => rmSync(project, { recursive: true, force: true }))
 
-  saveSession(sessionFixture(project))
-  const file = sessionFile(project, SESSION_ID)
-  const before = readFileSync(file, 'utf-8')
+    saveSession(sessionFixture(project))
+    saveSession(sessionFixture(project, { updatedAt: 2_000_000_000_000, phase: 'executing' }))
 
-  crashBeforeRename(`${file}.${process.pid}.1.tmp`, '{"version":1,"sessionId":"0f1e')
-
-  assert.equal(readFileSync(file, 'utf-8'), before)
-  const loaded = loadSession(SESSION_ID, project)
-  assert.deepEqual(loaded.plan, planFixture())
-  assert.deepEqual(loaded.evidence, evidenceFixture())
-  // The stray tmp never surfaces as a session.
-  assert.deepEqual(listSessions(project), [summaryFixture(project)])
+    const rows = listSessions(project)
+    assert.equal(rows.length, 1, 'one row, one record')
+    assert.equal(rows[0].updatedAt, 2_000_000_000_000)
+    assert.equal(rows[0].phase, 'executing')
+  })
 })
 
 test('saveSession rejects a wrong version and unsafe session ids', t => {
-  const project = makeProject()
-  t.after(() => rmSync(project, { recursive: true, force: true }))
+  isolated(t, () => {
+    const project = makeProject()
+    t.after(() => rmSync(project, { recursive: true, force: true }))
 
-  assert.throws(() => saveSession(sessionFixture(project, { version: 3 })), /Unsupported session version/)
-  assert.throws(() => saveSession(sessionFixture(project, { sessionId: '../evil' })), /Invalid session id/)
-  assert.throws(() => saveSession(sessionFixture(project, { sessionId: 'a/b' })), /Invalid session id/)
-  assert.throws(() => saveSession(sessionFixture(project, { createdAt: NaN })), /createdAt/)
-  assert.equal(fs.existsSync(sessionsDir(project)), false, 'nothing is written before validation passes')
+    assert.throws(() => saveSession(sessionFixture(project, { version: 3 })), /Unsupported session version/)
+    assert.throws(() => saveSession(sessionFixture(project, { sessionId: '../evil' })), /Invalid session id/)
+    assert.throws(() => saveSession(sessionFixture(project, { sessionId: 'a/b' })), /Invalid session id/)
+    assert.throws(() => saveSession(sessionFixture(project, { createdAt: NaN })), /createdAt/)
+    assert.deepEqual(listSessions(project), [], 'nothing is written before validation passes')
+  })
 })
 
 test('saveSession refuses Map-valued evidence instead of silently writing {}', t => {
-  const project = makeProject()
-  t.after(() => rmSync(project, { recursive: true, force: true }))
+  isolated(t, () => {
+    const project = makeProject()
+    t.after(() => rmSync(project, { recursive: true, force: true }))
 
-  assert.throws(
-    () =>
-      saveSession(
-        sessionFixture(project, {
-          evidence: { filesRead: new Map(), baselines: new Map() },
-        }),
-      ),
-    /evidenceToRecord/,
-  )
-  assert.equal(fs.existsSync(sessionsDir(project)), false)
+    assert.throws(
+      () =>
+        saveSession(
+          sessionFixture(project, {
+            evidence: { filesRead: new Map(), baselines: new Map() },
+          }),
+        ),
+      /evidenceToRecord/,
+    )
+    assert.deepEqual(listSessions(project), [])
+  })
 })
 
 test('evidence adapters convert Maps to JSON-safe Records and back', () => {
@@ -261,63 +205,106 @@ test('evidence adapters convert Maps to JSON-safe Records and back', () => {
   assert.throws(() => evidenceToRecord({ filesRead: record.filesRead, baselines: record.baselines }), /Map/)
 })
 
-test('loadSession returns null for unknown ids, corrupt JSON and wrong versions', t => {
-  const project = makeProject()
-  t.after(() => rmSync(project, { recursive: true, force: true }))
+test('loadSession returns null for unknown ids, corrupt rows and wrong versions', t => {
+  isolated(t, () => {
+    const project = makeProject()
+    t.after(() => rmSync(project, { recursive: true, force: true }))
 
-  assert.equal(loadSession('does-not-exist', project), null)
-  assert.throws(() => loadSession('../evil', project), /Invalid session id/)
+    assert.equal(loadSession('does-not-exist', project), null)
+    assert.throws(() => loadSession('../evil', project), /Invalid session id/)
 
-  fs.mkdirSync(sessionsDir(project), { recursive: true })
-  writeFileSync(join(sessionsDir(project), 'corrupt.json'), '{"version":1,')
-  writeFileSync(join(sessionsDir(project), 'future.json'), JSON.stringify({ version: 99, sessionId: 'future', projectDir: project, createdAt: 1, tasks: {} }))
+    // Rows that could only come from a torn write or a future writer.
+    injectRow({
+      sessionId: 'corrupt',
+      projectDir: project,
+      createdAt: 1,
+      updatedAt: 1,
+      data: '{"version":1,',
+    })
+    injectRow({
+      sessionId: 'future',
+      projectDir: project,
+      createdAt: 1,
+      updatedAt: 1,
+      data: JSON.stringify({ version: 99, sessionId: 'future', projectDir: project, createdAt: 1, tasks: {} }),
+    })
 
-  assert.equal(loadSession('corrupt', project), null)
-  assert.equal(loadSession('future', project), null)
+    assert.equal(loadSession('corrupt', project), null)
+    assert.equal(loadSession('future', project), null)
 
-  const listed = listSessions(project)
-  assert.deepEqual(
-    listed.map(s => s.status),
-    ['corrupt', 'corrupt'],
-  )
+    const listed = listSessions(project)
+    assert.deepEqual(
+      listed.map(s => s.status),
+      ['corrupt', 'corrupt'],
+      'unparseable rows are reported, not dropped',
+    )
+  })
 })
 
 test('listSessions sorts newest first and derives status from tasks', t => {
-  const project = makeProject()
-  t.after(() => rmSync(project, { recursive: true, force: true }))
+  isolated(t, () => {
+    const project = makeProject()
+    t.after(() => rmSync(project, { recursive: true, force: true }))
 
-  saveSession(sessionFixture(project, { sessionId: 'old', createdAt: 1_000, updatedAt: 1_000, tasks: { a: { status: 'done' } } }))
-  saveSession(sessionFixture(project, { sessionId: 'new', createdAt: 9_000, updatedAt: 9_000, tasks: { a: { status: 'running', startedAt: 1 } } }))
-  saveSession(sessionFixture(project, { sessionId: 'mid', createdAt: 5_000, updatedAt: 5_000, tasks: { a: { status: 'failed', error: 'boom' } } }))
+    saveSession(sessionFixture(project, { sessionId: 'old', createdAt: 1_000, updatedAt: 1_000, tasks: { a: { status: 'done' } } }))
+    saveSession(sessionFixture(project, { sessionId: 'new', createdAt: 9_000, updatedAt: 9_000, tasks: { a: { status: 'running', startedAt: 1 } } }))
+    saveSession(sessionFixture(project, { sessionId: 'mid', createdAt: 5_000, updatedAt: 5_000, tasks: { a: { status: 'failed', error: 'boom' } } }))
 
-  assert.deepEqual(
-    listSessions(project).map(s => [s.sessionId, s.status, s.done, s.total]),
-    [
-      ['new', 'running', 0, 1],
-      ['mid', 'failed', 0, 1],
-      ['old', 'done', 1, 1],
-    ],
-  )
+    assert.deepEqual(
+      listSessions(project).map(s => [s.sessionId, s.status, s.done, s.total]),
+      [
+        ['new', 'running', 0, 1],
+        ['mid', 'failed', 0, 1],
+        ['old', 'done', 1, 1],
+      ],
+    )
 
-  assert.equal(deriveSessionStatus({}), 'pending')
-  assert.equal(deriveSessionStatus({ a: { status: 'pending' }, b: { status: 'done' } }), 'pending')
-  assert.equal(deriveSessionStatus({ a: { status: 'assigned' } }), 'running')
-  assert.equal(deriveSessionStatus({ a: { status: 'running' }, b: { status: 'failed' } }), 'running')
-  assert.equal(deriveSessionStatus({ a: { status: 'done' }, b: { status: 'skipped' } }), 'done')
-  assert.equal(deriveSessionStatus({ a: { status: 'done' }, b: { status: 'failed' } }), 'failed')
+    assert.equal(deriveSessionStatus({}), 'pending')
+    assert.equal(deriveSessionStatus({ a: { status: 'pending' }, b: { status: 'done' } }), 'pending')
+    assert.equal(deriveSessionStatus({ a: { status: 'assigned' } }), 'running')
+    assert.equal(deriveSessionStatus({ a: { status: 'running' }, b: { status: 'failed' } }), 'running')
+    assert.equal(deriveSessionStatus({ a: { status: 'done' }, b: { status: 'skipped' } }), 'done')
+    assert.equal(deriveSessionStatus({ a: { status: 'done' }, b: { status: 'failed' } }), 'failed')
+  })
 })
 
-test('loadSession and listSessions default to the current working directory', t => {
-  const project = makeProject()
-  t.after(() => rmSync(project, { recursive: true, force: true }))
-  const previous = process.cwd()
-  try {
-    process.chdir(project)
+test('the store is global: lookup by id works from anywhere, filters still narrow', t => {
+  isolated(t, () => {
+    const projectA = makeProject()
+    const projectB = makeProject()
+    t.after(() => {
+      rmSync(projectA, { recursive: true, force: true })
+      rmSync(projectB, { recursive: true, force: true })
+    })
+
+    saveSession(sessionFixture(projectA))
+
+    // No projectDir: the id is the whole address.
+    assert.ok(loadSession(SESSION_ID), 'loads without being told the project')
+    assert.equal(listSessions().length, 1, 'every project is listed by default')
+    assert.equal(listSessions(projectB).length, 0, 'another project does not see it')
+    assert.deepEqual(listSessions(projectA).map(s => s.sessionId), [SESSION_ID])
+  })
+})
+
+test('append/load messages keep their order and vanish with the session', t => {
+  isolated(t, () => {
+    const project = makeProject()
+    t.after(() => rmSync(project, { recursive: true, force: true }))
+
     saveSession(sessionFixture(project))
-    assert.ok(loadSession(SESSION_ID))
-    assert.equal(listSessions().length, 1)
-    assert.equal(listSessions(join(project, 'missing-subdir')).length, 0)
-  } finally {
-    process.chdir(previous)
-  }
+    appendMessage(SESSION_ID, project, { role: 'user', content: 'first' })
+    appendMessage(SESSION_ID, project, { role: 'assistant', content: 'second' })
+    appendMessage(SESSION_ID, project, { role: 'user', content: 'third' })
+
+    assert.deepEqual(
+      loadMessages(SESSION_ID).map(m => m.content),
+      ['first', 'second', 'third'],
+    )
+
+    assert.equal(deleteSession(SESSION_ID), true)
+    assert.equal(loadSession(SESSION_ID), null)
+    assert.deepEqual(loadMessages(SESSION_ID), [], 'messages die with their session')
+    assert.equal(deleteSession(SESSION_ID), false, 'second delete is a no-op')
+  })
 })

@@ -3,14 +3,7 @@ export {
   LEGACY_SESSION_SCHEMA_VERSION,
   VAJRA_DIR,
   MISSING_FILE_HASH,
-  SESSIONS_SUBDIR,
-  INDEX_SUBDIR,
   assertSessionId,
-  sessionsDir,
-  indexDir,
-  sessionFile,
-  messagesFile,
-  indexFile,
   saveSession,
   loadSession,
   latestSession,
@@ -31,6 +24,7 @@ export {
   saveSummaryIndexCache,
   readGitState,
 } from './session.js'
+export { openDb, closeDb } from './db.js'
 export type {
   PersistedSession,
   PersistedTask,

@@ -6,6 +6,9 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { useTempVajraHome } from './_isolate.mjs'
+
+useTempVajraHome('vajra-smoke-')
 
 const execFileAsync = promisify(execFile)
 const cliEntry = join(import.meta.dirname, '..', 'dist', 'index.js')
@@ -51,12 +54,10 @@ test('parseProposePlanArgs-style plan shape is reachable via protocol schemas', 
   assert.deepEqual(parsed.tasks[0].instructions, [])
 })
 
-// The TUI starts in the directory saved from its Defaults screen; the CLI used
-// to default --dir to process.cwd() and ignore that saved value entirely, so
-// `vajra sessions` could report "No sessions recorded" while the TUI's Sessions
-// menu showed the very same session. Keeping the two in agreement was left to
-// the user, who has no reason to know either side exists.
-test('sessions resolve the directory the TUI saved, so the two never disagree', async () => {
+// Sessions live in one store under VAJRA_HOME, so the CLI finds them from any
+// directory: no per-project discovery, no saved-dir agreement left to the
+// user. `--dir` narrows when a project view is wanted.
+test('sessions list every project from any directory; --dir narrows', async () => {
   const project = mkdtempSync(join(tmpdir(), 'vajra-proj-'))
   const elsewhere = mkdtempSync(join(tmpdir(), 'vajra-cwd-'))
   try {
@@ -78,35 +79,26 @@ test('sessions resolve the directory the TUI saved, so the two never disagree', 
       summaryFingerprint: null,
     })
 
-    // A shell sitting in a directory that is not the saved project:
-    // the default lives in ~/.vajra/config.json (VAJRA_HOME redirects here).
-    const home = mkdtempSync(join(tmpdir(), 'vajra-home-'))
-    const { saveDefaults } = await import(
-      pathToFileURL(join(import.meta.dirname, '..', 'dist', 'config.js')).href
-    )
-    saveDefaults({ projectDir: project }, { VAJRA_HOME: home })
-
     const { stdout } = await execFileAsync(process.execPath, [cliEntry, 'sessions'], {
       cwd: elsewhere,
-      env: { ...process.env, VAJRA_HOME: home },
       timeout: 10000,
     })
     assert.match(stdout, /sess-from-the-tui/, 'must find the session without being told where')
+    assert.match(stdout, new RegExp(project.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'shows which project it belongs to')
     assert.doesNotMatch(stdout, /No sessions recorded/)
 
-    // An explicit --dir still wins over the saved default.
+    // An explicit --dir still narrows to one project.
     const other = mkdtempSync(join(tmpdir(), 'vajra-other-'))
     try {
       const explicit = await execFileAsync(
         process.execPath,
         [cliEntry, 'sessions', '--dir', other],
-        { cwd: elsewhere, env: { ...process.env, VAJRA_HOME: home }, timeout: 10000 },
+        { cwd: elsewhere, timeout: 10000 },
       )
       assert.match(explicit.stdout, new RegExp(`No sessions recorded for ${other}`))
     } finally {
       rmSync(other, { recursive: true, force: true })
     }
-    rmSync(home, { recursive: true, force: true })
   } finally {
     rmSync(project, { recursive: true, force: true })
     rmSync(elsewhere, { recursive: true, force: true })

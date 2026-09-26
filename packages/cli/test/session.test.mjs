@@ -4,6 +4,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { useTempVajraHome } from './_isolate.mjs'
+
+useTempVajraHome('vajra-session-')
 
 const serviceUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'session', 'service.js')).href
 const storeUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'tui', 'session', 'store.js')).href

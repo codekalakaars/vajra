@@ -1,5 +1,4 @@
 import {
-  appendFileSync,
   closeSync,
   existsSync,
   fsyncSync,
@@ -15,17 +14,25 @@ import {
 import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import type { DeveloperPlan, TaskStatus } from '@codekalakaars/vajra-protocol'
+import { indexHomeDir } from '../home.js'
+import {
+  appendMessageRow,
+  deleteSessionRow,
+  selectMessagePayloads,
+  selectSessionData,
+  selectSessionRows,
+  upsertSessionRow,
+} from './db.js'
 
-/** P4: persisted state lives at `.vajra/sessions/<sessionId>.json`. */
+/** P4: sessions persist in ~/.vajra/vajra.db (see persist/db.ts). */
 export const SESSION_SCHEMA_VERSION = 2
 /** v1 records are still loadable and are migrated forward on read. */
 export const LEGACY_SESSION_SCHEMA_VERSION = 1
+/** Skipped while fingerprinting a repo — also a legacy (pre-db) location. */
 export const VAJRA_DIR = '.vajra'
 export const MISSING_FILE_HASH = '__missing__'
 export const DIRECTORY_FILE_HASH = '__directory__'
 export const UNREADABLE_FILE_HASH = '__unreadable__'
-export const SESSIONS_SUBDIR = 'sessions'
-export const INDEX_SUBDIR = 'index'
 
 /** Session ids are path components: no separators, no traversal, no hidden files. */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -111,31 +118,9 @@ export function assertSessionId(sessionId: unknown): string {
   return sessionId
 }
 
-export function sessionsDir(projectDir: string): string {
-  if (typeof projectDir !== 'string' || !projectDir) {
-    throw new Error('projectDir is required')
-  }
-  return join(resolve(projectDir), VAJRA_DIR, SESSIONS_SUBDIR)
-}
-
-export function indexDir(projectDir: string): string {
-  if (typeof projectDir !== 'string' || !projectDir) {
-    throw new Error('projectDir is required')
-  }
-  return join(resolve(projectDir), VAJRA_DIR, INDEX_SUBDIR)
-}
-
-export function sessionFile(projectDir: string, sessionId: string): string {
-  return join(sessionsDir(projectDir), `${assertSessionId(sessionId)}.json`)
-}
-
-/** Conversation history is append-only, so saving does not rewrite the record. */
-export function messagesFile(projectDir: string, sessionId: string): string {
-  return join(sessionsDir(projectDir), `${assertSessionId(sessionId)}.messages.jsonl`)
-}
-
-export function indexFile(projectDir: string, fingerprint: string): string {
-  return join(indexDir(projectDir), `${assertSessionId(fingerprint)}.json`)
+/** The summary index is content-addressed and shared: ~/.vajra/index/<fp>.json. */
+function summaryCacheFile(fingerprint: string): string {
+  return join(indexHomeDir(), `${assertSessionId(fingerprint)}.json`)
 }
 
 /** sha256 of a file's bytes, or null when it cannot be read. */
@@ -270,7 +255,7 @@ function nextTmpSeq(): number {
   return tmpSeq
 }
 
-/** Persist the whole session atomically (P4/P5: a crash never loses a completed task). */
+/** Persist the whole session in one row (SQLite makes the write atomic). */
 export function saveSession(s: PersistedSession): void {
   if (!s || typeof s !== 'object') {
     throw new Error('saveSession: session must be an object')
@@ -278,6 +263,7 @@ export function saveSession(s: PersistedSession): void {
   if (s.version !== SESSION_SCHEMA_VERSION) {
     throw new Error(`Unsupported session version: ${String((s as { version?: unknown }).version)}`)
   }
+  assertSessionId(s.sessionId)
   if (typeof s.projectDir !== 'string' || !s.projectDir) {
     throw new Error('saveSession: projectDir is required')
   }
@@ -291,57 +277,49 @@ export function saveSession(s: PersistedSession): void {
   ) {
     throw new Error('saveSession: Map values do not survive JSON — use evidenceToRecord() first')
   }
-  const target = sessionFile(s.projectDir, s.sessionId)
-  // Serialise before touching disk: a stringify failure writes nothing at all.
-  const data = `${JSON.stringify(s, null, 2)}\n`
-  writeFileAtomic(target, data)
+  // Serialise first: a stringify failure writes nothing at all.
+  const data = JSON.stringify(s)
+  upsertSessionRow({
+    sessionId: s.sessionId,
+    projectDir: resolve(s.projectDir),
+    createdAt: s.createdAt,
+    updatedAt: s.updatedAt,
+    data,
+  })
 }
 
 /**
- * Append one message to the conversation log. A blank line is not a message,
- * so a partially written trailing line is simply ignored on read rather than
- * resurrecting half a tool call.
+ * Append one message to the conversation log (a per-session sequence in the
+ * db). A message that fails to serialise is never written.
  */
 export function appendMessage(
   sessionId: string,
   projectDir: string,
   message: PersistedMessage,
 ): void {
-  const file = messagesFile(projectDir, sessionId)
-  mkdirSync(dirname(file), { recursive: true })
-  appendFileSync(file, `${JSON.stringify(message)}\n`, 'utf-8')
+  void projectDir // sessions are global; the id is the only key that matters
+  appendMessageRow(assertSessionId(sessionId), JSON.stringify(message))
 }
 
-export function loadMessages(sessionId: string, projectDir: string = process.cwd()): PersistedMessage[] {
-  const file = messagesFile(projectDir, sessionId)
-  let text: string
-  try {
-    text = readFileSync(file, 'utf-8')
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw err
-  }
+export function loadMessages(sessionId: string, projectDir?: string): PersistedMessage[] {
+  void projectDir
   const out: PersistedMessage[] = []
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue
+  for (const payload of selectMessagePayloads(assertSessionId(sessionId))) {
     try {
-      const parsed = JSON.parse(line) as PersistedMessage
+      const parsed = JSON.parse(payload) as PersistedMessage
       if (parsed && typeof parsed === 'object' && typeof parsed.role === 'string') {
         out.push(parsed)
       }
     } catch {
-      // A truncated trailing line from a crash: ignore it, keep the rest.
+      // A row written by an older/other version: skip it, keep the rest.
     }
   }
   return out
 }
 
-export function deleteSession(sessionId: string, projectDir: string = process.cwd()): boolean {
-  const meta = sessionFile(projectDir, sessionId)
-  if (!existsSync(meta)) return false
-  rmSync(meta, { force: true })
-  rmSync(messagesFile(projectDir, sessionId), { force: true })
-  return true
+export function deleteSession(sessionId: string, projectDir?: string): boolean {
+  void projectDir // deletion is by id; a session belongs to the store, not a cwd
+  return deleteSessionRow(assertSessionId(sessionId))
 }
 
 /**
@@ -400,9 +378,10 @@ export function loadSummaryIndexCache(
   projectDir: string,
   fingerprint: string,
 ): SummaryIndexCache | null {
+  void projectDir // the cache is content-addressed; the fingerprint is the key
   let text: string
   try {
-    text = readFileSync(indexFile(projectDir, fingerprint), 'utf-8')
+    text = readFileSync(summaryCacheFile(fingerprint), 'utf-8')
   } catch {
     return null
   }
@@ -417,7 +396,8 @@ export function loadSummaryIndexCache(
 }
 
 export function saveSummaryIndexCache(projectDir: string, cache: SummaryIndexCache): void {
-  const target = indexFile(projectDir, cache.fingerprint)
+  void projectDir
+  const target = summaryCacheFile(cache.fingerprint)
   writeFileAtomic(target, `${JSON.stringify(cache)}\n`)
 }
 
@@ -459,24 +439,21 @@ function parseSession(text: string, expectedId?: string): PersistedSession | nul
   return migrate(raw, expectedId)
 }
 
-/** Load a session (v1 or v2), or null when missing, unreadable, or malformed. */
-export function loadSession(sessionId: string, projectDir: string = process.cwd()): PersistedSession | null {
-  const file = sessionFile(projectDir, sessionId)
-  let text: string
-  try {
-    text = readFileSync(file, 'utf-8')
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw err
-  }
-  return parseSession(text, sessionId)
+/** Load a session (v1 or v2), or null when missing or malformed. Lookup is
+ * global by id: resuming from another directory must still find it. */
+export function loadSession(sessionId: string, projectDir?: string): PersistedSession | null {
+  void projectDir
+  assertSessionId(sessionId)
+  const data = selectSessionData(sessionId)
+  if (data === null) return null
+  return parseSession(data, sessionId)
 }
 
 /** The most recently updated session for this project, or null. */
-export function latestSession(projectDir: string = process.cwd()): PersistedSession | null {
+export function latestSession(projectDir?: string): PersistedSession | null {
   const [first] = listSessions(projectDir)
   if (!first) return null
-  return loadSession(first.sessionId, projectDir)
+  return loadSession(first.sessionId)
 }
 
 /** Session-level status derived from the per-task statuses. */
@@ -490,32 +467,15 @@ export function deriveSessionStatus(tasks: Record<string, PersistedTask> | null 
 }
 
 /**
- * List persisted sessions, newest first. Stray `.tmp` files from an interrupted
- * write are ignored; an unparseable `.json` is reported with status 'corrupt'
- * rather than silently dropped.
+ * List persisted sessions, newest first. A projectDir argument restricts the
+ * list to that project; omit it to list every project in the store. A row
+ * whose JSON no longer parses is reported with status 'corrupt' rather than
+ * silently dropped.
  */
-export function listSessions(projectDir: string = process.cwd()): SessionSummary[] {
-  const dir = sessionsDir(projectDir)
-  let names: string[]
-  try {
-    names = readdirSync(dir)
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw err
-  }
+export function listSessions(projectDir?: string): SessionSummary[] {
   const out: SessionSummary[] = []
-  for (const name of names) {
-    if (name.endsWith('.tmp') || !name.endsWith('.json')) continue
-    // The conversation log lives beside the metadata; it is not a session.
-    if (name.endsWith('.messages.jsonl')) continue
-    const file = join(dir, name)
-    let text: string
-    try {
-      text = readFileSync(file, 'utf-8')
-    } catch {
-      continue
-    }
-    const parsed = parseSession(text)
+  for (const row of selectSessionRows(projectDir)) {
+    const parsed = parseSession(row.data, row.sessionId)
     if (parsed) {
       const tasks = Object.values(parsed.tasks)
       out.push({
@@ -530,26 +490,19 @@ export function listSessions(projectDir: string = process.cwd()): SessionSummary
         total: tasks.length,
       })
     } else {
-      let createdAt = 0
-      try {
-        createdAt = statSync(file).mtimeMs
-      } catch {
-        createdAt = 0
-      }
       out.push({
-        sessionId: name.slice(0, -'.json'.length),
-        createdAt,
-        updatedAt: createdAt,
+        sessionId: row.sessionId,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
         status: 'corrupt',
         phase: 'conversing',
         planTitle: null,
-        projectDir: resolve(projectDir),
+        projectDir: row.projectDir,
         done: 0,
         total: 0,
       })
     }
   }
-  out.sort((a, b) => b.updatedAt - a.updatedAt || a.sessionId.localeCompare(b.sessionId))
   return out
 }
 

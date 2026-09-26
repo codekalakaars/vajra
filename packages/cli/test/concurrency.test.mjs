@@ -5,6 +5,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { FileLockManager, resolveConcurrencyConfig } from '@codekalakaars/vajra-sandbox'
+import { useTempVajraHome } from './_isolate.mjs'
+
+useTempVajraHome('vajra-concurrency-')
 
 const serviceUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'session', 'service.js')).href
 const persistUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'persist', 'index.js')).href
