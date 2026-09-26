@@ -3,6 +3,10 @@ import type { AgentEvent } from '../../session/ui.js'
 
 export type PromptKind = 'initial-first' | 'initial-reentry' | 'user' | 'confirm-plan' | 'feedback'
 
+/** Repaint cap for streamed text: 50ms ≈ 20fps, smooth and far fewer than a
+ *  brisk token stream would otherwise trigger. */
+const STREAM_FLUSH_MS = 50
+
 export const PROMPT_LABELS: Record<PromptKind, string> = {
   'initial-first': 'What would you like me to work on?',
   'initial-reentry': 'Please enter a task (or type "exit" to quit):',
@@ -87,6 +91,10 @@ export class SessionStore {
   private listeners = new Set<() => void>()
   private state: SessionState = INITIAL
   private nextPromptId = 1
+  /** Text buffered since the last flush — never rendered as-is. */
+  private pendingStream = ''
+  private pendingThinking = ''
+  private flushTimer: ReturnType<typeof setTimeout> | null = null
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -106,15 +114,52 @@ export class SessionStore {
     this.set({ entries: [...this.state.entries, entry] })
   }
 
+  /**
+   * Model text arrives token by token, and every notification repaints the
+   * whole session view. Repainting per token is what makes the TUI flicker, so
+   * deltas are buffered and flushed on a short timer: the visible rate is capped
+   * at ~20fps however fast the stream is. `commitStream` and `clearStream` flush
+   * synchronously, so nothing is delayed or lost.
+   */
   appendStream(text: string): void {
-    this.set({ streaming: this.state.streaming + text })
+    this.pendingStream += text
+    this.scheduleFlush()
   }
 
   appendThinking(text: string): void {
-    this.set({ thinking: this.state.thinking + text })
+    this.pendingThinking += text
+    this.scheduleFlush()
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushTimer) return
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null
+      this.flushPending()
+    }, STREAM_FLUSH_MS)
+  }
+
+  private cancelFlush(): void {
+    if (!this.flushTimer) return
+    clearTimeout(this.flushTimer)
+    this.flushTimer = null
+  }
+
+  private flushPending(): void {
+    const stream = this.pendingStream
+    const thinking = this.pendingThinking
+    this.pendingStream = ''
+    this.pendingThinking = ''
+    if (!stream && !thinking) return
+    this.set({
+      ...(stream ? { streaming: this.state.streaming + stream } : {}),
+      ...(thinking ? { thinking: this.state.thinking + thinking } : {}),
+    })
   }
 
   commitStream(): void {
+    this.cancelFlush()
+    this.flushPending()
     const { streaming, thinking, entries } = this.state
     if (!streaming && !thinking) return
     const next: Entry[] = [...entries]
@@ -123,6 +168,9 @@ export class SessionStore {
   }
 
   clearStream(): void {
+    this.cancelFlush()
+    this.pendingStream = ''
+    this.pendingThinking = ''
     if (!this.state.streaming && !this.state.thinking) return
     this.set({ streaming: '', thinking: '' })
   }
