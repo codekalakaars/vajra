@@ -9,6 +9,8 @@ const serviceUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'sessio
 const storeUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'tui', 'session', 'store.js')).href
 const streamingUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'streaming.js')).href
 const { runSession, isExitCommand } = await import(serviceUrl)
+const persistUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'persist', 'index.js')).href
+const { listSessions, loadSession } = await import(persistUrl)
 const { SessionStore, streamFlushMs } = await import(storeUrl)
 const { planSummaryLines } = await import(streamingUrl)
 
@@ -336,4 +338,45 @@ test('a long burst is still coalesced into a single repaint', async () => {
   assert.equal(notifications, 1, `expected one repaint, got ${notifications}`)
   assert.equal(store.getSnapshot().streaming.length, 5_000)
   store.commitStream()
+})
+
+test('a conversation that never reaches a plan is still recorded and resumable', async () => {
+  // Regression: the conversation log was written from turn one, but the session
+  // itself only appeared once a plan was proposed — so `vajra sessions` listed
+  // nothing and `vajra resume` could not find a long conversation that had never
+  // produced a plan. The schema has had a 'conversing' phase all along; nothing
+  // wrote it.
+  const dir = mkdtempSync(join(tmpdir(), 'vajra-conv-'))
+  const ui = makeUI(['exit'])
+  try {
+    // No provider is reachable, so the turn fails and the loop unwinds - which
+    // is exactly the shape of the bug: a session that ended without a plan.
+    await runSession({ model: 'zen/test', apiKey: 'k', projectDir: dir, task: 'hello' }, ui)
+
+    const sessions = listSessions(dir)
+    assert.equal(sessions.length, 1, 'the session must be visible with no plan in sight')
+    const [summary] = sessions
+    assert.equal(summary.phase, 'finished', 'a session that ended is finished, not in flight')
+    assert.equal(summary.total, 0, 'no plan means no tasks')
+
+    const stored = loadSession(summary.sessionId, dir)
+    assert.ok(stored, 'and it must load for resume')
+    assert.equal(stored.plan, null)
+    assert.equal(stored.sessionId, summary.sessionId)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('an interrupted conversation is recorded rather than lost', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'vajra-conv-int-'))
+  const ui = makeUI(['exit'])
+  try {
+    await runSession({ model: 'zen/test', apiKey: 'k', projectDir: dir, task: 'hi' }, ui)
+    const sessions = listSessions(dir)
+    assert.equal(sessions.length, 1)
+    assert.ok(loadSession(sessions[0].sessionId, dir), 'the record must be readable')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
