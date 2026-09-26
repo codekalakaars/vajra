@@ -41,14 +41,27 @@ export interface TaskView {
   activity?: AgentActivity
 }
 
-export type Entry =
-  | { kind: 'banner'; version: string }
-  | { kind: 'user'; text: string }
-  | { kind: 'assistant'; text: string }
-  | { kind: 'info' | 'success' | 'error' | 'warning'; text: string }
-  | { kind: 'decision'; text: string }
-  | { kind: 'plan'; plan: DeveloperPlan }
-  | { kind: 'blank' }
+/**
+ * Stable identity, stamped by the store as each entry is appended.
+ *
+ * Entries are rendered once into scrollback by `<Static>`, which needs a key;
+ * array position is not one, because the position shifts every time something is
+ * committed.
+ */
+interface EntryBase {
+  seq?: number
+}
+
+export type Entry = EntryBase &
+  (
+    | { kind: 'banner'; version: string }
+    | { kind: 'user'; text: string }
+    | { kind: 'assistant'; text: string }
+    | { kind: 'info' | 'success' | 'error' | 'warning'; text: string }
+    | { kind: 'decision'; text: string }
+    | { kind: 'plan'; plan: DeveloperPlan }
+    | { kind: 'blank' }
+  )
 
 export interface SessionState {
   entries: Entry[]
@@ -91,6 +104,7 @@ export class SessionStore {
   private listeners = new Set<() => void>()
   private state: SessionState = INITIAL
   private nextPromptId = 1
+  private nextEntrySeq = 1
   /** Text buffered since the last flush — never rendered as-is. */
   private pendingStream = ''
   private pendingThinking = ''
@@ -111,7 +125,7 @@ export class SessionStore {
   }
 
   addEntry(entry: Entry): void {
-    this.set({ entries: [...this.state.entries, entry] })
+    this.set({ entries: [...this.state.entries, { seq: this.nextEntrySeq++, ...entry }] })
   }
 
   /**
@@ -163,7 +177,7 @@ export class SessionStore {
     const { streaming, thinking, entries } = this.state
     if (!streaming && !thinking) return
     const next: Entry[] = [...entries]
-    if (streaming) next.push({ kind: 'assistant', text: streaming })
+    if (streaming) next.push({ seq: this.nextEntrySeq++, kind: 'assistant', text: streaming })
     this.set({ entries: next, streaming: '', thinking: '' })
   }
 

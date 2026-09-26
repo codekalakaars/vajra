@@ -183,7 +183,12 @@ test('SessionStore resolves prompts on submit and echoes user entries', async ()
   assert.equal(await p, 'hello')
   assert.equal(store.getSnapshot().prompt, null)
   const entries = store.getSnapshot().entries
-  assert.deepEqual(entries[entries.length - 1], { kind: 'user', text: 'hello' })
+  // Entries carry a `seq` for React keys, so assert the fields that matter
+  // rather than deep-equalling the whole object.
+  const last = entries[entries.length - 1]
+  assert.equal(last.kind, 'user')
+  assert.equal(last.text, 'hello')
+  assert.equal(typeof last.seq, 'number')
 })
 
 test('SessionStore confirm prompt records a decision, not a user message', async () => {
@@ -240,7 +245,9 @@ test('SessionStore commits streamed text as an assistant entry', () => {
   // that matters: nothing is lost or delayed at a turn boundary.
   store.commitStream()
   const entries = store.getSnapshot().entries
-  assert.deepEqual(entries[entries.length - 1], { kind: 'assistant', text: 'Hello world' })
+  const last = entries[entries.length - 1]
+  assert.equal(last.kind, 'assistant')
+  assert.equal(last.text, 'Hello world')
   assert.equal(store.getSnapshot().streaming, '')
 })
 

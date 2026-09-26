@@ -1,5 +1,49 @@
+/**
+ * The transcript is split in two, and the split is the whole point:
+ *
+ * - Settled history goes into `<Static>`, which paints each entry exactly once
+ *   into scrollback and never repaints it.
+ * - Only live content — the streaming tail, thinking, and what an agent is doing
+ *   right now — sits in the repainted region.
+ *
+ * Repainting settled history is what makes a long session flicker: the taller the
+ * frame, the more there is to erase and redraw on every token, so the cost grew
+ * with the length of the session. History that is written once cannot flicker.
+ */
+export function Transcript({ state }: { state: SessionState }) {
+  return (
+    <Box flexDirection="column">
+      <Static items={state.entries}>{entry => <EntryView key={entry.seq} entry={entry} />}</Static>
+      {state.developer && <DeveloperRow activity={state.developer} />}
+      {state.thinking && <Text dimColor italic>{state.thinking}</Text>}
+      {state.streaming && <Text>{state.streaming}</Text>}
+    </Box>
+  )
+}
+
+/**
+ * Rows of the task list the live region will paint. A 40-task plan would
+ * otherwise push the input and the current activity off the screen, and make
+ * every repaint proportionally taller.
+ */
+const MAX_TASK_WINDOW = 10
+
+/**
+ * Rows of task list the live region may paint, given the terminal it is in.
+ *
+ * A frame taller than the terminal does not degrade gracefully — Ink scrolls to
+ * keep the bottom visible, so every repaint shifts the whole view. Reserving
+ * room for the header, the live activity, the input and the hint line keeps the
+ * frame inside the viewport on a small window as well as a large one.
+ */
+function taskWindowFor(rows: number | undefined): number {
+  if (typeof rows !== 'number' || rows <= 0) return MAX_TASK_WINDOW
+  const room = rows - 12
+  return Math.max(3, Math.min(MAX_TASK_WINDOW, room))
+}
+
 import React from 'react'
-import { Box, Text } from 'ink'
+import { Box, Static, Text, useStdout } from 'ink'
 import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
 import { renderMarkdown } from '../../streaming.js'
 import type { AgentActivity, Entry, SessionState, PendingPrompt, TaskStatus } from './store.js'
@@ -113,13 +157,34 @@ export function TaskList({
   index: number
   total: number
 }) {
+  const { stdout } = useStdout()
+  const taskWindow = taskWindowFor(stdout?.rows)
   if (tasks.length === 0) return null
+  // Active work comes first — a long plan must not scroll the task you are
+  // watching out of view — then everything else fills the remaining rows in plan
+  // order. The window is still a hard bound: if more tasks are running than fit,
+  // the overflow is counted rather than drawn, because a frame taller than the
+  // terminal scrolls on every repaint, which is the flicker this avoids.
+  const running = tasks.filter(t => t.status === 'running')
+  const rest = tasks.filter(t => t.status !== 'running')
+  const shown = new Set([
+    ...running.slice(0, taskWindow),
+    ...rest.slice(0, Math.max(0, taskWindow - Math.min(running.length, taskWindow))),
+  ])
+  const visible = tasks.filter(t => shown.has(t))
+  const hidden = tasks.length - visible.length
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Text bold color="cyan">
         Tasks [{index}/{total}]
       </Text>
-      {tasks.map((task, i) => {
+      {hidden > 0 && (
+        <Text color="gray">
+          {'  '}
+          … {hidden} more task{hidden === 1 ? '' : 's'}
+        </Text>
+      )}
+      {visible.map((task, i) => {
         const { icon, color } = TASK_ICONS[task.status]
         return (
           <Box key={i} flexDirection="column">
@@ -183,39 +248,6 @@ const EntryView = React.memo(function EntryView({ entry }: { entry: Entry }) {
       return <Text> </Text>
   }
 })
-
-/**
- * How much of the transcript to paint.
- *
- * Ink costs roughly a millisecond per rendered entry per frame, and the view
- * repaints on every streamed token, so painting the whole history is what makes
- * a long session flicker. This is a *view* window only — the store keeps every
- * entry, and `vajra sessions show` still prints the lot.
- */
-const TRANSCRIPT_WINDOW = 12
-
-export function Transcript({ state }: { state: SessionState }) {
-  const hidden = Math.max(0, state.entries.length - TRANSCRIPT_WINDOW)
-  const visible = hidden > 0 ? state.entries.slice(hidden) : state.entries
-  return (
-    <Box flexDirection="column">
-      {state.developer && <DeveloperRow activity={state.developer} />}
-      {hidden > 0 && (
-        <Text color="gray">
-          … {hidden} earlier message{hidden === 1 ? '' : 's'} hidden (see vajra sessions show)
-        </Text>
-      )}
-      {visible.map((entry, i) => (
-        // Offset by `hidden` so keys stay stable as the window slides forward.
-        <EntryView key={hidden + i} entry={entry} />
-      ))}
-      {state.thinking && (
-        <Text dimColor italic>{state.thinking}</Text>
-      )}
-      {state.streaming && <Text>{state.streaming}</Text>}
-    </Box>
-  )
-}
 
 export function ChatInput({
   prompt,
