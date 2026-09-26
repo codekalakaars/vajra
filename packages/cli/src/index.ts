@@ -11,6 +11,7 @@ import {
   parseSetPair,
   readEnvFile,
   resolveApiKeyForModel,
+  resolveDefaultDir,
   resolveDefaultModel,
   writeEnvKey,
 } from './env.js'
@@ -117,7 +118,11 @@ program
   .option('-m, --model <model>', 'LLM model to use', resolveDefaultModel())
   .option('-v, --verbose', 'Show thinking/reasoning output')
   .option('-q, --quiet', 'Suppress tool-level output; show task-level events only')
-  .option('-d, --dir <directory>', 'Project directory', process.cwd())
+  .option(
+    '-d, --dir <directory>',
+    'Project directory (defaults to the directory saved in the TUI, else cwd)',
+    resolveDefaultDir(),
+  )
   .option('-y, --yes', 'Auto-confirm all plans without prompting')
   .option('-t, --timeout <seconds>', 'Per-task timeout in seconds', '300')
   .option('-c, --concurrency <n>', 'Max tasks to run at once', '')
@@ -158,7 +163,11 @@ program
   .description('List, inspect and remove persisted sessions')
   .argument('[subcommand]', 'show <id> | rm <id>', 'list')
   .argument('[id]', 'Session id for show/rm')
-  .option('-d, --dir <directory>', 'Project directory', process.cwd())
+  .option(
+    '-d, --dir <directory>',
+    'Project directory (defaults to the directory saved in the TUI, else cwd)',
+    resolveDefaultDir(),
+  )
   .action((subcommand, id, options) => {
     const projectDir = resolve(options.dir)
     const action = String(subcommand ?? 'list')
@@ -215,7 +224,11 @@ program
   .command('resume')
   .description('Resume a persisted session')
   .argument('[id]', 'Session id (defaults to the most recent for this project)')
-  .option('-d, --dir <directory>', 'Project directory', process.cwd())
+  .option(
+    '-d, --dir <directory>',
+    'Project directory (defaults to the directory saved in the TUI, else cwd)',
+    resolveDefaultDir(),
+  )
   .option('-f, --force', 'Resume even when the staleness gate reports a changed tree')
   .option('-k, --api-key <key>', 'API key (OpenCode Zen)')
   .option('-m, --model <model>', 'LLM model to use', resolveDefaultModel())
