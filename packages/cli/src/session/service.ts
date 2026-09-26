@@ -38,6 +38,7 @@ import {
   saveSession,
   saveSummaryIndexCache,
   type PersistedTask,
+  type PersistedSession,
   type SessionPhase,
   type SummaryIndexCacheEntry,
 } from '../persist/index.js'
@@ -242,6 +243,67 @@ export async function runSession(
   const masterAgent = registry.createAgent(sessionId, 'master', 'Orchestrate task execution')
   registry.updateStatus(masterAgent.id, 'running')
 
+  /**
+   * The last payload written, so the session can be marked finished without
+   * rebuilding it — and so a conversation that never reaches a plan is still a
+   * record rather than an orphan message log.
+   */
+  let lastPersisted: PersistedSession | null = null
+
+  const persistSession = (
+    phase: SessionPhase,
+    plan: DeveloperPlan | null,
+    tasks: Record<string, PersistedTask>,
+    extra: Partial<PersistedSession> = {},
+    /** The resolved worker count, which can differ from the requested flag. */
+    concurrency?: number,
+  ): void => {
+    const payload: PersistedSession = {
+      version: SESSION_SCHEMA_VERSION,
+      sessionId,
+      projectDir,
+      createdAt,
+      updatedAt: Date.now(),
+      config: {
+        model: options.model,
+        timeoutSeconds: options.timeout ?? 300,
+        ...((concurrency ?? options.concurrency) === undefined
+          ? {}
+          : { concurrency: concurrency ?? options.concurrency }),
+        // Read from options, not the later `allowUnenforced` const: this runs
+        // before the sandbox launch block declares it.
+        allowUnenforced: options.allowUnenforced ?? false,
+      },
+      phase,
+      plan,
+      evidence: null,
+      tasks,
+      fileHashes: {},
+      summaryFingerprint: null,
+      ...extra,
+    }
+    try {
+      saveSession(payload)
+      lastPersisted = payload
+    } catch (e) {
+      ui.warning(
+        `Could not persist session state: ${e instanceof Error ? e.message : String(e)}`,
+      )
+    }
+  }
+
+  // Record a *new* session before the first prompt. The conversation log was
+  // always written from turn one, but the session itself only appeared once a
+  // plan was proposed — so a long conversation left a messages file that `vajra
+  // sessions` could not list and `vajra resume` could not find.
+  //
+  // Never on a resume: the record being resumed is the record this run must not
+  // touch, and writing an empty 'conversing' one here would erase the plan and
+  // task states before the resume block below reads them back.
+  if (!options.resumeFrom) {
+    persistSession('conversing', null, {})
+  }
+
   ui.info(`Model: ${options.model}`)
   ui.info(`Timeout: ${options.timeout ?? 300}s per task`)
 
@@ -281,6 +343,20 @@ export async function runSession(
 
   const finish = (exitCode: number): SessionResult => {
     registry.updateStatus(masterAgent.id, isInterrupted() ? 'failed' : 'done')
+    // Mark the record finished so the list shows it as done rather than leaving a
+    // 'conversing' entry that looks like work still in flight.
+    if (lastPersisted && lastPersisted.phase !== 'finished') {
+      persistSession(
+        'finished',
+        lastPersisted.plan ?? null,
+        lastPersisted.tasks ?? {},
+        {
+          fileHashes: lastPersisted.fileHashes ?? {},
+          summaryFingerprint: lastPersisted.summaryFingerprint ?? null,
+          ...(lastPersisted.git ? { git: lastPersisted.git } : {}),
+        },
+      )
+    }
     sandbox?.close()
     let code = exitCode
     if (isInterrupted() && code === 0) code = 130
@@ -357,6 +433,9 @@ export async function runSession(
       return { exitCode: 1, interrupted: false, exited: false }
     }
 
+    // So `finish` can mark the resumed record finished, exactly as it would for
+    // a session this run created.
+    lastPersisted = stored
     const restored = loadMessages(stored.sessionId, projectDir)
     messages.push(...(restored as unknown as ChatMessage[]))
     resumedPhase = plan.phase
@@ -380,30 +459,11 @@ export async function runSession(
    * but not yet approved" is a resumable state rather than a lost one.
    */
   const recordProposedPlan = (plan: DeveloperPlan): void => {
-    try {
-      saveSession({
-        version: SESSION_SCHEMA_VERSION,
-        sessionId,
-        projectDir,
-        createdAt,
-        updatedAt: Date.now(),
-        config: {
-          model: options.model,
-          timeoutSeconds: options.timeout ?? 300,
-          allowUnenforced,
-        },
-        phase: 'awaiting-approval',
-        plan,
-        evidence: null,
-        tasks: Object.fromEntries(
-          plan.tasks.map(t => [t.id, { status: 'pending' as const }]),
-        ),
-        fileHashes: {},
-        summaryFingerprint: null,
-      })
-    } catch (e) {
-      ui.warning(`Could not persist session state: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    persistSession(
+      'awaiting-approval',
+      plan,
+      Object.fromEntries(plan.tasks.map(t => [t.id, { status: 'pending' as const }])),
+    )
   }
 
   let initialMessage = options.task
@@ -636,26 +696,17 @@ export async function runSession(
             tasks[t.id] = entry
           }
 
-          saveSession({
-            version: SESSION_SCHEMA_VERSION,
-            sessionId,
-            projectDir,
-            createdAt,
-            updatedAt: Date.now(),
-            config: {
-              model: options.model,
-              timeoutSeconds: options.timeout ?? 300,
-              ...(maxWorkers === undefined ? {} : { concurrency: maxWorkers }),
-              allowUnenforced,
-            },
-            phase: isInterrupted() ? 'finished' : 'executing',
+          persistSession(
+            isInterrupted() ? 'finished' : 'executing',
             plan,
-            evidence: null,
             tasks,
-            fileHashes: { ...fileHashes },
-            summaryFingerprint,
-            ...(gitState ? { git: gitState } : {}),
-          })
+            {
+              fileHashes: { ...fileHashes },
+              summaryFingerprint,
+              ...(gitState ? { git: gitState } : {}),
+            },
+            maxWorkers,
+          )
         } catch (e) {
           ui.warning(
             `Could not persist session state: ${e instanceof Error ? e.message : String(e)}`,
