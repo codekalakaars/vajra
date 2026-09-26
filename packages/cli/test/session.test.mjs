@@ -9,7 +9,7 @@ const serviceUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'sessio
 const storeUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'tui', 'session', 'store.js')).href
 const streamingUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'streaming.js')).href
 const { runSession, isExitCommand } = await import(serviceUrl)
-const { SessionStore } = await import(storeUrl)
+const { SessionStore, streamFlushMs } = await import(storeUrl)
 const { planSummaryLines } = await import(streamingUrl)
 
 /** Recording fake UI: captures output, scripts prompt answers in order. */
@@ -313,4 +313,27 @@ test('planSummaryLines omits auxiliary lines when absent', () => {
   assert.ok(!text.includes('writes:'))
   assert.ok(!text.includes('validation:'))
   assert.ok(!text.includes('depends on:'))
+})
+
+test('the repaint interval scales with how much text is buffered', async () => {
+  // A short answer repaints smoothly; a long one cannot afford 20fps, because
+  // Ink's frame cost grows with the frame.
+  assert.equal(streamFlushMs(0), 50)
+  assert.equal(streamFlushMs(999), 50)
+  assert.equal(streamFlushMs(1_000), 100)
+  assert.equal(streamFlushMs(3_999), 100)
+  assert.equal(streamFlushMs(4_000), 200)
+  assert.equal(streamFlushMs(50_000), 200)
+})
+
+test('a long burst is still coalesced into a single repaint', async () => {
+  const store = new SessionStore()
+  let notifications = 0
+  store.subscribe(() => { notifications++ })
+  // 5KB arriving in one burst: one repaint, and all of it painted.
+  store.appendStream('x'.repeat(5_000))
+  await new Promise(resolve => setTimeout(resolve, 300))
+  assert.equal(notifications, 1, `expected one repaint, got ${notifications}`)
+  assert.equal(store.getSnapshot().streaming.length, 5_000)
+  store.commitStream()
 })
