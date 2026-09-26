@@ -16,6 +16,12 @@ import {
   type SandboxConfig,
 } from '@codekalakaars/vajra-sandbox'
 import { normalizeProjectPath, type TaskFilePermissions } from '../tasks/permissions.js'
+import {
+  resolveConcurrencyConfig,
+  WorkerPool,
+  type PoolWorker,
+  type WorkerLease,
+} from '@codekalakaars/vajra-sandbox'
 
 export interface SandboxReport {
   enforced: boolean
@@ -424,5 +430,148 @@ export function taskPermissionLookupFrom(
   return (path) => {
     const key = normalizeProjectPath(projectDir, path)
     return permissions[key] ?? null
+  }
+}
+
+/** A pooled worker that remembers the session it drives. */
+interface SessionWorker extends PoolWorker {
+  session: SandboxSession
+}
+
+/**
+ * A `SandboxSession` backed by a pool of real sessions — one per in-flight
+ * task.
+ *
+ * The point is blast radius. With one shared worker, a single OOM or native
+ * fault fails every in-flight task at once: the worker respawns, but the calls
+ * already in flight on the dead process are gone, and so are the tasks that
+ * were waiting on them. Giving each task its own worker means a crash costs one
+ * task.
+ *
+ * `service.ts` needs no change for any of this — the pool implements the same
+ * `SandboxSession` surface, so admission, permission scoping and reporting work
+ * exactly as before. Per-task scoping is not weakened either: each task still
+ * gets `handleForTask` on its own session, so a worker is never shared with
+ * another task while either of them is running.
+ *
+ * Workers are created lazily, so a single-task run forks exactly one worker as
+ * before. `handleForTask` is synchronous by contract, so a reservation can be a
+ * session that is still starting; the handle it returns awaits that session on
+ * first use.
+ */
+export async function launchSandboxSessionPool(
+  projectDir: string,
+  sessionId: string,
+  options: LaunchSandboxOptions = {},
+): Promise<SandboxSession> {
+  // The primary session backs the session-scope handle (planning, rollback) and
+  // the first task, so nothing is forked that would not have been before.
+  const primary = await launchSandboxSession(projectDir, sessionId, options)
+  // At least one: the primary covers the first task, but a pool of zero would
+  // queue forever if a second task ever arrived.
+  const maxWorkers = Math.max(1, resolveConcurrencyConfig().maxConcurrentWorkers - 1)
+
+  const pool = new WorkerPool<SessionWorker>({
+    maxWorkers,
+    // A worker is held for a task's whole run; keep one warm for the next task
+    // and no more.
+    maxIdle: maxWorkers > 0 ? 1 : 0,
+    launch: async () => {
+      const session = await launchSandboxSession(projectDir, sessionId, options)
+      return {
+        session,
+        callTool: (tool, args) => session.handle.callTool(tool, args),
+        close: () => session.close(),
+      }
+    },
+  })
+
+  interface Reservation {
+    session: Promise<SandboxSession>
+    /** The lease behind a pooled session; absent for the primary. */
+    lease?: WorkerLease<SessionWorker>
+    released: boolean
+  }
+
+  const reservations = new Map<string, Reservation>()
+  let primaryInUse = false
+
+  const reserve = (): Reservation => {
+    if (!primaryInUse) {
+      primaryInUse = true
+      return { session: Promise.resolve(primary), released: false }
+    }
+    const reservation: Reservation = { session: null as never, released: false }
+    reservation.session = pool.acquire().then(lease => {
+      reservation.lease = lease
+      return lease.worker.session
+    })
+    return reservation
+  }
+
+  const release = (reservation: Reservation, taskId: string): void => {
+    if (reservation.released) return
+    reservation.released = true
+    void reservation.session.then(
+      session => {
+        // Drop the task's scoped permissions before anyone else can use this
+        // worker — otherwise the next task inherits them.
+        session.releaseTask(taskId)
+        if (reservation.lease) reservation.lease.release()
+        else primaryInUse = false
+      },
+      () => {
+        if (reservation.lease) reservation.lease.markDead('session failed to start')
+        else primaryInUse = false
+      },
+    )
+  }
+
+  return {
+    handle: primary.handle,
+    report: primary.report,
+    setTaskPermissions: lookup => primary.setTaskPermissions(lookup),
+    setOnMutate: fn => primary.setOnMutate(fn),
+
+    handleForTask: (taskId, lookup, onMutate) => {
+      const existing = reservations.get(taskId)
+      const reservation = existing ?? reserve()
+      if (!existing) reservations.set(taskId, reservation)
+
+      let scoped: LaunchHandle | null = null
+      return {
+        callTool: async (tool, args) => {
+          // Checked on *every* call, not just the first: once this task is
+          // released its worker may belong to another task, and a stale handle
+          // must not keep writing through it.
+          if (reservation.released) {
+            throw new Error(`Sandbox worker for task ${taskId} is no longer available`)
+          }
+          if (!scoped) {
+            const ready = await reservation.session
+            // The release may have landed while the session was starting.
+            if (reservation.released) {
+              throw new Error(`Sandbox worker for task ${taskId} is no longer available`)
+            }
+            scoped = ready.handleForTask(taskId, lookup, onMutate)
+          }
+          return scoped.callTool(tool, args)
+        },
+      }
+    },
+
+    releaseTask: taskId => {
+      const reservation = reservations.get(taskId)
+      if (!reservation) return
+      reservations.delete(taskId)
+      release(reservation, taskId)
+    },
+
+    close: () => {
+      for (const [taskId, reservation] of reservations) release(reservation, taskId)
+      reservations.clear()
+      primary.close()
+      void pool.drain()
+    },
   }
 }

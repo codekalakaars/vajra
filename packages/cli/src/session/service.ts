@@ -22,7 +22,7 @@ import { needsServer } from '../tasks/server.js'
 import { createToolHandle, tokenizeCommand, type ToolCache } from '../tools/handle.js'
 import { finalReport } from '../tasks/report.js'
 import { isSupportedModel } from '../env.js'
-import { launchSandboxSession, type SandboxSession } from '../sandbox/launch.js'
+import { launchSandboxSessionPool, type SandboxSession } from '../sandbox/launch.js'
 import {
   SESSION_SCHEMA_VERSION,
   DIRECTORY_FILE_HASH,
@@ -250,7 +250,10 @@ export async function runSession(
   // unenforced mode; only that explicit mode may fall back in-process.
   const allowUnenforced = options.allowUnenforced ?? false
   try {
-    sandbox = await launchSandboxSession(projectDir, sessionId, {
+    // Pool-backed: one worker per in-flight task, so a crash costs one task
+    // rather than every task. Same SandboxSession surface, so nothing below
+    // this line changes.
+    sandbox = await launchSandboxSessionPool(projectDir, sessionId, {
       allowUnenforced,
       requireEnforced: !allowUnenforced,
     })
