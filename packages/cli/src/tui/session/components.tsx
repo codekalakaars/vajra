@@ -16,7 +16,11 @@ export function Transcript({ state }: { state: SessionState }) {
       <Static items={state.entries}>{entry => <EntryView key={entry.seq} entry={entry} />}</Static>
       {state.developer && <DeveloperRow activity={state.developer} />}
       {state.thinking && <Text dimColor italic>{state.thinking}</Text>}
-      {state.streaming && <Text>{state.streaming}</Text>}
+      {state.streaming && (
+        // Formatted as it streams, so a list or a heading appears already
+        // structured rather than as flat text that reformats at the end.
+        <Markdown text={state.streaming} />
+      )}
     </Box>
   )
 }
@@ -45,8 +49,8 @@ function taskWindowFor(rows: number | undefined): number {
 import React from 'react'
 import { Box, Static, Text, useStdout } from 'ink'
 import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
-import { renderMarkdown } from '../../streaming.js'
 import type { AgentActivity, Entry, SessionState, PendingPrompt, TaskStatus } from './store.js'
+import { Markdown } from './markdown.js'
 
 const TASK_ICONS: Record<TaskStatus, { icon: string; color: string }> = {
   pending: { icon: '○', color: 'gray' },
@@ -227,7 +231,9 @@ const EntryView = React.memo(function EntryView({ entry }: { entry: Entry }) {
         </Box>
       )
     case 'assistant':
-      return <Text>{renderMarkdown(entry.text).replace(/\n+$/, '')}</Text>
+      // Rendered with Ink primitives, not renderMarkdown: that emits ANSI escape
+      // bytes, which Ink does not interpret and counts when measuring width.
+      return <Markdown text={entry.text} />
     case 'info':
       return <Text color="cyan">{entry.text}</Text>
     case 'success':

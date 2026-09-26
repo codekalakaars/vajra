@@ -3,9 +3,21 @@ import type { AgentEvent } from '../../session/ui.js'
 
 export type PromptKind = 'initial-first' | 'initial-reentry' | 'user' | 'confirm-plan' | 'feedback'
 
-/** Repaint cap for streamed text: 50ms ≈ 20fps, smooth and far fewer than a
- *  brisk token stream would otherwise trigger. */
-const STREAM_FLUSH_MS = 50
+/**
+ * How long to wait before painting buffered text.
+ *
+ * A short answer repaints at 20fps, which is smooth and far cheaper than the
+ * token rate. A long one cannot: Ink's cost grows with the frame, and a 5.7KB
+ * answer measured 69ms to redraw, so painting it 20 times a second would peg the
+ * CPU and look like the flicker this whole exercise removed. The interval
+ * therefore scales with how much is buffered, trading update rate for a frame
+ * the terminal can actually absorb.
+ */
+export function streamFlushMs(pendingChars: number): number {
+  if (pendingChars < 1_000) return 50
+  if (pendingChars < 4_000) return 100
+  return 200
+}
 
 export const PROMPT_LABELS: Record<PromptKind, string> = {
   'initial-first': 'What would you like me to work on?',
@@ -150,7 +162,7 @@ export class SessionStore {
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null
       this.flushPending()
-    }, STREAM_FLUSH_MS)
+    }, streamFlushMs(this.pendingStream.length + this.pendingThinking.length))
   }
 
   private cancelFlush(): void {
