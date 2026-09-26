@@ -235,11 +235,37 @@ test('SessionStore commits streamed text as an assistant entry', () => {
   const store = new SessionStore()
   store.appendStream('Hello ')
   store.appendStream('world')
-  assert.equal(store.getSnapshot().streaming, 'Hello world')
+  // Deltas are buffered and flushed on a short timer, so the text is not in the
+  // snapshot yet — committing flushes it synchronously, which is the contract
+  // that matters: nothing is lost or delayed at a turn boundary.
   store.commitStream()
   const entries = store.getSnapshot().entries
   assert.deepEqual(entries[entries.length - 1], { kind: 'assistant', text: 'Hello world' })
   assert.equal(store.getSnapshot().streaming, '')
+})
+
+test('SessionStore coalesces a burst of deltas into one repaint', async () => {
+  // Repainting per token is what made the TUI flicker: every notification
+  // re-rendered the session view. A burst must cost one notification.
+  const store = new SessionStore()
+  let notifications = 0
+  store.subscribe(() => { notifications++ })
+
+  for (let i = 0; i < 200; i++) store.appendStream('tok')
+  assert.equal(notifications, 0, 'nothing is published while deltas are still arriving')
+
+  await new Promise(resolve => setTimeout(resolve, 120))
+  assert.equal(notifications, 1, `200 deltas must coalesce into one repaint, got ${notifications}`)
+  assert.equal(store.getSnapshot().streaming, 'tok'.repeat(200), 'no text may be lost')
+  store.commitStream()
+})
+
+test('SessionStore clears buffered deltas that were never shown', () => {
+  const store = new SessionStore()
+  store.appendStream('dropped')
+  store.clearStream()
+  store.commitStream()
+  assert.equal(store.getSnapshot().entries.length, 0)
 })
 
 test('SessionStore.discardBuffer-style clear drops the stream', () => {

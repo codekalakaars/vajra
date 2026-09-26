@@ -135,7 +135,13 @@ export function TaskList({
   )
 }
 
-function EntryView({ entry }: { entry: Entry }) {
+/**
+ * Memoised on purpose. The transcript re-renders on every streamed token, and
+ * each assistant entry runs marked-terminal over its markdown — re-parsing the
+ * whole history per token is what made the view flicker. Entries are immutable
+ * once committed, so an unchanged one can bail out immediately.
+ */
+const EntryView = React.memo(function EntryView({ entry }: { entry: Entry }) {
   switch (entry.kind) {
     case 'banner': {
       const title = `Vajra v${entry.version}`
@@ -176,14 +182,32 @@ function EntryView({ entry }: { entry: Entry }) {
     case 'blank':
       return <Text> </Text>
   }
-}
+})
+
+/**
+ * How much of the transcript to paint.
+ *
+ * Ink costs roughly a millisecond per rendered entry per frame, and the view
+ * repaints on every streamed token, so painting the whole history is what makes
+ * a long session flicker. This is a *view* window only — the store keeps every
+ * entry, and `vajra sessions show` still prints the lot.
+ */
+const TRANSCRIPT_WINDOW = 12
 
 export function Transcript({ state }: { state: SessionState }) {
+  const hidden = Math.max(0, state.entries.length - TRANSCRIPT_WINDOW)
+  const visible = hidden > 0 ? state.entries.slice(hidden) : state.entries
   return (
     <Box flexDirection="column">
       {state.developer && <DeveloperRow activity={state.developer} />}
-      {state.entries.map((entry, i) => (
-        <EntryView key={i} entry={entry} />
+      {hidden > 0 && (
+        <Text color="gray">
+          … {hidden} earlier message{hidden === 1 ? '' : 's'} hidden (see vajra sessions show)
+        </Text>
+      )}
+      {visible.map((entry, i) => (
+        // Offset by `hidden` so keys stay stable as the window slides forward.
+        <EntryView key={hidden + i} entry={entry} />
       ))}
       {state.thinking && (
         <Text dimColor italic>{state.thinking}</Text>
