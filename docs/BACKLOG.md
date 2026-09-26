@@ -10,12 +10,14 @@ Committed on `feat/cli-agent-v1-config` at `5fb801b`; `main` is still at
 `experimental-packages` branch at `bb732b2` — see "Regression bar" for what that
 means for the server suite.
 
-**The concurrency hazard sweep is complete — all eight hazards in
-[CONCURRENCY_HAZARDS.md](CONCURRENCY_HAZARDS.md) are addressed, each with the
-mechanism that holds.** The remaining substantial work is the worker pool (§1).
-This file holds everything else.
+**The backlog is empty.** All eight hazards in
+[CONCURRENCY_HAZARDS.md](CONCURRENCY_HAZARDS.md) are addressed, and the worker
+pool has landed (`packages/sandbox/src/pool.ts`). Known gaps that are *not*
+backlog items are listed at the end.
 
-**Already done — do not redo:** per-task sandbox scoping, `search_content` +
+**Already done — do not redo:** **a per-task worker pool**
+(`packages/sandbox/src/pool.ts`, `launchSandboxSessionPool`) so a crash costs one
+task instead of every task, per-task sandbox scoping, `search_content` +
 `run_baseline`, the context-budget fix (coverage 7.5% → 42%), concurrent task
 execution, the task-spec schema with `plan-validate.ts`, file-read caching,
 persistence v1 **and v2 with resume + staleness gate**, the Manager
@@ -31,7 +33,15 @@ validation-server port allocation (`tasks/server.ts`), per-file hashing in
 `persist`, read-cache invalidation after `run_command` (`handle.ts`), and a git
 re-read in the staleness gate (`session/resume.ts`).
 
-**Decided, do not re-litigate:** the index budget saturating at 32,000 chars for
+**Decided, do not re-litigate:** there is no prompt caching. Three identical
+~19k-char requests to the zen gateway all returned `prompt_tokens=4379` — 0.0%
+change — so the full 19,307-char prefix (~4,827 tokens) is billed every
+round-trip, up to ~290k prompt tokens per developer turn, and `chat.ts` sends no
+`cache_control` either. The lever is shrinking the prefix, not caching it: the
+tree is 9,027 of those chars and already shrinks to fit. Raising the index cap
+therefore moves in the expensive direction.
+
+The index budget saturating at 32,000 chars for
 every window ≥128k. Measured on this repo after the experimental split: the whole
 index renders in 10,280 chars — under a third of the cap — so a larger window
 buys nothing today. `context-budget.test.mjs` now asserts the cap is not the
@@ -65,55 +75,15 @@ masked stub; `run_command` output is redacted; shell metacharacters rejected;
 
 ---
 
-## 1 · Worker pool
+## Known gaps — deliberately not backlog items
 
-**Owns:** `packages/sandbox/src/pool.ts` *(new)*, `packages/sandbox/src/index.ts`,
-`packages/cli/src/sandbox/launch.ts` · **Size:** L
+Recorded so they are not rediscovered, not because they are scheduled.
 
-Move `WorkerPool` from `experimental-packages/server/src/project/pool.ts` into
-the sandbox package and use it from `launch.ts`. That file is no longer on
-`main` — read it off the `experimental-packages` branch (`bb732b2`).
-
-**Re-scoped 2026-09-26 — do not port it as written.** Two findings shrink this
-considerably:
-
-1. **The correctness property it was built for is already held here.** The pool's
-   central rule is that a worker sandboxed for task A is never handed to task B.
-   `sandbox.handleForTask(taskId, lookup, onMutate)` (`launch.ts:392`) already
-   enforces exactly that per task, over one process. So the port is not about
-   permissions at all.
-2. **Crash recovery is already handled.** `launch.ts:275-296` respawns the worker
-   on exit, bounded by `maxSpawnRetries`. What respawn does *not* do is isolate
-   the blast radius: calls in flight on the dead worker still fail, so the tasks
-   using it fail with them.
-
-That leaves **one** real benefit: N workers, so a crash costs one task's calls
-instead of every task's. Everything else the original pool carried — adaptive
-concurrency from CPU/memory sampling, health-check pings, idle timers, worker
-reuse keyed on a permission hash — is unused weight here, and the reuse key is
-moot under per-task handles. Note also that hazard 1 now serialises
-shared-resource commands, so a pool buys less command parallelism than it once
-would have.
-
-**Suggested shape:** a small `packages/sandbox/src/pool.ts` taking an injected
-`launch: () => Promise<{ callTool, close }>` — no dependency on the CLI's
-launcher — holding at most `maxWorkers` workers, replacing one whose process
-exited, and handing each task a whole worker. Test it with injected fake workers
-(no forking) and prove the isolation property directly: kill worker 1, assert
-worker 2's in-flight call still resolves. Do not port the 473 lines.
-
----
-
-## 2 · Small open items
-
-- **Prompt caching: measured, and there is none.** Three identical ~19k-char
-  requests to the zen gateway returned `prompt_tokens=4379` every time — a 0.0%
-  change — so the full prefix is billed on every round-trip and the gateway does
-  not discount long prefixes implicitly. `chat.ts` also carries no
-  `cache_control`, so nothing asks it to. The resent prefix is **19,307 chars
-  ≈ 4,827 tokens** (10,280 summary + 9,027 tree); a developer turn runs up to 60
-  iterations, so a turn can cost roughly 290k prompt tokens.
-  The remaining lever is shrinking the prefix, not caching it: the tree is 9,027
-  of those 19,307 chars, and it already shrinks to fit its budget. If token cost
-  ever matters more than coverage, cut the tree first — raising the index cap
-  moves in the expensive direction.
+- **Windows sandbox enforcement.** `applySandbox` refuses on Windows rather than
+  pretending to confine; the CLI path is unenforced there. Closing this is a
+  platform feature, not a cleanup.
+- **Command serialisation is an allow-list.** `COMMAND_RESOURCE_PATHS` covers
+  git, npm, npx, pnpm, yarn and cargo. A mutating command outside that set
+  (`python`, `make`, `docker-compose`) is not serialised. Widening the map is
+  cheap; a blanket per-directory lock was tried and reverted because it also
+  serialises read-only commands.

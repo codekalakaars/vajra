@@ -27,3 +27,12 @@ export {
   type WorktreeInfo,
   type WorktreeResult,
 } from './worktree.js'
+
+export {
+  WorkerPool,
+  type PoolWorker,
+  type PoolWorkerFactory,
+  type PoolStats,
+  type WorkerLease,
+  type WorkerPoolOptions,
+} from './pool.js'
