@@ -204,7 +204,7 @@ export async function runSession(
   }
   if (!options.apiKey) {
     ui.error(
-      `No API key provided for model '${options.model}'. Set OPENCODE_API_KEY or use --api-key`,
+      `No API key provided for model '${options.model}'. Run 'vajra auth login <key>', set OPENCODE_API_KEY, or use --api-key`,
     )
     return { exitCode: 1, interrupted: false, exited: false }
   }

@@ -2,17 +2,15 @@ import React, { useState, useRef } from 'react'
 import { render, Box, Text, useInput, useApp } from 'ink'
 import { resolve } from 'node:path'
 import { existsSync, statSync } from 'node:fs'
+import { listAvailableModels, normalizeModelId } from '../env.js'
 import {
   DEFAULT_DIR_KEY,
   DEFAULT_MODEL_KEY,
   isPersistedDefault,
-  listAvailableModels,
-  loadEnvIntoProcess,
-  normalizeModelId,
   resolveDefaultDir,
   resolveDefaultModel,
   saveDefaults,
-} from '../env.js'
+} from '../config.js'
 import { deleteSession, listSessions, type SessionSummary } from '../persist/index.js'
 import { startSession } from './session/index.js'
 
@@ -153,13 +151,13 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
 
   function persistDefaults(what: 'save-both' | 'save-model' | 'save-dir') {
     try {
-      const envPath = saveDefaults({
+      const savedPath = saveDefaults({
         model: what === 'save-dir' ? undefined : currentModel,
         projectDir: what === 'save-model' ? undefined : projectDir,
       })
       setDefaultsError(null)
       setScreen('menu')
-      setMenuMessage(`Defaults saved to ${envPath}`)
+      setMenuMessage(`Defaults saved to ${savedPath}`)
     } catch (e) {
       setDefaultsError(e instanceof Error ? e.message : String(e))
     }
@@ -548,10 +546,10 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
         {noKeysConfigured && (
           <Box marginBottom={1}>
             <Text color="yellow">
-              No API keys configured. Set OPENCODE_API_KEY (Zen free) via
+              No API keys configured. Store one with
             </Text>
             <Box>
-              <Text color="yellow">  vajra config -s OPENCODE_API_KEY=...</Text>
+              <Text color="yellow">  vajra auth login &lt;key&gt;</Text>
             </Box>
           </Box>
         )}
@@ -637,13 +635,11 @@ export async function startTUI(version: string): Promise<void> {
 
   // Loop so returning from a subcommand goes back to the menu.
   // Only 'Exit' (or q / Ctrl+C) leaves the TUI.
-  // Seeded from saved defaults (.env), then session-scoped until the user
-  // saves again from the Defaults screen.
+  // Seeded from saved defaults (~/.vajra/config.json), then session-scoped
+  // until the user saves again from the Defaults screen.
   let sessionModel = resolveDefaultModel()
   let sessionDir = resolveDefaultDir()
   while (true) {
-    // Re-read .env each lap: Config -s runs in a child and only updates the file.
-    loadEnvIntoProcess()
     let selection: SpawnAction | 'exit' = 'exit'
     let choice: ResumeChoice | undefined
     const instance = render(

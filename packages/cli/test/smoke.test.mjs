@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -78,11 +78,17 @@ test('sessions resolve the directory the TUI saved, so the two never disagree', 
       summaryFingerprint: null,
     })
 
-    // A shell sitting in a directory that is not the saved project.
-    writeFileSync(join(elsewhere, '.env'), `VAJRA_PROJECT_DIR=${project}\n`)
+    // A shell sitting in a directory that is not the saved project:
+    // the default lives in ~/.vajra/config.json (VAJRA_HOME redirects here).
+    const home = mkdtempSync(join(tmpdir(), 'vajra-home-'))
+    const { saveDefaults } = await import(
+      pathToFileURL(join(import.meta.dirname, '..', 'dist', 'config.js')).href
+    )
+    saveDefaults({ projectDir: project }, { VAJRA_HOME: home })
 
     const { stdout } = await execFileAsync(process.execPath, [cliEntry, 'sessions'], {
       cwd: elsewhere,
+      env: { ...process.env, VAJRA_HOME: home },
       timeout: 10000,
     })
     assert.match(stdout, /sess-from-the-tui/, 'must find the session without being told where')
@@ -94,12 +100,13 @@ test('sessions resolve the directory the TUI saved, so the two never disagree', 
       const explicit = await execFileAsync(
         process.execPath,
         [cliEntry, 'sessions', '--dir', other],
-        { cwd: elsewhere, timeout: 10000 },
+        { cwd: elsewhere, env: { ...process.env, VAJRA_HOME: home }, timeout: 10000 },
       )
       assert.match(explicit.stdout, new RegExp(`No sessions recorded for ${other}`))
     } finally {
       rmSync(other, { recursive: true, force: true })
     }
+    rmSync(home, { recursive: true, force: true })
   } finally {
     rmSync(project, { recursive: true, force: true })
     rmSync(elsewhere, { recursive: true, force: true })

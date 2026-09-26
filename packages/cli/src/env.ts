@@ -1,5 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { storedOpenCodeKey } from './auth.js'
 
 export const DEFAULT_MODEL = 'zen/space-bunny-free'
 
@@ -24,18 +23,12 @@ export const ZEN_FREE_PRESETS: ModelPreset[] = [
 
 /**
  * Models the user can actually reach with the keys they have configured.
- * - OPENCODE_API_KEY → Zen free presets (zen/*, go/*)
+ * OPENCODE_API_KEY from the env or ~/.vajra/auth.json → Zen presets (zen/*, go/*).
  */
 export function listAvailableModels(env: NodeJS.ProcessEnv = process.env): ModelPreset[] {
   const out: ModelPreset[] = []
-  if (env.OPENCODE_API_KEY?.trim()) out.push(...ZEN_FREE_PRESETS)
+  if (env.OPENCODE_API_KEY?.trim() || storedOpenCodeKey(env)) out.push(...ZEN_FREE_PRESETS)
   return out
-}
-
-/** Resolve the default model from env (VAJRA_MODEL wins over DEFAULT_MODEL). */
-export function resolveDefaultModel(env: NodeJS.ProcessEnv = process.env): string {
-  const fromEnv = env.VAJRA_MODEL || env.DEFAULT_MODEL
-  return fromEnv && fromEnv.trim() ? fromEnv.trim() : DEFAULT_MODEL
 }
 
 /** Only the OpenCode Zen gateway is supported (zen/* and go/* models). */
@@ -46,7 +39,7 @@ export function isSupportedModel(model: string): boolean {
 /**
  * Pick the credential that matches the model's transport.
  * zen/* and go/* go to OpenCode; every other model id is unsupported.
- * An explicit --api-key always wins.
+ * Precedence: explicit --api-key > env OPENCODE_API_KEY > ~/.vajra/auth.json.
  */
 export function resolveApiKeyForModel(
   model: string,
@@ -56,7 +49,7 @@ export function resolveApiKeyForModel(
   const trimmed = explicitKey?.trim()
   if (trimmed) return trimmed
   if (isSupportedModel(model)) {
-    return env.OPENCODE_API_KEY || undefined
+    return env.OPENCODE_API_KEY || storedOpenCodeKey(env)
   }
   return undefined
 }
@@ -74,127 +67,6 @@ export function normalizeModelId(model: string): string {
     throw new Error(`Unsupported model '${cleaned}': only zen/* and go/* are supported`)
   }
   return cleaned
-}
-
-/** Repo root: three levels above the CLI entry (packages/cli/dist/index.js -> repo root). */
-export function getRootDir(entryScript?: string): string {
-  const entry = entryScript ?? process.argv[1]
-  if (entry) {
-    return resolve(dirname(entry), '..', '..', '..')
-  }
-  return process.cwd()
-}
-
-/**
- * Locate the .env file. Walks up from cwd first so a project-local .env
- * takes precedence over the install/repo-root .env (G2). Falls back to the
- * entry-anchored repo root path for writing when nothing exists yet.
- */
-export function findEnvPath(): string {
-  const candidates: string[] = []
-  const push = (p: string) => {
-    if (!candidates.includes(p)) candidates.push(p)
-  }
-  let dir = process.cwd()
-  for (let i = 0; i < 6; i++) {
-    push(resolve(dir, '.env'))
-    const parent = dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  if (process.argv[1]) {
-    push(resolve(getRootDir(), '.env'))
-  }
-  for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate
-  }
-  return candidates[0] ?? resolve(process.cwd(), '.env')
-}
-
-/** Parse a .env file into key/value pairs (ignores blanks and # comments). */
-export function readEnvFile(envPath: string): Record<string, string> {
-  const values: Record<string, string> = {}
-  if (!existsSync(envPath)) return values
-  for (const line of readFileSync(envPath, 'utf-8').split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const eqIdx = trimmed.indexOf('=')
-    if (eqIdx > 0) {
-      values[trimmed.slice(0, eqIdx).trim()] = trimmed.slice(eqIdx + 1).trim()
-    }
-  }
-  return values
-}
-
-/**
- * (Re)load KEY=VALUE pairs from the discovered .env into process.env.
- * Used by the TUI loop so `config -s` (child process writes the file)
- * is visible without restarting. Empty values are skipped.
- */
-export function loadEnvIntoProcess(env: NodeJS.ProcessEnv = process.env): string {
-  const envPath = findEnvPath()
-  const values = readEnvFile(envPath)
-  for (const [key, value] of Object.entries(values)) {
-    if (value) env[key] = value
-  }
-  return envPath
-}
-
-/** Create or update a single KEY=VALUE line, preserving the rest of the file. */
-export function writeEnvKey(envPath: string, key: string, value: string): void {
-  if (!key || /[\s=#]/.test(key)) {
-    throw new Error(`Invalid env key: '${key}'`)
-  }
-  if (value.includes('\n')) {
-    throw new Error(`Invalid value for '${key}': must be a single line`)
-  }
-  const envExists = existsSync(envPath)
-  let envContent = envExists ? readFileSync(envPath, 'utf-8') : ''
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const regex = new RegExp(`^${escapedKey}=.*$`, 'm')
-  if (regex.test(envContent)) {
-    envContent = envContent.replace(regex, `${key}=${value}`)
-  } else {
-    if (envContent.length > 0 && !envContent.endsWith('\n')) {
-      envContent += '\n'
-    }
-    envContent += `${key}=${value}\n`
-  }
-  writeFileSync(envPath, envContent)
-}
-
-/** Env keys holding user defaults, written by the TUI's Defaults screen. */
-export const DEFAULT_MODEL_KEY = 'VAJRA_MODEL'
-export const DEFAULT_DIR_KEY = 'VAJRA_PROJECT_DIR'
-
-/** Resolve the default project directory. Falls back to the current directory. */
-export function resolveDefaultDir(env: NodeJS.ProcessEnv = process.env): string {
-  const fromEnv = env[DEFAULT_DIR_KEY]
-  return fromEnv && fromEnv.trim() ? fromEnv.trim() : process.cwd()
-}
-
-/** True when the value came from `.env` rather than the built-in fallback. */
-export function isPersistedDefault(
-  key: typeof DEFAULT_MODEL_KEY | typeof DEFAULT_DIR_KEY,
-  envPath = findEnvPath(),
-): boolean {
-  const value = readEnvFile(envPath)[key]
-  return Boolean(value && value.trim())
-}
-
-/**
- * Persist defaults so they survive a restart. Writes to the same `.env` the
- * CLI reads at startup and returns its path, so the UI can show where it went.
- */
-export function saveDefaults(values: { model?: string; projectDir?: string }): string {
-  const envPath = findEnvPath()
-  if (values.model !== undefined) {
-    writeEnvKey(envPath, DEFAULT_MODEL_KEY, normalizeModelId(values.model))
-  }
-  if (values.projectDir !== undefined) {
-    writeEnvKey(envPath, DEFAULT_DIR_KEY, resolve(values.projectDir))
-  }
-  return envPath
 }
 
 /** Parse `KEY=VALUE` for `vajra config -s`. Returns null if malformed. */
