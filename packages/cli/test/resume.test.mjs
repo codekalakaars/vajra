@@ -517,3 +517,85 @@ test('a mid-execution resume re-runs only the unfinished task', async t => {
   // And it stayed one record.
   assert.equal(listSessions(dir).length, 1)
 })
+
+test('a conversational resume prompts first instead of sending an empty turn', async t => {
+  const { runSession } = await import(pathToFileURL(join(root, 'session', 'service.js')).href)
+  const dir = project()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+
+  saveSession(makeSession(dir, { phase: 'conversing', plan: null, tasks: {} }))
+  appendMessage('sess-1', dir, { role: 'user', content: 'earlier question' })
+  appendMessage('sess-1', dir, { role: 'assistant', content: 'earlier answer' })
+
+  // The bug: resume skipped the prompt and fired turn 1 with userMessage '',
+  // so the model answered nothing and an empty user turn hit the transcript.
+  const answers = ['keep going', 'exit']
+  const events = []
+  const calls = []
+  const ui = {
+    calls,
+    banner: () => {}, info: () => {}, success: () => {}, error: m => calls.push(['error', m]),
+    warning: () => {}, newline: () => {}, onTextDelta: () => {}, onThinkingDelta: () => {},
+    finishLine: () => {}, discardBuffer: () => {},
+    askInitialTask: () => { throw new Error('resume must not ask for an initial task') },
+    askUserMessage: () => { events.push('prompt'); return answers.shift() ?? 'exit' },
+    showPlan: () => {},
+    askConfirmPlan: () => { throw new Error('no plan expected') },
+    askRejectFeedback: () => { throw new Error('no plan expected') },
+    onTaskEvent: () => {}, onAgentEvent: () => {},
+    text: () => calls.map(c => c.join(' ')).join('\n'),
+  }
+
+  const bodies = []
+  const realFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = realFetch })
+  globalThis.fetch = async (_url, init) => {
+    events.push('fetch')
+    bodies.push(JSON.parse(init.body))
+    const encoder = new TextEncoder()
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+          id: 's', object: 'chat.completion.chunk', created: 0, model: 'm',
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'okay' }, finish_reason: null }],
+        })}\n\n`))
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+        controller.close()
+      },
+    })
+    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+  }
+
+  const result = await runSession(
+    {
+      task: undefined,
+      model: 'zen/test-model',
+      apiKey: 'sk-test',
+      projectDir: dir,
+      autoConfirm: true,
+      allowUnenforced: true,
+      resumeFrom: 'sess-1',
+      force: true,
+    },
+    ui,
+  )
+
+  assert.equal(result.exitCode, 0, ui.text())
+  assert.equal(events[0], 'prompt', 'the user is asked before any model call')
+  assert.ok(bodies.length >= 1, 'the model is called after the prompt')
+  for (const body of bodies) {
+    for (const m of body.messages) {
+      if (m.role === 'user') {
+        assert.ok(
+          (m.content ?? '').trim().length > 0,
+          `empty user turn sent to the model: ${JSON.stringify(body.messages)}`,
+        )
+      }
+    }
+  }
+  const recorded = loadMessages('sess-1', dir)
+  assert.ok(
+    !recorded.some(m => m.role === 'user' && !(m.content ?? '').trim()),
+    'no empty user message is recorded',
+  )
+})
