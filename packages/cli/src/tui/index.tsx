@@ -13,11 +13,36 @@ import {
   resolveDefaultModel,
   saveDefaults,
 } from '../env.js'
+import { deleteSession, listSessions, type SessionSummary } from '../persist/index.js'
 import { startSession } from './session/index.js'
 
+/** Compact age for the session list: 4s, 12m, 3h, 5d. */
+function formatAge(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return 'unknown'
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+function truncate(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`
+}
+
 type SpawnAction = 'run'
-type MenuKey = SpawnAction | 'model' | 'dir' | 'defaults' | 'exit'
-type Screen = 'menu' | 'model' | 'dir' | 'defaults'
+type MenuKey = SpawnAction | 'model' | 'dir' | 'defaults' | 'sessions' | 'exit'
+type Screen = 'menu' | 'model' | 'dir' | 'defaults' | 'sessions'
+
+/** A resume chosen from the Sessions screen. */
+interface ResumeChoice {
+  sessionId: string
+  /** Set when the user asked to resume past a staleness report. */
+  force?: boolean
+}
 
 /**
  * Which gateway a model id routes to. Provider is not independently
@@ -40,7 +65,7 @@ interface AppProps {
   initialDir: string
   onModelChange: (model: string) => void
   onDirChange: (dir: string) => void
-  onSelect: (action: SpawnAction | 'exit') => void
+  onSelect: (action: SpawnAction | 'exit', choice?: ResumeChoice) => void
 }
 
 function isDirectory(path: string): boolean {
@@ -64,13 +89,18 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
   const [dirError, setDirError] = useState<string | null>(null)
   const [defaultsIdx, setDefaultsIdx] = useState(0)
   const [defaultsError, setDefaultsError] = useState<string | null>(null)
+  // Sessions screen: loaded on entry so the list is never stale on arrival.
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [sessionsIdx, setSessionsIdx] = useState(0)
+  const [sessionsNote, setSessionsNote] = useState<string | null>(null)
+  const sessionsIdxRef = useRef(0)
   const menuIdxRef = useRef(0)
   const modelIdxRef = useRef(0)
   const defaultsIdxRef = useRef(0)
   const { exit } = useApp()
 
-  function select(action: SpawnAction | 'exit') {
-    onSelect(action)
+  function select(action: SpawnAction | 'exit', choice?: ResumeChoice) {
+    onSelect(action, choice)
     exit()
   }
 
@@ -79,6 +109,7 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
     { key: 'model', label: 'Model', description: `Change LLM model (current: ${currentModel})` },
     { key: 'dir', label: 'Directory', description: `Change working directory (current: ${projectDir})` },
     { key: 'defaults', label: 'Defaults', description: 'Save model and directory so they persist across restarts' },
+    { key: 'sessions', label: 'Sessions', description: `Resume or remove a session recorded in ${projectDir}` },
     { key: 'exit', label: 'Exit' },
   ]
 
@@ -96,6 +127,15 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
     { type: 'back' },
   ]
   const noKeysConfigured = availableModels.length === 0
+
+  function loadSessions(dir: string): SessionSummary[] {
+    try {
+      return listSessions(dir)
+    } catch (e) {
+      setSessionsNote(`Could not read sessions: ${e instanceof Error ? e.message : String(e)}`)
+      return []
+    }
+  }
 
   function saveModel(id: string) {
     try {
@@ -267,6 +307,48 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
       return
     }
 
+    if (screen === 'sessions') {
+      if (key.escape || input === 'q') {
+        setSessionsNote(null)
+        setScreen('menu')
+        return
+      }
+      if (key.ctrl && input === 'c') {
+        select('exit')
+        return
+      }
+      if (sessions.length === 0) {
+        setSessionsNote('No sessions recorded for this directory yet.')
+        return
+      }
+      const chosen = sessions[sessionsIdxRef.current]
+      if (key.upArrow) {
+        setSessionsNote(null)
+        moveSelection(-1, sessions, sessionsIdxRef, setSessionsIdx)
+      } else if (key.downArrow) {
+        setSessionsNote(null)
+        moveSelection(1, sessions, sessionsIdxRef, setSessionsIdx)
+      } else if (key.return || input === '\r' || input === '\n') {
+        select('run', { sessionId: chosen.sessionId })
+      } else if (input === 'f') {
+        // Explicit, deliberate override of the staleness gate — never the
+        // default, and only on the row the user is looking at.
+        select('run', { sessionId: chosen.sessionId, force: true })
+      } else if (input === 'd') {
+        const removed = deleteSession(chosen.sessionId, projectDir)
+        const next = loadSessions(projectDir)
+        setSessions(next)
+        setSessionsIdx(0)
+        sessionsIdxRef.current = 0
+        setSessionsNote(
+          removed
+            ? `Removed ${chosen.sessionId.slice(0, 8)}`
+            : `Could not remove ${chosen.sessionId.slice(0, 8)}`,
+        )
+      }
+      return
+    }
+
     if (input === 'q' || (key.ctrl && input === 'c')) {
       select('exit')
     } else if (key.upArrow) {
@@ -294,11 +376,72 @@ function App({ version, initialModel, initialDir, onModelChange, onDirChange, on
         setDefaultsIdx(0)
         defaultsIdxRef.current = 0
         setScreen('defaults')
+      } else if (itemKey === 'sessions') {
+        setMenuMessage(null)
+        setSessionsNote(null)
+        setSessionsIdx(0)
+        sessionsIdxRef.current = 0
+        setSessions(loadSessions(projectDir))
+        setScreen('sessions')
       } else {
         select(itemKey)
       }
     }
   })
+
+  if (screen === 'sessions') {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Box marginBottom={1}>
+          <Text bold color="cyan">⚡ Vajra</Text>
+          <Text color="white"> v{version} — Sessions</Text>
+        </Box>
+
+        <Box marginBottom={1}>
+          <Text color="gray">{projectDir}</Text>
+        </Box>
+
+        {sessions.length === 0 ? (
+          <Box marginBottom={1}>
+            <Text color="gray">No sessions recorded for this directory yet.</Text>
+            <Text color="gray">Run the agent first — every run is saved as it progresses.</Text>
+          </Box>
+        ) : (
+          <Box flexDirection="column" marginBottom={1}>
+            <Box>
+              <Text color="gray">{'  ID'.padEnd(12)}{'PHASE'.padEnd(16)}{'PROGRESS'.padEnd(11)}{'AGE'.padEnd(9)}PLAN</Text>
+            </Box>
+            {sessions.map((session, idx) => (
+              <Box key={session.sessionId}>
+                <Text color={idx === sessionsIdx ? 'cyan' : 'white'}>
+                  {idx === sessionsIdx ? '▸ ' : '  '}
+                  {session.sessionId.slice(0, 8).padEnd(10)}
+                  {session.phase.padEnd(16)}
+                  {`${session.done}/${session.total}`.padEnd(11)}
+                  {formatAge(Date.now() - session.updatedAt).padEnd(9)}
+                  {truncate(session.planTitle ?? session.status, 28)}
+                </Text>
+              </Box>
+            ))}
+          </Box>
+        )}
+
+        {sessionsNote && (
+          <Box marginBottom={1}>
+            <Text color="yellow">{sessionsNote}</Text>
+          </Box>
+        )}
+
+        <Box flexDirection="column">
+          <Text color="white">↑↓ Navigate  Enter Resume  d Remove</Text>
+          <Text color="gray">
+            f resumes past the staleness report (a changed tree or moved HEAD)
+          </Text>
+          <Text color="white">Esc Back</Text>
+        </Box>
+      </Box>
+    )
+  }
 
   if (screen === 'defaults') {
     const modelPersisted = isPersistedDefault(DEFAULT_MODEL_KEY)
@@ -502,6 +645,7 @@ export async function startTUI(version: string): Promise<void> {
     // Re-read .env each lap: Config -s runs in a child and only updates the file.
     loadEnvIntoProcess()
     let selection: SpawnAction | 'exit' = 'exit'
+    let choice: ResumeChoice | undefined
     const instance = render(
       <App
         version={version}
@@ -509,7 +653,10 @@ export async function startTUI(version: string): Promise<void> {
         initialDir={sessionDir}
         onModelChange={(model) => { sessionModel = model }}
         onDirChange={(dir) => { sessionDir = dir }}
-        onSelect={(action) => { selection = action }}
+        onSelect={(action, picked) => {
+          selection = action
+          choice = picked
+        }}
       />,
     )
     await instance.waitUntilExit()
@@ -523,6 +670,9 @@ export async function startTUI(version: string): Promise<void> {
         version,
         model: sessionModel,
         projectDir: sessionDir,
+        ...(choice
+          ? { resumeFrom: choice.sessionId, ...(choice.force ? { force: true } : {}) }
+          : {}),
       })
     }
   }
