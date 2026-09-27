@@ -9,6 +9,7 @@ This document records what the testing system **cannot** test, and why. It is th
 - [How to Read This](#how-to-read-this)
 - [Cannot Test](#cannot-test)
 - [Can Test but Cannot Trust](#can-test-but-cannot-trust)
+- [Cannot Test, and Pre-Release TODOs](#cannot-test-and-pre-release-todos)
 - [Fixed During This Work](#fixed-during-this-work)
 - [Deliberately Out of Scope](#deliberately-out-of-scope)
 
@@ -89,6 +90,22 @@ Anything depending on the clock, a random seed, a network call to a third party,
 ### 13. Oracle strength for generated probes — **Silent, by design**
 
 Contract-derived probes assert response *shape*, never semantics. A schema cannot express "a valid password is 8+ characters". Generated probes prove the endpoint answers correctly-shaped; they do not prove it is *right*. A green contract suite is weak evidence of correctness and should not be read as strong.
+
+## Cannot Test, and Pre-Release TODOs
+
+Items here are things the harness cannot reach *and* that are not yet verified another way. They are separated from the numbered gaps because they are owed before a release rather than merely absent.
+
+### 14. LLM provider reachability and the credential path — **Blind**
+
+A session cannot be verified without a model to verify it against, so the entire path from credential to first response is outside what the harness can assert. The probe system can call an HTTP endpoint; it cannot supply a real secret, cannot judge whether the key is the right one, and cannot tell a rejected key from a reachable provider that had nothing to say.
+
+Concretely, none of this is covered end to end: `vajra auth login` writing `~/.vajra/auth.json` and the file actually being `0600`; the precedence order (`--api-key`, environment, `auth.json`) asserted as a whole rather than per function; `vajra auth logout` leaving a session that correctly refuses to start; a key written *while a session is open* being picked up by the live gate; a rejected key producing a reported failure rather than a retry loop; and the credential appearing in no transcript, session row, index file or log line.
+
+The first and last of those are cheap and worth doing regardless of any provider: assert the mode of `auth.json` after a login, and assert the key string is absent from every file under the state directory.
+
+**This is a pre-release TODO, not a permanent gap.** The gate and the credential resolver have unit tests; what is missing is the end-to-end path against the real gateway, which needs a real key and a real session.
+
+**Assumption:** the credential path is the only place where a bug is both silent and total — a session that starts with the wrong key fails everywhere at once, and nothing upstream reports it. That asymmetry is why it is listed ahead of the smaller items rather than with them.
 
 ## Fixed Since the Last Revision
 

@@ -22,6 +22,8 @@ so they can work on your code without reading your secrets.
 | Per-file permission config | Implemented |
 | Sandbox enforcement (CLI `vajra run`) | Confined worker calls `applySandbox` — Linux (Landlock) and macOS (Seatbelt); **none on Windows** |
 | Multi-agent orchestration | Developer/master/worker roles with plan confirmation |
+| LLM providers | **OpenCode Zen only** — `zen/*` and `go/*` model ids, one `OPENCODE_API_KEY`; a second provider is planned ([ADR](docs/adr/0009-opencode-zen-is-the-only-provider.md)) |
+| API key configuration | `vajra auth login` / `status` / `logout`, `--api-key`, env, `~/.vajra/auth.json` at `0600`; a gate holds the screen until a key exists — **not tested end to end yet** ([gaps](docs/testing/gaps.md)) |
 | TypeScript harness | Implemented |
 
 ## What the native core provides
@@ -77,6 +79,41 @@ pnpm cli          # build the CLI and run it (vajra --help)
 ```
 
 CI runs on ubuntu, macos and windows.
+
+## State on disk
+
+Everything Vajra persists lives in `~/.vajra` (override with `VAJRA_HOME`),
+created `0700`:
+
+| Path | Holds | Mode |
+| --- | --- | --- |
+| `config.json` | saved defaults — `model`, `projectDir` | `0600` |
+| `auth.json` | `OPENCODE_API_KEY`, in the clear | `0600` |
+| `vajra.db` | sessions and message transcripts (SQLite, WAL) | `0600` |
+| `index/<fingerprint>.json` | cached symbol lists and code previews | umask |
+| `models.json` | model capabilities from models.dev + the gateway listing | `0600` |
+
+`auth.json` is the only file that holds a credential, and there is no OS
+keychain integration. Nothing expires automatically: stale index files and old
+sessions are removed by hand, or by deleting the file.
+
+Inside a project, Vajra reads `.vajra-sandbox.json` and `.vajra-perms.json` (it
+writes neither) and creates nothing of its own — the source edits an agent makes
+are the agent's work, not Vajra's state.
+
+Full inventory, including what deliberately does not exist:
+[docs/runtime/state.md](docs/runtime/state.md).
+
+## Providers
+
+Vajra talks to **one LLM provider, OpenCode Zen**, over its OpenAI-compatible
+endpoints. `zen/*` and `go/*` are the only accepted model ids and both use one
+`OPENCODE_API_KEY`; there is no provider setting and no fallback, because there
+is no second provider yet. Adding one is a contained change — a base URL, a
+namespace, a listing URL — with one open question about how credentials are
+stored per provider.
+
+[docs/runtime/llm-providers.md](docs/runtime/llm-providers.md)
 
 ## Security model
 

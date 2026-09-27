@@ -12,7 +12,7 @@ This directory contains the complete documentation for the Vajra AI Agent Harnes
 - Missing information is marked with `TODO`.
 - Inferred content is marked with **Assumption:** — these are proposals, not settled decisions.
 - Settled decisions are captured as ADRs in `adr/`.
-- Cross-references use relative paths (e.g., `[Worker Role](../system-roles/worker.md)`).
+- Cross-references use relative paths (e.g., `[Worker Role](system-roles/worker.md)`).
 
 ## Architecture Roles
 
@@ -37,6 +37,8 @@ This directory contains the complete documentation for the Vajra AI Agent Harnes
 | ↳ Surfaces | [testing/surfaces.md](testing/surfaces.md) | Every development surface, and how it is tested |
 | ↳ Gaps | [testing/gaps.md](testing/gaps.md) | What the testing system cannot test, and why |
 | Runtime | [runtime/README.md](runtime/README.md) | System runtime, deployment, and operations |
+| ↳ State | [runtime/state.md](runtime/state.md) | Everything the shipped CLI stores on disk, and what holds a secret |
+| ↳ Providers | [runtime/llm-providers.md](runtime/llm-providers.md) | The one LLM provider, its credential, and extending it |
 | Specifications | [specifications/README.md](specifications/README.md) | Formal specifications and RFCs |
 | ADRs | [adr/README.md](adr/README.md) | Architecture Decision Records — why, not just what |
 | Roadmap | [roadmap/README.md](roadmap/README.md) | Future direction and planned features |
@@ -47,3 +49,6 @@ This directory contains the complete documentation for the Vajra AI Agent Harnes
 - [Contributing Guide](overview/contributing.md)
 - [Security Model](permissions/security-model.md)
 - [Agent Protocol](communication/protocol.md)
+- [State on Disk](runtime/state.md) — what lives in `~/.vajra`
+- [LLM Providers](runtime/llm-providers.md) — OpenCode Zen only, for now
+- [Coverage Gaps](testing/gaps.md) — the API key path is not tested end to end

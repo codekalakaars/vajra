@@ -100,7 +100,7 @@ Every submission opens with a mandatory Phase One, in two ordered steps:
 1. **Stub files** — every declared target path exists, minimal but valid.
 2. **Tests** — a runnable test per behaviour, currently failing.
 
-No later phase starts until Phase One completes. See [Phase One](../tasks/README.md#phase-one) and [ADR-0006](adr/0006-phase-one-is-mandatory.md).
+No later phase starts until Phase One completes. See [Phase One](../tasks/README.md#phase-one) and [ADR-0006](../adr/0006-phase-one-is-mandatory.md).
 
 The gate converts a task set from a description of intent into something mechanically checkable. A test that exists and fails is a precise definition of "done", present before any implementation is written — so after the gate, the Worker's job narrows to making a failing test pass.
 

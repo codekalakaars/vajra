@@ -48,10 +48,13 @@ Numbering is sequential and never reused. A reversed decision gets a new ADR tha
 | [0006](0006-phase-one-is-mandatory.md) | Every submission opens with a mandatory Phase One of stubs and failing tests | Accepted |
 | [0007](0007-test-verdict-contract.md) | Mechanical verdicts with expectation inversion, not a boolean | Accepted |
 | [0008](0008-mutation-as-criterion.md) | Mutation scoring is a first-class criterion | Accepted |
+| [0009](0009-opencode-zen-is-the-only-provider.md) | OpenCode Zen is the only LLM provider; one `OPENCODE_API_KEY` at `0600` | Accepted |
 
 These eight are mutually reinforcing. Each closes a hole the others would otherwise leave: 0001 centralizes planning authority, 0002 keeps execution attributable, 0003 bounds the damage a Worker can do, 0004 keeps verification independent of the work being verified, 0005 keeps the parallel structure a planning decision rather than a runtime one, 0006 makes "done" executable before any implementation is written, 0007 makes that executability checkable rather than nominal, and 0008 asks whether the check has teeth at all.
 
 The pair 0006 and 0007 is deliberately scoped to be language-neutral: Phase One defines *what* must exist before implementation, and JUnit XML ingestion establishes that any language can produce the evidence.
+
+0009 stands apart from that set. The first eight govern the harness; 0009 governs the shipped CLI's outside edge — which vendor it talks to, and where the one credential lives. It is recorded as an ADR because the provider is the one thing a user cannot work around: every other decision here is internal to a run.
 
 ## When to Write One
 

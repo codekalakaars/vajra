@@ -10,10 +10,13 @@ This section documents the runtime — how context, state, and execution are man
 - [Agent Runtime](#agent-runtime)
 - [State Management](#state-management)
 - [Execution Engine](#execution-engine)
+- [LLM Providers](#llm-providers)
 - [Observability](#observability)
 - [Open Questions](#open-questions)
 
 Implementation detail belongs here rather than in the conceptual docs. Anything in this section is changeable without contradicting an ADR.
+
+The sections below describe the harness runtime as designed. Two documents describe the part of the system that runs today — the `vajra` CLI in `packages/cli` — and are marked as such where they are linked: [state.md](state.md) and [llm-providers.md](llm-providers.md).
 
 ## Context Management
 
@@ -61,6 +64,8 @@ This is why the corrective path is designed around escalation rather than retry:
 
 TODO: Decide the storage medium and whether archived tasks are retained, given the audit requirement in [Security Model](../permissions/security-model.md#audit-logs).
 
+The shipped CLI has already answered this for itself, and the answer is worth reading before designing the harness's version: state lives in `~/.vajra` (override: `VAJRA_HOME`) as one SQLite database, one `0600` config file, one `0600` credential file, a model cache and a summary-index cache. Nothing expires automatically. See [state.md](state.md) for the full inventory, including what deliberately does not exist — no keychain, no logs, no lock files, no XDG.
+
 ## Execution Engine
 
 The engine drives the Manager's loop, and through it every task in the system. It is a **traversal of a submitted plan**, not a scheduler that builds one — see [ADR-0005](../adr/0005-predefined-parallel-order.md).
@@ -85,6 +90,16 @@ Three properties are load-bearing:
 
 TODO: Define how inspection evaluates `review`-type criteria, and what evidence it requires beyond the Worker's own report. `test` and `assertion` criteria are handled mechanically — see [Testing](../testing/README.md).
 
+## LLM Providers
+
+Vajra reaches exactly one LLM provider, OpenCode Zen, over its OpenAI-compatible endpoints. `zen/*` and `go/*` are the only accepted model ids and both use one `OPENCODE_API_KEY`. There is no provider setting, no registry, and no fallback, because there is no second provider yet.
+
+The decision, its costs, and the credential question it deliberately defers are in [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md). The surface as implemented — endpoints, model-id routing, credential resolution, the gate that holds the screen until a key exists, and the five places a second provider would have to be added — is in [llm-providers.md](llm-providers.md).
+
+**Assumption:** the harness does not need a provider abstraction of its own. The Developer, Manager and Workers all reach a model through the same client, so a provider decision is a single seam rather than per-role configuration. If a future role is allowed to use a different provider, this becomes an ADR rather than a config key.
+
+TODO: The credential path is implemented and not tested end to end — see [Coverage Gaps](../testing/gaps.md).
+
 ## Observability
 
 **Assumption:** The audit log in [Security Model](../permissions/security-model.md#audit-logs) and the runtime event stream are the same artifact, append-only, recording every task transition, permission grant, file write, and message.
@@ -104,6 +119,7 @@ TODO: Define the event schema, retention, and who can read the log.
 - [ ] Is the audit log the same artifact as the event stream?
 - [ ] Where is task state stored, and how long is it retained?
 - [ ] What is the context budget for a Worker, and what happens when a task exceeds it?
+- [ ] When a second LLM provider is added, how are credentials stored per provider? [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md) records this as deliberately undecided.
 
 ## See Also
 
@@ -111,3 +127,5 @@ TODO: Define the event schema, retention, and who can read the log.
 - [Execution](../execution/README.md)
 - [Permissions](../permissions/README.md)
 - [Protocol](../communication/protocol.md)
+- [State on Disk](state.md) and [LLM Providers](llm-providers.md) — the shipped CLI
+

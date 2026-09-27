@@ -10,6 +10,7 @@ This section tracks what is planned, what is undecided, and what has been decide
 - [Architectural Decisions](#architectural-decisions)
 - [Open Questions](#open-questions)
 - [Planned Work](#planned-work)
+- [Before a Release](#before-a-release)
 - [Future Experiments](#future-experiments)
 
 ## Status
@@ -37,6 +38,8 @@ The conceptual model is documented and internally consistent. Every role, the ta
 | Permission model | Settled conceptually; enforcement mechanism open |
 | Message protocol | Types settled; transport and versioning open |
 | Runtime | Not started |
+| LLM provider (shipped CLI) | Settled — OpenCode Zen only, see [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md); a second provider is planned |
+| API key configuration (shipped CLI) | Implemented; **not tested end to end** — see [Before a Release](#before-a-release) |
 
 ## Architectural Decisions
 
@@ -52,6 +55,7 @@ Decisions are recorded once, as ADRs, and are not restated here.
 | [ADR-0006](../adr/0006-phase-one-is-mandatory.md) | Every submission opens with a mandatory Phase One of stubs and failing tests |
 | [ADR-0007](../adr/0007-test-verdict-contract.md) | Mechanical verdicts with expectation inversion, not a boolean |
 | [ADR-0008](../adr/0008-mutation-as-criterion.md) | Mutation scoring is a first-class criterion |
+| [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md) | OpenCode Zen is the only LLM provider; one `OPENCODE_API_KEY` at `0600` |
 
 ## Open Questions
 
@@ -120,8 +124,17 @@ Ordered by what unblocks the most downstream work.
 6. **Scheduling engine** — phases, groups, ownership, and the Manager loop.
 7. **Resolvers beyond JavaScript/TypeScript** — a Rust `mod` resolver is the obvious next one given this repo's shape.
 8. **Audit log** — required for the accountability claims in the security model.
+9. **A second LLM provider** — Vajra is OpenCode Zen only today, and that forecloses every user whose models are hosted elsewhere. The change is contained: a base URL per provider, a model-id namespace, a listing URL, and a decision about how credentials are stored per provider. That last one is the real work, and [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md) records it as deliberately deferred. See [LLM Providers](../runtime/llm-providers.md) for the shape of the change.
 
 The classification spike that previously sat at position 2 is resolved: JUnit XML carries the assertion-versus-environment distinction natively.
+
+## Before a Release
+
+Owed by the shipped `vajra` CLI, independent of the harness work above.
+
+1. **Test the API key configuration path end to end.** It is implemented and verified by hand, not by test: `vajra auth login` writing `~/.vajra/auth.json` at `0600`; the precedence order (`--api-key`, environment, `auth.json`) asserted as a whole; `logout` leaving a session that correctly refuses to start; a key set while a session is open being picked up by the live gate; a rejected key failing cleanly rather than retrying; and the credential appearing in no transcript, session row, index file or log line. The first and last are cheap and worth doing regardless. See [Coverage Gaps](../testing/gaps.md).
+2. **A pty-level smoke test for both front-ends.** Neither TUI is driven by any test today, which is why two real defects got through: a loop that exhausted the heap in about ten seconds, and a key gate that shipped instructing the user to press Enter on a prompt that would not accept it.
+3. **Decide the credential file's fate.** `index/` and its files inherit the umask while everything else in `~/.vajra` is `0600`; stale index files are never evicted and sessions have no retention policy. Neither is dangerous, both grow without asking.
 
 ## Future Experiments
 
