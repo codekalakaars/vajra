@@ -11,6 +11,7 @@ import type { JSX } from '@opentui/solid'
 import { createColors, createFrames } from './spinner.js'
 import { copyReportLine, installSelectionCopy, type CopyReport } from './clipboard.js'
 import { matchCommands, type ClientMessage, type CommandSpec, type Entry, type ServerMessage, type UiState } from './protocol.js'
+import { fuzzyFilter } from './fuzzy.js'
 
 /**
  * The Vajra session screen, in Solid.
@@ -130,6 +131,19 @@ const PANEL_CHROME_CELLS = 5
 
 /** The cursor in front of the selected row, and the two cells it costs. */
 const CURSOR_MARKER = '❯ '
+
+/**
+ * What a picker's fuzzy search runs over: the model's id, and nothing else.
+ *
+ * The id carries every name a user would type — `claude-opus-4-5`,
+ * `gpt-5.4`, `glm-5.3`, `kimi-k3`, `space-bunny-free` — because a gateway
+ * builds them out of the family's name. The rest of the row is numbers, and
+ * matching against numbers is worse than not matching: `pro` is a subsequence
+ * of almost any price and vocabulary, so searching the whole label made
+ * `gpt54pro` return all four gpt models, and `llama` return seven, ranked by
+ * coincidence. The facts are for choosing between the rows you are shown.
+ */
+const filterText = (option: { value: string; label: string }): string => option.value
 
 /** The icon column every tool row reserves, so the labels line up. */
 const INLINE_TOOL_ICON_WIDTH = 2
@@ -255,6 +269,15 @@ function App(props: { renderer: CliRenderer }) {
   const [paletteIdx, setPaletteIdx] = createSignal(0)
   const [pickerIdx, setPickerIdx] = createSignal(0)
   const [picker, setPicker] = createSignal<{ title: string; options: { value: string; label: string }[] } | null>(null)
+  /**
+   * The picker's filter, which is the text on the input line.
+   *
+   * Not a second input: the prompt is the only place a user types, and a filter
+   * box inside a panel would mean typing in one place to choose something in
+   * another. So while a picker is open the input line *is* the query — which is
+   * why opening one clears the input, and why the panel's title says so.
+   */
+  const [pickerQuery, setPickerQuery] = createSignal('')
   const [gone, setGone] = createSignal<number | null>(null)
   /**
    * The last copy attempt, and the frame it should disappear on.
@@ -337,6 +360,63 @@ function App(props: { renderer: CliRenderer }) {
   const paletteOpen = createMemo(() => matches().length > 0)
 
   /**
+   * The picker's title: what it is, how much of it is left, and — while the
+   * input line is the filter — that this is what the line is for.
+   */
+  const pickerTitle = createMemo(() => {
+    const open = picker()
+    if (!open) return ''
+    const total = open.options.length
+    const shown = pickerMatches().length
+    const count = shown === total ? `(${total})` : `(${shown} of ${total})`
+    const hint = pickerQuery().trim() === '' ? 'type to filter' : `“${pickerQuery().trim()}”`
+    return `${open.title}  ${count}  ·  ${hint}`
+  })
+
+  /**
+   * The picker's options after the filter, best first.
+   *
+   * The search runs over the whole row — id, reasoning vocabulary, price,
+   * everything the label says — so `free`, `opus` and `xhigh` all find
+   * something, and a query that matches nothing is an empty list rather than
+   * seventy-five rows with the answer buried somewhere in them.
+   */
+  const pickerMatches = createMemo(() => {
+  const open = picker()
+  if (!open) return []
+  const query = pickerQuery().trim()
+    return query === '' ? open.options : fuzzyFilter(query, open.options, filterText)
+  })
+
+  /**
+   * Keep the cursor on the *option* it was on, not on the index it had.
+   *
+   * The list is re-sorted by every keystroke, so an index would jump to an
+   * unrelated row as the user typed — the same row number, a different
+   * answer. Holding the option means the highlight follows what the cursor was
+   * on when it survived the filter, and falls to the top when it did not.
+   */
+  const holdPickerRow = (query: string): void => {
+    const open = picker()
+    if (!open) return
+    const after = query.trim() === '' ? open.options : fuzzyFilter(query.trim(), open.options, filterText)
+    const current = open.options[pickerIdx()]
+    if (current) {
+      const at = after.findIndex(option => option.value === current.value)
+      if (at !== -1) {
+        setPickerIdx(at)
+        return
+      }
+    }
+    // The cursor's option is gone — the filter no longer has it — so the cursor
+    // goes to the top, which is the best match for what was just typed. Clamping
+    // the old index instead would land on an arbitrary row of a shorter list,
+    // which is the same row number pointing at a different answer.
+    setPickerIdx(0)
+  }
+
+
+  /**
    * The cursor cannot outlive the list.
    *
    * Filtering is what changes the list, and it happens on every keystroke: the
@@ -377,6 +457,8 @@ function App(props: { renderer: CliRenderer }) {
         // The host may say where the cursor belongs; a list sorted by price and
         // name is not somewhere a user expects to land on row 0.
         setPickerIdx(Math.min(Math.max(0, message.initial ?? 0), Math.max(0, message.options.length - 1)))
+        // The input is about to be the filter, so it cannot already hold a task.
+        setPickerQuery('')
         clearField()
       } else if (message.t === 'clear') clearField()
       else if (message.t === 'exit') {
@@ -434,25 +516,43 @@ function App(props: { renderer: CliRenderer }) {
       return
     }
 
-    // A picker owns the keyboard while it is open: there is no text being typed
-    // behind it, so the vi keys are safe here and are the only place they are.
+    // A picker claims four keys and no more: up, down, enter, escape. Everything
+    // else is the filter, so it has to reach the input line — including `j` and
+    // `k`, which used to be down and up here and which is why a model called
+    // "kimi-k3" could not be typed into the list that offered it.
     const open = picker()
     if (open) {
       if (key.name === 'escape') {
         key.preventDefault()
         setPicker(null)
-      } else if (key.name === 'up' || key.name === 'k') {
-        key.preventDefault()
-        setPickerIdx(i => (i === 0 ? open.options.length - 1 : i - 1))
-      } else if (key.name === 'down' || key.name === 'j') {
-        key.preventDefault()
-        setPickerIdx(i => (i === open.options.length - 1 ? 0 : i + 1))
-      } else if (key.name === 'return') {
-        key.preventDefault()
-        const chosen = open.options[pickerIdx()]
-        setPicker(null)
-        if (chosen) send({ t: 'pick', value: chosen.value })
+        setPickerQuery('')
+        clearField()
+        return
       }
+      if (key.name === 'up' || key.name === 'down' || key.name === 'return') {
+        key.preventDefault()
+      }
+      if (key.name === 'up' || key.name === 'down') {
+        const count = pickerMatches().length
+        if (count === 0) return
+        const step = key.name === 'up' ? -1 : 1
+        setPickerIdx(i => (i + step + count) % count)
+        return
+      }
+      if (key.name === 'return') {
+        const chosen = pickerMatches()[pickerIdx()]
+        // Nothing to choose is not a reason to close: the filter is still in the
+        // input, and a user who typed a name with one letter wrong wants to
+        // fix the letter, not to start over from the whole list.
+        if (!chosen) return
+        setPicker(null)
+        setPickerQuery('')
+        clearField()
+        send({ t: 'pick', value: chosen.value })
+        return
+      }
+      // A printable key: let it through, and let the input's onContentChange
+      // re-filter the list around it.
       return
     }
 
@@ -559,6 +659,13 @@ function App(props: { renderer: CliRenderer }) {
      * left rule and two cells of padding on each side — so this is the width a
      * row has to be cut to, and every row in every panel is cut to it.
      */
+    /**
+     * The panel's height, for the list it currently holds.
+     *
+     * Filtered, not total: a list of three rows that started as seventy-five
+     * should shrink back down, or the panel keeps the height of its worst case
+     * and the transcript loses the space for as long as the picker is open.
+     */
     const panelCells = createMemo(
       () => Math.max(8, dimensions().width - sidebarWidth() - COLUMN_MARGIN * 2 - PANEL_CHROME_CELLS),
     )
@@ -582,7 +689,7 @@ function App(props: { renderer: CliRenderer }) {
       const spare = Math.max(0, dimensions().height - promptHeight() - MIN_TRANSCRIPT_ROWS)
       return Math.min(count, Math.max(3, spare - PICKER_CHROME_ROWS)) + PICKER_CHROME_ROWS
     }
-    const pickerRows = createMemo(() => panelRows(picker()?.options.length ?? 0))
+    const pickerRows = createMemo(() => panelRows(pickerMatches().length))
     const paletteRows = createMemo(() => panelRows(matches().length))
 
     return (
@@ -705,7 +812,7 @@ function App(props: { renderer: CliRenderer }) {
             */}
             <Show when={picker()}>
               {open => (
-                <Panel title={`${open().title}  (${open().options.length})`}>
+                <Panel title={pickerTitle()}>
                   {/* The model picker has as many rows as the gateway serves, and a
                       panel that renders all of them runs off the top of the screen:
                       the last rows are drawn over the first ones, so the list is
@@ -713,12 +820,26 @@ function App(props: { renderer: CliRenderer }) {
                       that follows the cursor is the only arrangement that works for
                       both a three-option directory picker and a seventy-five-model
                       catalog. */}
-                  <PickerList
-                    options={open().options}
-                    selected={pickerIdx()}
-                    height={pickerRows() - PICKER_CHROME_ROWS}
-                    cells={panelCells()}
-                  />
+                  <Show
+                    when={pickerMatches().length > 0}
+                    fallback={
+                      /* An empty list with nothing in it reads as a broken
+                         picker; one line saying so is the difference between
+                         "nothing matches" and "this is broken". */
+                      <text
+                        content={`no match for “${pickerQuery().trim()}”`}
+                        fg={theme.listOption}
+                        style={{ flexShrink: 0, width: '100%' }}
+                      />
+                    }
+                  >
+                    <PickerList
+                      options={pickerMatches()}
+                      selected={pickerIdx()}
+                      height={pickerRows() - PICKER_CHROME_ROWS}
+                      cells={panelCells()}
+                    />
+                  </Show>
                 </Panel>
               )}
             </Show>
@@ -787,7 +908,18 @@ function App(props: { renderer: CliRenderer }) {
                 cursorColor={theme.text}
                 minHeight={1}
                 maxHeight={Math.max(6, Math.floor(dimensions().height / 3))}
-                onContentChange={() => setDraft(input?.plainText ?? '')}
+                onContentChange={() => {
+                  const text = input?.plainText ?? ''
+                  setDraft(text)
+                  // While a picker is open this line is the filter, not a task.
+                  // `holdPickerRow` rather than a reset to zero: the list is
+                  // re-sorted by every keystroke, so the cursor has to follow the
+                  // option it was on rather than the row number.
+                  if (picker()) {
+                    setPickerQuery(text)
+                    holdPickerRow(text)
+                  }
+                }}
                 onSubmit={() => submit(input?.plainText ?? '')}
               />
               <box

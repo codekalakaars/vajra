@@ -22,7 +22,6 @@ const {
   modelView,
   modelHint,
   describeModel,
-  detailModel,
   listModels,
   loadModelCatalog,
   refreshModelStatus,
@@ -408,19 +407,21 @@ test('the screen view carries what the sidebar draws and nothing else', async ()
   assert.ok(JSON.parse(JSON.stringify(view)), 'the view has to survive the snapshot it is sent in')
 })
 
-test('the picker and /models lines are built from the model, not from a template', async () => {
+test('a picker row is built from the model, not from a template', async () => {
   await prime(parseCatalog(PAYLOAD))
   const gpt = listModels({ includeUnavailable: true }).find(info => info.id === 'zen/gpt-5.4')
   assert.match(modelHint(gpt), /^272k ctx · reasoning low\/medium\/high\/xhigh · \$2\.5\/\$15$/)
   const plain = listModels({ includeUnavailable: true }).find(info => info.id === 'zen/plain')
   assert.match(modelHint(plain), /no reasoning/)
   assert.match(modelHint(plain), /free/)
-  const detail = detailModel(gpt).join('\n')
-  assert.match(detail, /context {5}272k in, 64k out/)
-  assert.match(detail, /effort: low, medium, high, xhigh/)
-  assert.match(detail, /\$2\.5\/\$15\/\$0\.25 per Mtok/)
-  assert.match(detail, /released {4}2026-03-05/)
-  assert.match(detail, /structured output · attachments · temperature/)
+  // One line, and it carries what a choice turns on: the window, the reasoning
+  // vocabulary, the price, and whether the gateway is serving it to this key.
+  assert.match(
+    describeModel(gpt),
+    /zen\/gpt-5\.4\s+·\s+reasoning low\/medium\/high\/xhigh\s+·\s+272k ctx\s+·\s+\$2\.5\/\$15 per Mtok/,
+  )
+  assert.match(describeModel(plain), /no reasoning/)
+  assert.match(describeModel(plain), /free/)
 })
 
 test('formatTokens is compact and exact where it can be', () => {

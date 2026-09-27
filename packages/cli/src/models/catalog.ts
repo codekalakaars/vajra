@@ -446,28 +446,6 @@ export function describeModel(info: ModelInfo): string {
   return parts.join('  ·  ')
 }
 
-/** A block of lines for `/models <id>`: everything the catalog knows. */
-export function detailModel(info: ModelInfo): string[] {
-  const lines = [
-    `${info.name} (${info.id})`,
-    ...(info.description ? [info.description] : []),
-    `status      ${info.status}${info.statusDetail ? ` — ${info.statusDetail}` : ''}`,
-    `context     ${formatTokens(info.context)} in, ${formatTokens(info.output)} out`,
-    `reasoning   ${
-      info.reasoningMode === 'none'
-        ? 'not supported'
-        : info.reasoningMode === 'effort'
-          ? `effort: ${info.reasoningEfforts.join(', ')}`
-          : info.reasoningMode
-    }`,
-    `price       $${info.cost.input}/$${info.cost.output}/$${info.cost.cacheRead} per Mtok (in/out/cache read)`,
-    `modalities  in: ${info.modalities.input.join(', ') || 'unknown'} · out: ${info.modalities.output.join(', ') || 'unknown'}`,
-    `tools       ${info.toolCall ? 'yes' : 'no'}${info.structuredOutput ? ' · structured output' : ''}${info.attachment ? ' · attachments' : ''}${info.temperature ? ' · temperature' : ''}`,
-    ...(info.releaseDate ? [`released    ${info.releaseDate}`] : []),
-  ]
-  return lines
-}
-
 /** `1_048_576` → `1.0M`. Compact, because these go in a 42-cell sidebar. */
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`

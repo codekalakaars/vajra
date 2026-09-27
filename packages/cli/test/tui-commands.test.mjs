@@ -71,15 +71,15 @@ test('the palette offers every command for an empty query, in order', () => {
 })
 
 test('the palette filters by prefix and by alias', () => {
-  // 'mod' is a prefix of both /model and /models, and the table's order is the
-  // palette's order: pick the model, then read what it can do.
-  assert.deepEqual(matchSlashCommands('mod').map(c => c.name), ['model', 'models'])
+  assert.deepEqual(matchSlashCommands('mod').map(c => c.name), ['model'])
   assert.deepEqual(matchSlashCommands('dir').map(c => c.name), ['dir'])
   assert.deepEqual(matchSlashCommands('ses').map(c => c.name), ['sessions'])
   // An alias prefix finds the command it belongs to.
   assert.deepEqual(matchSlashCommands('session').map(c => c.name), ['sessions'])
-  assert.deepEqual(matchSlashCommands('modelinfo').map(c => c.name), ['models'])
-  assert.deepEqual(matchSlashCommands('model').map(c => c.name), ['model', 'models'])
+  assert.deepEqual(matchSlashCommands('model').map(c => c.name), ['model'])
+  // /models is not a command: the model's facts are in its picker row, and a
+  // second command that dumps the same numbers is a second thing to forget.
+  assert.deepEqual(matchSlashCommands('models'), [])
   assert.deepEqual(matchSlashCommands('zzz'), [])
 })
 

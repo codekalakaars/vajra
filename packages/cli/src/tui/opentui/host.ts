@@ -7,7 +7,6 @@ import type { Writable } from 'node:stream'
 import { resolveApiKeyForModel } from '../../env.js'
 import {
   describeModel,
-  detailModel,
   hasCatalog,
   listModels,
   loadModelCatalog,
@@ -357,24 +356,6 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
       model = picked
       apiKey = explicitKey ?? resolveApiKeyForModel(model)
       store.setSettings({ model })
-      return
-    }
-    if (command === 'models') {
-      // Everything the catalog knows about the model in play, as lines in the
-      // transcript. The alternative — a modal — hides the one thing the user
-      // asked for behind a keypress, and these facts are worth reading while
-      // the session runs.
-      const info = listModels({ includeUnavailable: true }).find(entry => entry.id === model)
-      if (!info) {
-        store.addEntry({
-          kind: 'warning',
-          text: hasCatalog()
-            ? `The catalog has no entry for ${model} — it may have been retired. /model lists what is there.`
-            : 'The model catalog could not be fetched; context window and reasoning levels are using defaults.',
-        })
-        return
-      }
-      for (const line of detailModel(info)) store.addEntry({ kind: 'info', text: line })
       return
     }
     if (command === 'dir') {

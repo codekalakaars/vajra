@@ -2,7 +2,6 @@ import React, { useEffect, useReducer, useState, useSyncExternalStore } from 're
 import { render, Box, useInput, usePaste, useWindowSize } from 'ink'
 import { runSession, isExitCommand, type SessionResult } from '../../session/service.js'
 import { primeModelCatalog, resolveApiKeyForModel } from '../../env.js'
-import { detailModel, hasCatalog, listModels } from '../../models/catalog.js'
 import { getModelLimit } from '../../agent/context-window.js'
 import { SessionStore } from './store.js'
 import { InkSessionUI } from './ink-ui.js'
@@ -249,20 +248,6 @@ function SessionApp({
       // shown in the prompt's meta row, and writing it to the transcript would
       // both bury the conversation and hand the agent a log of keypresses.
       store.cycleReasoning()
-      return
-    }
-    if (cmd === 'models') {
-      const info = listModels({ includeUnavailable: true }).find(entry => entry.id === model)
-      if (!info) {
-        store.addEntry({
-          kind: 'warning',
-          text: hasCatalog()
-            ? `The catalog has no entry for ${model} — it may have been retired. /model lists what is there.`
-            : 'The model catalog could not be fetched; context window and reasoning levels are using defaults.',
-        })
-        return
-      }
-      for (const line of detailModel(info)) store.addEntry({ kind: 'info', text: line })
       return
     }
     const kind = state.prompt?.kind
