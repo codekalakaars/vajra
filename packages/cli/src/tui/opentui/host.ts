@@ -17,6 +17,7 @@ import {
 } from '../../models/catalog.js'
 import { runSession, type SessionResult } from '../../session/service.js'
 import { SessionStore } from '../session/store.js'
+import { askForTask } from '../session/idle-prompt.js'
 import { InkSessionUI } from '../session/ink-ui.js'
 import { HELP_LINES, SLASH_COMMANDS, findSlashCommand, parseSlashCommand } from '../session/commands.js'
 import type { TuiSessionOptions } from '../session/index.js'
@@ -485,18 +486,75 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
 
   // ---- the loop ------------------------------------------------------------
   let exitCode = 0
-  let next: { task?: string; resumeFrom?: string } | 'ask' | null = options.initialTask !== undefined
-    ? { task: options.initialTask }
-    : options.resumeFrom !== undefined
-      ? { resumeFrom: options.resumeFrom }
-      : 'ask'
+  let next: { task?: string; resumeFrom?: string } | null =
+    options.initialTask !== undefined
+      ? { task: options.initialTask }
+      : options.resumeFrom !== undefined
+        ? { resumeFrom: options.resumeFrom }
+        : null
+  let askedOnce = false
 
   try {
-    while (!quitRequested) {
-      const result =
-        next === 'ask'
-          ? await runTask(undefined)
-          : await runTask(next.task, next.resumeFrom)
+    for (;;) {
+      /**
+       * A key first, then a task.
+       *
+       * The shell owns the idle prompt rather than delegating it to
+       * `runSession(undefined)`: a session that bails before it asks — no key,
+       * an unsupported model, a directory that is not there — returned
+       * instantly, and the loop read that as "the run ended" and started the
+       * next one, over and over, appending an error and republishing the whole
+       * snapshot each pass until the heap ran out. Asking here means every
+       * pass through the loop waits on the user, which is the only thing that
+       * can end it.
+       */
+      if (next === null) {
+        const outcome = await askForTask({
+          store,
+          model,
+          explicitKey,
+          currentKey: apiKey,
+          asked: askedOnce,
+          stopping: () => quitRequested,
+        })
+        askedOnce = true
+        // /dir and /sessions drain this prompt with the exit sentinel to end
+        // the run and start the next one elsewhere. That is not the user
+        // leaving, so the pending instruction is read before the exit lands.
+        const pending = nextRun
+        if (pending !== null && outcome.kind === 'exit') {
+          nextRun = null
+          next = pending === 'ask' ? null : pending
+          continue
+        }
+        if (outcome.kind !== 'task') {
+          if (outcome.kind === 'exit' && !quitRequested) {
+            store.addEntry({ kind: 'info', text: 'Goodbye!' })
+            exitCode = 0
+          }
+          break
+        }
+        apiKey = outcome.key
+        next = { task: outcome.task }
+      } else if (!apiKey) {
+        // A task or a resume arrived on the command line with no key behind
+        // it. Say so and let the gate hold it rather than starting a run that
+        // cannot reach the gateway.
+        const outcome = await askForTask({
+          store,
+          model,
+          explicitKey,
+          currentKey: apiKey,
+          asked: askedOnce,
+          stopping: () => quitRequested,
+        })
+        if (outcome.kind !== 'task') break
+        apiKey = outcome.key
+        next = { task: outcome.task }
+      }
+      askedOnce = true
+
+      const result = await runTask(next.task, next.resumeFrom)
       next = null
 
       if (quitRequested) {
@@ -528,7 +586,8 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
           text: `Session ended (exit ${result.exitCode})${rounds} — type a task to continue.`,
         })
       }
-      next = 'ask'
+      // Back to the idle prompt, which is where the key gate lives too.
+      next = null
     }
   } finally {
     answering()

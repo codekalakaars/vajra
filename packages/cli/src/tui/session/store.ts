@@ -3,7 +3,13 @@ import type { AgentEvent } from '../../session/ui.js'
 import { agentDisplay, SILENT_EXIT } from '../../session/ui.js'
 import { clampReasoning, modelView, reasoningLevelsFor, type ModelView, type ReasoningEffort } from '../../models/catalog.js'
 
-export type PromptKind = 'initial-first' | 'initial-reentry' | 'user' | 'confirm-plan' | 'feedback'
+export type PromptKind =
+  | 'initial-first'
+  | 'initial-reentry'
+  | 'user'
+  | 'confirm-plan'
+  | 'feedback'
+  | 'no-key'
 
 /**
  * How long to wait before painting buffered text.
@@ -35,6 +41,13 @@ export const PROMPT_LABELS: Record<PromptKind, string> = {
   user: '',
   'confirm-plan': '? Confirm plan? [y/N]',
   feedback: 'Feedback:',
+  /**
+   * The credential gate. A session with no key cannot start, so the screen
+   * says so and waits here rather than taking a task it cannot run — the full
+   * instructions are in the transcript above, and the gate notices a key the
+   * moment it exists, so this stays one line.
+   */
+  'no-key': 'Waiting for an API key — see the transcript above',
 }
 
 export interface PendingPrompt {

@@ -1,6 +1,6 @@
 import React, { useEffect, useReducer, useState, useSyncExternalStore } from 'react'
 import { render, Box, useInput, usePaste, useWindowSize } from 'ink'
-import { runSession, isExitCommand, type SessionResult } from '../../session/service.js'
+import { runSession, type SessionResult } from '../../session/service.js'
 import { primeModelCatalog, resolveApiKeyForModel } from '../../env.js'
 import { getModelLimit } from '../../agent/context-window.js'
 import { SessionStore } from './store.js'
@@ -38,6 +38,7 @@ import {
   type ScrollState,
 } from './viewport.js'
 import { editorReducer, initialEditor, editorRenderRows } from './editor.js'
+import { askForTask } from './idle-prompt.js'
 
 export interface TuiSessionOptions {
   version: string
@@ -692,37 +693,69 @@ export async function startSession(options: TuiSessionOptions): Promise<number> 
         : options.resumeFrom !== undefined
           ? { resumeFrom: options.resumeFrom, force: Boolean(options.force) }
           : null
-    let firstAsk = true
+    let askedOnce = false
 
     for (;;) {
-      // Idle: nothing in flight. The shell owns this prompt rather than
-      // delegating to runSession's first-task ask, so an early bail (no API
-      // key, unsupported model, missing directory) lands back here waiting
-      // for input instead of re-running the bail in a tight loop.
+      /**
+       * A key first, then a task.
+       *
+       * The shell owns the idle prompt rather than delegating it to
+       * runSession: an early bail (no key, unsupported model, a directory that
+       * is not there) returns before runSession asks anything, and re-running
+       * it on the same inputs is a loop that ends only in a dead heap. Asking
+       * here means every pass waits on the user, and a run always starts with
+       * a real task behind it.
+       */
       if (next === null) {
-        const message = await store.ask(firstAsk ? 'initial-first' : 'initial-reentry')
-        firstAsk = false
+        const outcome = await askForTask({
+          store,
+          model,
+          explicitKey,
+          currentKey: apiKey,
+          asked: askedOnce,
+          stopping: () => quitRequested,
+        })
         const wasInterrupted = store.getSnapshot().interrupted
         store.resetInterrupted()
-        if (quitRequested) {
-          exitCode = 0
-          break
-        }
+        askedOnce = true
+        // /dir and /sessions answer this prompt with "exit" to end the run and
+        // start the next one in the new place. That is not the user leaving,
+        // so the pending instruction is read before the exit is honoured.
         const pending = pendingRun
-        if (pending !== null && isExitCommand(message)) {
-          // /dir or /sessions resolved this prompt with "exit" to restart it.
+        if (pending !== null && outcome.kind === 'exit') {
           pendingRun = null
           next = pending === 'ask' ? null : pending
           continue
         }
-        if (isExitCommand(message)) {
-          if (!wasInterrupted) store.addEntry({ kind: 'info', text: 'Goodbye!' })
+        if (outcome.kind !== 'task') {
+          if (outcome.kind === 'exit' && !wasInterrupted && !quitRequested) {
+            store.addEntry({ kind: 'info', text: 'Goodbye!' })
+          }
           exitCode = 0
           break
         }
-        if (!message.trim()) continue
-        next = { task: message }
+        apiKey = outcome.key
+        next = { task: outcome.task }
+      } else if (!apiKey) {
+        // A task or a resume arrived on the command line with no key behind
+        // it: hold it at the gate rather than starting a run that cannot reach
+        // the gateway.
+        const outcome = await askForTask({
+          store,
+          model,
+          explicitKey,
+          currentKey: apiKey,
+          asked: askedOnce,
+          stopping: () => quitRequested,
+        })
+        if (outcome.kind !== 'task') {
+          exitCode = 0
+          break
+        }
+        apiKey = outcome.key
+        next = { task: outcome.task }
       }
+      askedOnce = true
 
       controller = new AbortController()
       let result: SessionResult
