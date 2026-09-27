@@ -395,6 +395,11 @@ export async function runSession(
     sandbox = await launchSandboxSessionPool(projectDir, sessionId, {
       allowUnenforced,
       requireEnforced: !allowUnenforced,
+      // A worker that writes to its own stdout or stderr gets it said in the
+      // transcript. It used to get it written straight to the terminal, which in
+      // a TUI lands in the middle of the frame — and a resumed plan executes
+      // without the user typing anything, so it starts while they are reading.
+      onWorkerOutput: line => ui.warning(line),
     })
     notifySandboxClose()
     // The enforced case says nothing: nothing has gone wrong, and the status

@@ -29,6 +29,9 @@ export interface SandboxReport {
   warnings: string[]
 }
 
+/** How much of a worker's own output is worth keeping. */
+const WORKER_NOISE_LINES = 20
+
 export interface SandboxSession {
   handle: LaunchHandle
   report: SandboxReport
@@ -56,6 +59,16 @@ export interface LaunchSandboxOptions {
   /** Fail instead of returning a session when the platform cannot enforce. */
   requireEnforced?: boolean
   timeoutMs?: number
+  /**
+   * Called for each line the worker writes to its own stdout or stderr.
+   *
+   * The alternative was writing it to the terminal, which is what this
+   * arrangement exists to stop: the process that forks a worker is often
+   * painting a full-screen TUI, and raw bytes from a child land in the middle of
+   * the frame. The host's job is to put the line somewhere the user is actually
+   * looking — for Vajra, the transcript.
+   */
+  onWorkerOutput?: (line: string) => void
 }
 
 const WORKER_ENV_ALLOWLIST = [
@@ -206,12 +219,51 @@ export async function launchSandboxSession(
     for (const entry of entries) entry.reject(error)
   }
 
+  const onWorkerOutput = options.onWorkerOutput
   const startWorker = (): { child: ChildProcess; report: Promise<SandboxReport> } => {
+    // Piped, not inherited. The worker is a child of a process that may be
+    // painting a full-screen TUI, and an inherited fd is a straight line to the
+    // terminal behind the renderer's back: one Node warning, one landlock
+    // diagnostic, one stray console.log in a tool, and raw bytes land in the
+    // middle of the frame. It looks like corruption, and it is unrecoverable
+    // because the renderer has no idea anything else wrote there.
+    //
+    // A resume is where it shows up most often, because a resumed plan executes
+    // without the user typing anything first — so the workers start printing
+    // over a screen the user is still reading.
     const spawnedChild = fork(resolveWorkerPath(), [], {
       cwd: projectDir,
-      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: buildWorkerEnv(),
     })
+    /**
+     * Anything the worker writes, buffered for the host to render.
+     *
+     * Buffered rather than forwarded because a line can arrive mid-frame, and a
+     * per-chunk call would put one worker's stderr between two of another's.
+     * Bounded because a chatty worker must not become a leak.
+     */
+    const workerNoise: string[] = []
+    const flushNoise = (): void => {
+      if (workerNoise.length === 0) return
+      for (const line of workerNoise) onWorkerOutput?.(line)
+      workerNoise.length = 0
+    }
+    const captureNoise = (stream: NodeJS.ReadableStream | null, label: string): void => {
+      stream?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString().trim()
+        if (text === '') return
+        if (workerNoise.length < WORKER_NOISE_LINES) {
+          workerNoise.push(`${label}: ${text.slice(0, 400)}`)
+          return
+        }
+        // One line too many: say so, and stop keeping them.
+        workerNoise.length = 0
+        workerNoise.push(`${label}: (more output suppressed)`)
+      })
+    }
+    captureNoise(spawnedChild.stdout, 'worker stdout')
+    captureNoise(spawnedChild.stderr, 'worker stderr')
     let reported = false
     let reportSettled = false
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -280,6 +332,8 @@ export async function launchSandboxSession(
 
     const onExit = (code: number | null): void => {
       if (timer) clearTimeout(timer)
+      // The worker is gone, so this is the last chance to say what it said.
+      flushNoise()
       const error = new Error(`Sandbox worker exited (code ${code})`)
       if (!reportSettled) {
         reportSettled = true
