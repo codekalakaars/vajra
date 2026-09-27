@@ -135,7 +135,13 @@ export type ClientMessage =
    * it or the command that opened it never finishes.
    */
   | { t: 'pick'; value: string | null }
-  | { t: 'signal'; name: 'interrupt' }
+  /**
+   * Ctrl-C. The first press interrupts the run; a second, while the first is
+   * still being acted on, means "stop asking" — the same gesture with a
+   * different intent, which is why it is one message with a flag rather than two
+   * names the host has to know the order of.
+   */
+  | { t: 'signal'; name: 'interrupt'; force?: boolean }
   | { t: 'bye' }
 
 /** Parse one NDJSON line. Returns null for anything unreadable. */

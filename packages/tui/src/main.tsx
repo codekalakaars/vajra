@@ -298,6 +298,16 @@ function App(props: { renderer: CliRenderer }) {
     setCopy({ line: copyReportLine(report), until: Date.now() + 2500 })
   }
 
+  /**
+   * When the last Ctrl-C was, for the second-press-to-leave gesture.
+   *
+   * A deadline rather than a count, because a count cannot expire: two presses
+   * an hour apart are two interruptions, not an instruction to quit. The window
+   * is the length of a deliberate double-press and not much more.
+   */
+  let interruptedAt: number | null = null
+  const CTRL_C_WINDOW_MS = 1500
+
   let input: TextareaRenderable | undefined
   let transcript: { scrollTop: number } | undefined
   let promptBlock: { height: number } | undefined
@@ -505,6 +515,16 @@ function App(props: { renderer: CliRenderer }) {
   useKeyboard((key: any) => {
     if (key.name === 'c' && key.ctrl) {
       key.preventDefault()
+      // First press interrupts, second leaves. The count lives here rather than
+      // in the host because the host cannot tell a second press from a first:
+      // it only sees the messages, and the screen is what knows how long ago
+      // the last one was.
+      if (interruptedAt !== null && Date.now() - interruptedAt < CTRL_C_WINDOW_MS) {
+        send({ t: 'signal', name: 'interrupt', force: true })
+        interruptedAt = null
+        return
+      }
+      interruptedAt = Date.now()
       send({ t: 'signal', name: 'interrupt' })
       return
     }

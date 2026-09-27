@@ -216,7 +216,10 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
   let answering = readAnswers(child, message => {
     if (message.t === 'submit') submit(message.value)
     else if (message.t === 'slash') void runCommand(message.name)
-    else if (message.t === 'signal' && message.name === 'interrupt') interrupt()
+    else if (message.t === 'signal' && message.name === 'interrupt') {
+      if (message.force) forceQuit()
+      else interrupt()
+    }
     else if (message.t === 'pick') {
       const waiting = pendingPick
       pendingPick = null
@@ -259,6 +262,32 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
       kind: 'warning',
       text: 'Interrupted. Finishing current step — press Ctrl-C again to force quit.',
     })
+  }
+
+  /**
+   * Leave now, without waiting for the run to notice.
+   *
+   * `quit` is a request: it ends the turn, the session unwinds, the sandbox
+   * closes and the child is told. This is the second Ctrl-C — the run has
+   * already been asked once and is still going, which usually means it is
+   * waiting on a provider round trip that will take its time. So: close the
+   * sandbox, tell the child, and leave. Anything not yet persisted is lost, and
+   * saying so is the honest trade for a keypress that means "I am not waiting".
+   */
+  const forceQuit = (): void => {
+    quitRequested = true
+    store.addEntry({ kind: 'warning', text: 'Forced quit. Anything not already saved is lost.' })
+    store.markInterrupted()
+    controller?.abort()
+    closeSandbox?.()
+    send({ t: 'exit', code: 130 })
+    toScreen.end()
+    // Give the child a moment to paint its exit line before the tty is torn
+    // down, then stop waiting for it either way.
+    setTimeout(() => {
+      child.kill('SIGKILL')
+      process.exit(130)
+    }, 80).unref?.()
   }
 
   const quit = (): void => {
