@@ -56,6 +56,13 @@ export interface SessionUI extends SessionStreamer {
   onAgentEvent(event: AgentEvent): void
 }
 
+/** Token usage reported by the provider for one round. */
+export interface TokenUsage {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+}
+
 /** Who is acting. Renderers group by this once tasks run in parallel. */
 export interface AgentLabel {
   role: 'developer' | 'worker'
@@ -70,7 +77,15 @@ export type AgentEvent =
   /** A provider round-trip began. */
   | { type: 'llm-start'; agent: AgentLabel; round: number }
   /** …and ended. `ms` is wall-clock; `budget` is round N of the loop's cap. */
-  | { type: 'llm-end'; agent: AgentLabel; round: number; ms: number; budget?: number }
+  | {
+      type: 'llm-end'
+      agent: AgentLabel
+      round: number
+      ms: number
+      budget?: number
+      /** Present when the provider reported usage for the round. */
+      usage?: TokenUsage
+    }
   /** A tool is about to run. `summary` is the one argument worth showing. */
   | { type: 'tool-start'; agent: AgentLabel; callId: string; tool: string; summary: string }
   /** Tool finished. `detail` is a short outcome: "4.2 KB", "3 matches", "exit 1". */
@@ -87,6 +102,8 @@ export type AgentEvent =
   | { type: 'phase'; agent: AgentLabel; phase: AgentPhase }
   /** Nothing has happened for a while — emit elapsed so the screen still moves. */
   | { type: 'heartbeat'; agent: AgentLabel; elapsedMs: number }
+  /** Something the user should see (compaction, dropped deps) — not progress. */
+  | { type: 'warning'; agent: AgentLabel; text: string }
 
 const MASKED_STUB = '[REDACTED: masked file — contents withheld]'
 const SUMMARY_MAX = 60
@@ -229,6 +246,16 @@ export function summarizeToolResult(
     case 'run_baseline': {
       const parsed = parseExit(text)
       if (parsed === null) return { ok: false, detail: 'malformed result' }
+      // A negative exit is not an observation of the command: the harness
+      // rejected the call (allow-list, cwd escape, spawn failure) or the child
+      // was killed by a signal. recordBaseline discards exactly these, so the
+      // row must not present one as an expected red baseline — and the reason
+      // belongs in the transcript, or the only way to learn it is to re-run.
+      if (parsed.exitCode < 0) {
+        if (parsed.signal) return { ok: false, detail: `killed by ${parsed.signal}` }
+        const why = clamp(parsed.stderr, 40)
+        return { ok: false, detail: why ? `rejected · ${why}` : 'rejected by harness' }
+      }
       const exit = `exit ${parsed.exitCode}`
       return {
         ok: parsed.ok,
@@ -272,11 +299,28 @@ function safeArrayLength(text: string): number | null {
   }
 }
 
-function parseExit(text: string): { ok: boolean; exitCode: number } | null {
+/** The C1 payload the tool layer returns for a command. */
+interface CommandPayload {
+  ok: boolean
+  exitCode: number
+  signal: string | null
+  stderr: string
+}
+
+function parseExit(text: string): CommandPayload | null {
   try {
-    const parsed = JSON.parse(text) as { exitCode?: number; signal?: string | null }
+    const parsed = JSON.parse(text) as {
+      exitCode?: number
+      signal?: string | null
+      stderr?: unknown
+    }
     if (typeof parsed.exitCode !== 'number') return null
-    return { ok: parsed.exitCode === 0 && !parsed.signal, exitCode: parsed.exitCode }
+    return {
+      ok: parsed.exitCode === 0 && !parsed.signal,
+      exitCode: parsed.exitCode,
+      signal: typeof parsed.signal === 'string' ? parsed.signal : null,
+      stderr: typeof parsed.stderr === 'string' ? parsed.stderr : '',
+    }
   } catch {
     return null
   }

@@ -104,7 +104,9 @@ export interface ParallelPlan {
 
 /**
  * Group tasks into waves by dependency depth, then verify that everything
- * sharing a wave is genuinely independent.
+ * sharing a wave is genuinely independent. A remainder that can never become
+ * ready — a cycle, or a dangling `dependsOn` — is reported as an error rather
+ * than emitted as a wave, since such a plan is unrunnable, not merely unordered.
  */
 export function planParallel(
   tasks: readonly PlannedTaskInput[],
@@ -121,9 +123,36 @@ export function planParallel(
       .map((t) => t.id)
 
     if (wave.length === 0) {
-      // A cycle, or a dependency on an id that does not exist. validatePlan
-      // reports the cause; emit the remainder so the caller sees every task.
-      waves.push(tasks.filter((t) => !placed.has(t.id)).map((t) => t.id))
+      // Nothing is newly ready, so the remainder can never run: either a
+      // dependsOn cycle, or an edge to an id that is not in this plan. Both are
+      // reported rather than papered over — a plan that would stall forever must
+      // not be accepted, and silently dropping the edge would discard the
+      // ordering the Developer meant to express.
+      const stuck = tasks.filter((t) => !placed.has(t.id))
+      const dangling = [
+        ...new Set(
+          stuck.flatMap((t) => (t.dependsOn ?? []).filter((d) => !byId.has(d))),
+        ),
+      ].sort()
+
+      if (dangling.length > 0) {
+        errors.push(
+          `dependsOn references ids that are not in this plan: ${dangling
+            .map((id) => `'${id}'`)
+            .join(', ')}. Every id in dependsOn must be defined by a task in the ` +
+            'same plan.',
+        )
+      } else {
+        errors.push(
+          `Circular dependsOn between ${stuck.map((t) => `'${t.id}'`).join(', ')}. ` +
+            'No task in a cycle can ever become ready, so the plan would stall with ' +
+            'them all pending. Break the cycle by removing one of the dependsOn edges.',
+        )
+      }
+
+      // Still emit the remainder, so a caller that inspects waves (warnings,
+      // contract sharing) sees every task rather than silently losing the tail.
+      waves.push(stuck.map((t) => t.id))
       break
     }
 

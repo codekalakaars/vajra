@@ -9,6 +9,7 @@ allowBuilds:
   '@google/genai': false
   better-sqlite3: true
   esbuild: true
+  node-pty: false
   onnxruntime-node: false
   protobufjs: false
 onlyBuiltDependencies:

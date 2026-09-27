@@ -1,0 +1,4 @@
+# Solid's JSX is not a runtime import — it compiles to direct DOM-ish calls, so
+# Bun needs the transform before it can run a .tsx file. @opentui/solid ships the
+# plugin and a preload that installs it.
+preload = ["@opentui/solid/preload"]

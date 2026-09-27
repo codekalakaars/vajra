@@ -93,7 +93,15 @@ async function runTurn(overrides = {}) {
       userMessage: 'do the thing',
       model: 'zen/test',
       apiKey: 'k',
-      handle: { callTool: async () => '# demo\n' },
+      // read_file answers with the project fixture; run_baseline answers with a
+      // C1 payload that exits non-zero, which is what a proves-change check has
+      // to observe before the change exists.
+      handle: {
+        callTool: async tool =>
+          tool === 'run_baseline'
+            ? JSON.stringify({ exitCode: 1, signal: null, stdout: '', stderr: '' })
+            : '# demo\n',
+      },
       messages: [],
       summaryIndex: [],
       onTextDelta: () => { prose++ },
@@ -173,4 +181,277 @@ test('the event stream is observability only — the turn result is unchanged', 
   const quiet = await runTurn({ onAgentEvent: () => {} })
   assert.equal(quiet.result.type, 'response')
   assert.equal(quiet.result.response, 'done')
+})
+
+const { planShape, MAX_PLAN_TASKS } = await import(developerUrl)
+
+test('a plan is one shape or the other, never a mix', () => {
+  const structured = {
+    title: 'structured task',
+    context: [{ path: 'a.ts', reason: 'why' }],
+    edits: [{ op: 'modify', path: 'a.ts', anchor: 'x', change: 'y' }],
+    verify: [{ command: 'node', args: ['--test'], kind: 'proves-change' }],
+  }
+  const flat = {
+    title: 'flat task',
+    instructions: ['do the thing'],
+    readFile: ['a.ts'],
+    writeFile: ['a.ts'],
+  }
+
+  assert.equal(planShape([structured]).kind, 'structured')
+  assert.equal(planShape([structured, { ...structured, title: 'other' }]).kind, 'structured')
+  assert.equal(planShape([flat]).kind, 'flat')
+  assert.equal(planShape([structured, flat]).kind, 'mixed')
+  assert.match(planShape([structured, flat]).offenders, /structured task/)
+  assert.match(planShape([structured, flat]).offenders, /flat task/)
+  assert.equal(planShape([{ title: 'nothing' }]).kind, 'empty')
+})
+
+/**
+ * Stub the provider to run `prelude` tool calls, then propose `tasks`, then
+ * speak. The prelude is how a plan earns its evidence: read_file populates the
+ * files actually opened, run_baseline the exit codes observed before any edit.
+ */
+function stubPlanProposal(tasks, prelude = []) {
+  const requests = []
+  let round = 0
+  const steps = [...prelude, { name: 'propose_plan', args: { summary: 's', tasks } }]
+  handler = async (_url, init) => {
+    requests.push(JSON.parse(init.body))
+    const step = steps[round++]
+    if (step) {
+      const chunk = {
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: `call_${step.name}_${round}`,
+              type: 'function',
+              function: { name: step.name, arguments: JSON.stringify(step.args) },
+            }],
+          },
+          finish_reason: null,
+        }],
+      }
+      return sseResponse([chunk, TOOL_FINISH])
+    }
+    return sseResponse([TEXT_CHUNK, STOP])
+  }
+  return requests
+}
+
+/** A structured task that passes validation against the runTurn fixture. */
+function validStructuredTask(overrides = {}) {
+  return {
+    id: 'demo',
+    title: 'Extend the README heading',
+    description: 'why it matters',
+    type: 'modify',
+    dependsOn: [],
+    context: [{ path: 'README.md', reason: 'the heading this changes' }],
+    edits: [{ op: 'modify', path: 'README.md', anchor: '# demo', change: 'name the project' }],
+    verify: [{ command: 'node', args: ['--check', 'README.md'], kind: 'proves-change' }],
+    ...overrides,
+  }
+}
+
+/** The evidence a structured plan needs before it can be accepted. */
+const VALIDATION_PRELUDE = [
+  { name: 'read_file', args: { path: 'README.md' } },
+  { name: 'run_baseline', args: { command: 'node', args: ['--check', 'README.md'] } },
+]
+
+/** Every tool result the model was given across all rounds, concatenated. */
+function feedbackSeenBy(requests) {
+  return requests
+    .slice(1)
+    .flatMap(r => r.messages ?? [])
+    .filter(m => m.role === 'tool')
+    .map(m => String(m.content))
+    .join('\n')
+}
+
+test('a plan mixing task shapes is rejected, naming both kinds', async () => {
+  const requests = stubPlanProposal([
+    {
+      id: 'a',
+      title: 'structured one',
+      description: 'why it matters',
+      type: 'modify',
+      context: [{ path: 'README.md', reason: 'see it' }],
+      edits: [{ op: 'modify', path: 'README.md', anchor: '# demo', change: 'add' }],
+      verify: [{ command: 'node', args: ['--check'], kind: 'proves-change' }],
+    },
+    {
+      id: 'b',
+      title: 'flat one',
+      description: 'why it matters',
+      type: 'modify',
+      instructions: ['edit README.md'],
+      readFile: ['README.md'],
+      writeFile: ['README.md'],
+    },
+  ])
+
+  const { result } = await runTurn()
+  assert.equal(result.type, 'response', 'the plan was not accepted, so the turn continued')
+
+  const feedback = feedbackSeenBy(requests)
+  assert.match(feedback, /two different shapes/i)
+  assert.match(feedback, /structured one/)
+  assert.match(feedback, /flat one/)
+})
+
+test('an oversized plan is rejected with the limit and a way out', async () => {
+  const many = Array.from({ length: MAX_PLAN_TASKS + 1 }, (_, i) => ({
+    id: `t${i}`,
+    title: `task ${i}`,
+    description: 'why it matters',
+    type: 'modify',
+    instructions: [`do ${i}`],
+    readFile: ['README.md'],
+    writeFile: ['README.md'],
+  }))
+  const requests = stubPlanProposal(many)
+
+  await runTurn()
+  const feedback = feedbackSeenBy(requests)
+  assert.match(feedback, new RegExp(String(MAX_PLAN_TASKS)))
+  assert.match(feedback, /consolidate/i)
+})
+
+test('rejections escalate: the third one tells the model to change approach', async () => {
+  // A structured task citing a file that was never read is rejected every
+  // time, which is exactly the loop a stuck model falls into.
+  const requests = []
+  let round = 0
+  handler = async (_url, init) => {
+    requests.push(JSON.parse(init.body))
+    if (++round <= 3) {
+      const chunk = {
+        choices: [{
+          delta: {
+            tool_calls: [{
+              index: 0,
+              id: `call_plan_${round}`,
+              type: 'function',
+              function: {
+                name: 'propose_plan',
+                arguments: JSON.stringify({
+                  summary: 's',
+                  tasks: [{
+                    id: 'a',
+                    title: 'never-read file',
+                    description: 'why it matters',
+                    type: 'modify',
+                    context: [{ path: 'never-read.ts', reason: 'needed' }],
+                    edits: [{ op: 'modify', path: 'never-read.ts', anchor: 'x', change: 'y' }],
+                    verify: [{ command: 'node', args: ['--check'], kind: 'proves-change' }],
+                  }],
+                }),
+              },
+            }],
+          },
+          finish_reason: null,
+        }],
+      }
+      return sseResponse([chunk, TOOL_FINISH])
+    }
+    return sseResponse([TEXT_CHUNK, STOP])
+  }
+
+  await runTurn()
+  const feedback = feedbackSeenBy(requests)
+  assert.match(feedback, /Plan rejected:/, 'the first rejection is plain')
+  assert.match(feedback, /attempt 2/, 'the second says it is the second')
+  assert.match(feedback, /attempt 3/, 'and the third is counted')
+  assert.match(feedback, /change approach/i, 'and tells it to stop tweaking')
+})
+
+test('a plan that declares no verifiable shape is rejected, not accepted unchecked', async () => {
+  // The legacy flat shape declares no target files and no success criteria, so
+  // nothing about it can be checked. It used to be accepted with a warning
+  // buried in the tool result, which is not evidence anyone acted on.
+  const requests = stubPlanProposal([
+    {
+      id: 'a',
+      title: 'flat one',
+      description: 'why it matters',
+      type: 'modify',
+      instructions: ['do it'],
+      readFile: ['README.md'],
+      writeFile: ['README.md'],
+    },
+  ])
+
+  const { result } = await runTurn()
+  assert.equal(result.type, 'response', 'the plan was not accepted, so the turn continued')
+
+  const feedback = feedbackSeenBy(requests)
+  assert.match(feedback, /context\/edits\/verify/, 'names the shape it must use')
+  assert.match(feedback, /no target files and no success criteria/, 'says why it is unusable')
+})
+
+test('a plan whose tasks are empty is rejected', async () => {
+  // id/title/description alone: nothing to execute against, nothing to verify.
+  const requests = stubPlanProposal([
+    { id: 'a', title: 'do something', description: 'why it matters', type: 'modify' },
+  ])
+
+  const { result } = await runTurn()
+  assert.equal(result.type, 'response')
+
+  const feedback = feedbackSeenBy(requests)
+  assert.match(feedback, /no target files and no success criteria/)
+})
+
+test('a circular dependsOn is rejected rather than silently unwound', async () => {
+  // Two tasks each waiting on the other can never become ready. This used to be
+  // accepted and then rewritten to dependsOn: [], which discarded the ordering
+  // the model actually meant and ran the pair concurrently anyway.
+  const requests = stubPlanProposal(
+    [
+      validStructuredTask({ id: 'a', dependsOn: ['b'] }),
+      validStructuredTask({
+        id: 'b',
+        dependsOn: ['a'],
+        edits: [{ op: 'create', path: 'b.md', change: 'new file' }],
+        verify: [{ command: 'node', args: ['--check', 'b.md'], kind: 'proves-change' }],
+      }),
+    ],
+    VALIDATION_PRELUDE.concat([
+      { name: 'run_baseline', args: { command: 'node', args: ['--check', 'b.md'] } },
+    ]),
+  )
+
+  const { result } = await runTurn()
+  assert.equal(result.type, 'response', 'a cyclic plan was not accepted')
+
+  const feedback = feedbackSeenBy(requests)
+  assert.match(feedback, /Circular dependsOn/, 'the cause is named, not just "rejected"')
+  assert.match(feedback, /'a'/)
+  assert.match(feedback, /'b'/)
+})
+
+test('a valid structured plan is accepted', async () => {
+  // The accept path for context/edits/verify had no coverage at all: every plan
+  // test was either a rejection or a legacy flat accept.
+  stubPlanProposal([validStructuredTask()], VALIDATION_PRELUDE)
+
+  // Accepting ends the turn, so the acknowledgement is read off the
+  // conversation the caller handed in rather than off another request.
+  const messages = []
+  const { result } = await runTurn({ messages })
+
+  assert.equal(result.type, 'plan', 'a fully evidenced structured plan must be accepted')
+  assert.equal(result.plan.tasks.length, 1)
+  assert.equal(result.plan.tasks[0].id, 'demo')
+  // The flat fields are lowered from the structured ones.
+  assert.deepEqual(result.plan.tasks[0].readFile, ['README.md'])
+  assert.deepEqual(result.plan.tasks[0].writeFile, ['README.md'])
+  assert.deepEqual(result.plan.tasks[0].validation, ['node --check README.md'])
+
+  const toolText = messages.filter(m => m.role === 'tool').map(m => String(m.content)).join('\n')
+  assert.match(toolText, /Plan proposed\. Awaiting user review\./)
 })

@@ -1,6 +1,20 @@
 import { storedOpenCodeKey } from './auth.js'
+import { listModels, loadModelCatalog, modelHint, refreshModelStatus } from './models/catalog.js'
 
 export const DEFAULT_MODEL = 'zen/space-bunny-free'
+
+/**
+ * Load the model catalog and the gateway's live listing, in the background.
+ *
+ * Called once at shell start: a picker opened a second later finds the facts
+ * already there, and one opened before the fetch lands falls back rather than
+ * failing. Resolves when both are done so a caller that wants the facts now
+ * (`/models`) can await it.
+ */
+export async function primeModelCatalog(apiKey?: string): Promise<void> {
+  await loadModelCatalog()
+  await refreshModelStatus(apiKey)
+}
 
 export interface ModelPreset {
   id: string
@@ -24,11 +38,17 @@ export const ZEN_FREE_PRESETS: ModelPreset[] = [
 /**
  * Models the user can actually reach with the keys they have configured.
  * OPENCODE_API_KEY from the env or ~/.vajra/auth.json → Zen presets (zen/*, go/*).
+ *
+ * The live catalog wins when it has been fetched: it knows every model the
+ * gateway serves, and a hardcoded list of ten free ones is a list that was
+ * wrong the day it was written. The presets stay as the answer for a first run
+ * with no cache, which is the one moment there is nothing better to show.
  */
 export function listAvailableModels(env: NodeJS.ProcessEnv = process.env): ModelPreset[] {
-  const out: ModelPreset[] = []
-  if (env.OPENCODE_API_KEY?.trim() || storedOpenCodeKey(env)) out.push(...ZEN_FREE_PRESETS)
-  return out
+  if (!env.OPENCODE_API_KEY?.trim() && !storedOpenCodeKey(env)) return []
+  const live = listModels({ includeUnavailable: false })
+  if (live.length > 0) return live.map(info => ({ id: info.id, hint: modelHint(info) }))
+  return ZEN_FREE_PRESETS
 }
 
 /** Only the OpenCode Zen gateway is supported (zen/* and go/* models). */

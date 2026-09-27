@@ -61,7 +61,51 @@ fn terminate_process(child: &mut Child) {
     let _ = child.kill();
 }
 
+/// Run a command on a thread that is guaranteed to outlive it.
+///
+/// `PR_SET_PDEATHSIG` (see `run_command_blocking`) is delivered when the
+/// *thread* that forked exits, not when the process does. Commands used to be
+/// spawned straight from the thread a napi async task happened to run on, and a
+/// host may recycle that thread as soon as the task resolves — Bun does, and
+/// the kernel then SIGKILLs a still-running child, whose exit code can only be
+/// reported as -1.
+///
+/// Each command therefore gets its own short-lived thread. It lives at least as
+/// long as the child it spawns, so the orphan guarantee is unchanged (children
+/// still die with the process), and commands stay concurrent — a single shared
+/// executor thread would have serialised a tool runner that expects to run
+/// several commands at once.
+fn run_on_dedicated_thread(
+    command: &str,
+    args: Option<Vec<String>>,
+    cwd: Option<String>,
+    timeout_ms: u64,
+) -> Result<CommandResult, Error> {
+    let (reply, done) = std::sync::mpsc::sync_channel(1);
+    let name = format!("vajra-cmd-{}", command);
+    let owned = command.to_string();
+    let spawned = std::thread::Builder::new().name(name).spawn(move || {
+        let _ = reply.send(run_command_blocking(&owned, args, cwd, timeout_ms));
+    });
+    if spawned.is_err() {
+        // No thread available: fall back to running inline rather than failing
+        // the command outright.
+        return run_command_blocking(command, None, None, timeout_ms);
+    }
+    done.recv()
+        .map_err(|_| Error::from_reason("command thread dropped the job".to_string()))?
+}
+
 fn run_command_with_timeout(
+    command: &str,
+    args: Option<Vec<String>>,
+    cwd: Option<String>,
+    timeout_ms: u64,
+) -> Result<CommandResult, Error> {
+    run_on_dedicated_thread(command, args, cwd, timeout_ms)
+}
+
+fn run_command_blocking(
     command: &str,
     args: Option<Vec<String>>,
     cwd: Option<String>,
@@ -328,6 +372,63 @@ mod tests {
     fn reports_nonzero_exit_codes() {
         let result = run_shell("exit 3".into(), None).unwrap();
         assert_eq!(result.code, 3);
+    }
+
+    /// Why the executor thread exists, pinned as a characterisation test.
+    ///
+    /// `PR_SET_PDEATHSIG` is delivered when the *thread* that forked exits, not
+    /// when the process does. A command spawned straight from a short-lived
+    /// thread is therefore SIGKILLed mid-run, and its exit code can only be
+    /// reported as -1. If this test ever starts failing, the kernel behaviour
+    /// changed and the executor may no longer be necessary.
+    #[cfg(unix)]
+    #[test]
+    fn pdeathsig_kills_a_child_when_its_spawning_thread_exits() {
+        use std::time::Duration;
+        let mut child = thread::spawn(|| {
+            let mut cmd = Command::new("sleep");
+            cmd.arg("1");
+            cmd.stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            unsafe {
+                cmd.pre_exec(|| {
+                    let _ = libc::setpgid(0, 0);
+                    let _ = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                    Ok(())
+                });
+            }
+            cmd.spawn().expect("spawn sleep")
+        })
+        .join()
+        .expect("spawning thread");
+
+        thread::sleep(Duration::from_millis(150));
+        let status = child.wait().expect("wait for child");
+        assert!(
+            status.code().is_none(),
+            "child was expected to be killed by a signal, got {status:?}"
+        );
+    }
+
+    /// The regression this fixes: a command must outlive the thread that
+    /// requested it, and must report its real exit code rather than -1.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_outlives_the_thread_that_requested_it() {
+        let result = thread::spawn(|| {
+            // Longer than the requesting thread takes to return, which is the
+            // window in which PDEATHSIG used to kill it.
+            run_command_with_timeout("sleep", Some(vec!["1".into()]), None, 10_000)
+        })
+        .join()
+        .expect("requesting thread")
+        .expect("command result");
+
+        assert_eq!(
+            result.code, 0,
+            "a command outliving its requesting thread must report its real code"
+        );
     }
 
     #[test]

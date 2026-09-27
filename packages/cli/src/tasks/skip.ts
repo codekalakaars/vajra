@@ -101,8 +101,5 @@ export async function evaluateSkipIf(
   runCommand?: SkipCommandRunner,
 ): Promise<boolean> {
   const result = await evaluateSkipIfDetailed(conditions, projectDir, runCommand)
-  for (const w of result.warnings) {
-    console.warn(`⚠ ${w}`)
-  }
   return result.shouldSkip
 }

@@ -311,6 +311,10 @@ export class TerminalStreamer {
         )
         return
       }
+      case 'warning': {
+        this.writeLine(`\x1b[33m⚠ ${event.text}\x1b[0m`)
+        return
+      }
     }
   }
 

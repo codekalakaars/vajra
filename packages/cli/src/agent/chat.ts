@@ -5,6 +5,8 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from 'openai/resources/chat'
+import type { TokenUsage } from '../session/ui.js'
+import { modelInfo } from '../models/catalog.js'
 
 export interface ToolCall {
   id: string
@@ -25,9 +27,32 @@ export interface OpenAiToolSpec {
   function: { name: string; description: string; parameters: unknown }
 }
 
+/**
+ * Reasoning effort. Sent as the OpenAI-compatible `reasoning_effort`; `off`
+ * omits the parameter entirely rather than sending "none", because providers
+ * disagree about what "none" means and silence is unambiguous.
+ *
+ * The vocabulary is the catalog's, not ours: a model that accepts `xhigh` or
+ * `max` gets a level we can name, and a model that only takes a toggle is sent
+ * `reasoningToggle` instead of an effort it would reject. See
+ * `models/catalog.ts` for where the per-model list comes from.
+ */
+export type ReasoningEffort = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+/**
+ * For a model whose reasoning is a switch rather than a dial: `true` sends
+ * `reasoning: { enabled: true }`, and no reasoning is sent at all for `false`.
+ * A toggle model has no effort, so the two are mutually exclusive on the wire.
+ */
+export type ReasoningToggle = boolean
+
 export interface ChatCompletionRequest {
   apiKey: string
   model: string
+  /** Omitted from the wire when 'off'. */
+  reasoningEffort?: ReasoningEffort
+  /** Set for a toggle-only model; see ReasoningToggle. Ignored with an effort. */
+  reasoningToggle?: ReasoningToggle
   messages: ChatMessage[]
   tools?: OpenAiToolSpec[]
   toolChoice?: 'auto' | 'required' | 'none'
@@ -47,12 +72,14 @@ export interface ChatCompletionRequest {
 
 export type ChatRoundEvent =
   | { type: 'llm-start'; round: number }
-  | { type: 'llm-end'; round: number; ms: number; budget?: number }
+  | { type: 'llm-end'; round: number; ms: number; budget?: number; usage?: TokenUsage }
   | { type: 'heartbeat'; elapsedMs: number }
 
 export interface ChatCompletionResult {
   message: ChatMessage
   finishReason: string | null
+  /** Provider-reported token usage, when the gateway supplies it. */
+  usage?: TokenUsage
 }
 
 const ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
@@ -187,6 +214,51 @@ export function computeRetryDelayMs(err: unknown, attempt: number): number {
   return Math.floor(Math.random() * base) + 1
 }
 
+/**
+ * The reasoning fields for one request body, or nothing.
+ *
+ * An effort wins over a toggle, because a model that publishes a vocabulary is
+ * the only one that documents `reasoning_effort`; a toggle-only model gets
+ * `reasoning: { enabled: true }`, and both shapes vanish for `off` so that
+ * silence stays the unambiguous way to say "do not think harder".
+ */
+export function reasoningParams(
+  effort: ReasoningEffort | undefined,
+  toggle?: ReasoningToggle,
+): Record<string, unknown> {
+  if (effort && effort !== 'off') return { reasoning_effort: effort }
+  if (toggle === true) return { reasoning: { enabled: true } }
+  return {}
+}
+
+/**
+ * The reasoning fields for one request, decided per model.
+ *
+ * The model decides the shape because only the model knows it: the catalog says
+ * whether this id takes an effort vocabulary or a plain toggle, and a level the
+ * model does not accept is dropped rather than sent. With no catalog entry —
+ * a cold cache, an id models.dev has not published — the request carries
+ * `reasoning_effort` as it always did, which is the shape the gateway has
+ * accepted from us since the first release.
+ */
+export function reasoningParamsFor(
+  model: string,
+  effort: ReasoningEffort | undefined,
+  explicitToggle?: ReasoningToggle,
+): Record<string, unknown> {
+  const info = modelInfo(model)
+  if (!info) return reasoningParams(effort)
+  if (info.reasoningMode === 'none') return {}
+  if (info.reasoningMode === 'toggle') {
+    // An explicit toggle from the caller wins; otherwise the dial decides.
+    const on = explicitToggle ?? Boolean(effort && effort !== 'off')
+    return reasoningParams(undefined, on)
+  }
+  if (info.reasoningMode === 'budget') return {}
+  const accepted = effort !== undefined && effort !== 'off' && info.reasoningEfforts.includes(effort)
+  return reasoningParams(accepted ? effort : undefined)
+}
+
 function toSdkMessages(messages: ChatMessage[]): ChatCompletionMessageParam[] {
   return messages.map(m => {
     if (m.role === 'tool') {
@@ -226,6 +298,19 @@ function toSdkTools(tools: OpenAiToolSpec[] | undefined): ChatCompletionTool[] |
   }))
 }
 
+function toUsage(
+  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null | undefined,
+): TokenUsage | undefined {
+  if (!usage || typeof usage.prompt_tokens !== 'number') return undefined
+  const promptTokens = usage.prompt_tokens
+  const completionTokens = usage.completion_tokens ?? 0
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: usage.total_tokens ?? promptTokens + completionTokens,
+  }
+}
+
 function toResult(completion: ChatCompletion): ChatCompletionResult {
   const choice = completion.choices[0]
   if (!choice) throw new Error('Provider response had no choices')
@@ -246,7 +331,8 @@ function toResult(completion: ChatCompletion): ChatCompletionResult {
       : {}),
   }
 
-  return { message, finishReason: choice.finish_reason ?? null }
+  const usage = toUsage(completion.usage)
+  return { message, finishReason: choice.finish_reason ?? null, ...(usage ? { usage } : {}) }
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -263,9 +349,10 @@ const HEARTBEAT_MS = 750
  * outstanding. The heartbeat is what keeps the screen moving through a
  * 40-second provider call — the start/end pair alone leaves it silent.
  *
- * Returns a stop function; call it from a `finally`.
+ * Returns a stop function that accepts the round's usage; call it from a
+ * `finally`.
  */
-function watchRound(request: ChatCompletionRequest): () => void {
+function watchRound(request: ChatCompletionRequest): (usage?: TokenUsage) => void {
   const onEvent = request.onEvent
   if (!onEvent) return () => {}
   const round = request.round ?? 1
@@ -278,13 +365,14 @@ function watchRound(request: ChatCompletionRequest): () => void {
   }, HEARTBEAT_MS)
   timer.unref?.()
 
-  return () => {
+  return (usage?: TokenUsage) => {
     clearInterval(timer)
     onEvent({
       type: 'llm-end',
       round,
       ms: Date.now() - startedAt,
       ...(budget !== undefined ? { budget } : {}),
+      ...(usage ? { usage } : {}),
     })
   }
 }
@@ -298,6 +386,7 @@ export async function chatCompletion(
   const params = {
     model: resolvedModel,
     messages: toSdkMessages(request.messages),
+    ...reasoningParamsFor(request.model, request.reasoningEffort, request.reasoningToggle),
     ...(request.tools ? { tools: toSdkTools(request.tools) } : {}),
     ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
     timeout: REQUEST_TIMEOUT_MS,
@@ -305,12 +394,15 @@ export async function chatCompletion(
   }
 
   const endRound = watchRound(request)
+  let roundUsage: TokenUsage | undefined
   try {
     for (let attempt = 0; ; attempt++) {
       throwIfAborted(request.signal)
       try {
         const completion = await client.chat.completions.create(params)
-        return toResult(completion)
+        const result = toResult(completion)
+        roundUsage = result.usage
+        return result
       } catch (err) {
         if (isAbortError(err)) throw err
         if (isRetryable(err) && attempt < MAX_RETRIES) {
@@ -322,7 +414,7 @@ export async function chatCompletion(
       }
     }
   } finally {
-    endRound()
+    endRound(roundUsage)
   }
 }
 
@@ -337,9 +429,13 @@ export async function streamChatCompletion(
   const params = {
     model: resolvedModel,
     messages: toSdkMessages(request.messages),
+    ...reasoningParamsFor(request.model, request.reasoningEffort, request.reasoningToggle),
     ...(request.tools ? { tools: toSdkTools(request.tools) } : {}),
     ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
     stream: true,
+    // The gateway reports totals on a final chunk with an empty `choices`
+    // array — without this the meter would never see a number.
+    stream_options: { include_usage: true },
     timeout: REQUEST_TIMEOUT_MS,
     ...(request.signal ? { signal: request.signal } : {}),
   }
@@ -349,6 +445,7 @@ export async function streamChatCompletion(
   let content = ''
 
   const endRound = watchRound(request)
+  let roundUsage: TokenUsage | undefined
   try {
     for (let attempt = 0; ; attempt++) {
       throwIfAborted(request.signal)
@@ -361,6 +458,9 @@ export async function streamChatCompletion(
 
         for await (const chunk of stream) {
           throwIfAborted(request.signal)
+          // The usage chunk carries no choices — read it before the guard.
+          const usage = toUsage(chunk.usage)
+          if (usage) roundUsage = usage
           const choice = chunk.choices[0]
           if (!choice) continue
 
@@ -414,7 +514,11 @@ export async function streamChatCompletion(
           ...(orderedToolCalls.length > 0 ? { tool_calls: orderedToolCalls } : {}),
         }
 
-        return { message, finishReason }
+        return {
+          message,
+          finishReason,
+          ...(roundUsage ? { usage: roundUsage } : {}),
+        }
       } catch (err) {
         if (isAbortError(err)) throw err
         if (isRetryable(err) && attempt < MAX_RETRIES) {
@@ -429,6 +533,6 @@ export async function streamChatCompletion(
       }
     }
   } finally {
-    endRound()
+    endRound(roundUsage)
   }
 }

@@ -130,10 +130,28 @@ Examples:
   $ vajra run -m zen/mimo-v2.5-free "add dark mode"
   $ vajra run -t 600 -y "refactor the database layer"
   $ vajra run --allow-unenforced "continue without OS sandbox enforcement"
-  `)
+
+On a TTY, run/resume launch the full-screen TUI. Without one (CI, pipes) they
+fall back to the legacy line-print frontend.
+    `)
   .action(async (task, options) => {
     const model = options.model as string
     const apiKey = resolveApiKeyForModel(model, options.apiKey as string | undefined)
+    if (process.stdin.isTTY && process.stdout.isTTY) {
+      process.exitCode = await startTUI({
+        version: CLI_VERSION,
+        task,
+        model,
+        projectDir: options.dir as string,
+        // Raw key: the shell re-resolves on /model unless this was explicit.
+        apiKey: options.apiKey as string | undefined,
+        autoConfirm: Boolean(options.yes),
+        timeout: parseInt(options.timeout, 10) || 300,
+        allowUnenforced: Boolean(options.allowUnenforced),
+        concurrency: parseInt(options.concurrency, 10) || undefined,
+      })
+      return
+    }
     await runCommand({
       task,
       apiKey,
@@ -237,6 +255,17 @@ program
       process.exit(1)
     }
     const model = options.model
+    if (process.stdin.isTTY && process.stdout.isTTY) {
+      process.exitCode = await startTUI({
+        version: CLI_VERSION,
+        model,
+        projectDir: id ? stored.projectDir : projectDir,
+        resumeFrom: sessionId,
+        force: Boolean(options.force),
+        apiKey: options.apiKey as string | undefined,
+      })
+      return
+    }
     await runCommand({
       resumeFrom: sessionId,
       force: Boolean(options.force),
@@ -396,7 +425,7 @@ program.addCommand(videoCommand)
 // If no command provided, launch TUI
 const args = process.argv.slice(2)
 if (args.length === 0) {
-  await startTUI(CLI_VERSION)
+  process.exitCode = await startTUI({ version: CLI_VERSION })
 } else {
   program.parse()
 }

@@ -177,6 +177,53 @@ test('summarizeToolResult counts matches, entries and exits', () => {
   assert.equal(baseline.detail, 'exit 1 (expected)')
 })
 
+test('a rejected baseline is not an expected observation, and says why', () => {
+  // What the tool layer returns for a spawn failure (npm: Permission denied).
+  const rejected = summarizeToolResult(
+    'run_baseline',
+    { command: 'npm', args: ['test'] },
+    JSON.stringify({
+      exitCode: -1,
+      signal: null,
+      stdout: '',
+      stderr: 'spawn npm EACCES: permission denied',
+    }),
+    10,
+  )
+  assert.equal(rejected.ok, false)
+  // recordBaseline discards negatives, so "(expected)" would be a lie.
+  assert.doesNotMatch(rejected.detail, /expected/)
+  assert.match(rejected.detail, /^rejected · /)
+  assert.match(rejected.detail, /permission denied/)
+
+  // A signal kill is reported as such, not as a rejection.
+  const killed = summarizeToolResult(
+    'run_baseline',
+    { command: 'node', args: ['test.js'] },
+    JSON.stringify({ exitCode: -1, signal: 'SIGTERM', stdout: '', stderr: '' }),
+    10,
+  )
+  assert.equal(killed.detail, 'killed by SIGTERM')
+
+  // No reason recorded: still not an observation, and still not a bare code.
+  const bare = summarizeToolResult(
+    'run_baseline',
+    { command: 'node' },
+    JSON.stringify({ exitCode: -1, signal: null, stdout: '', stderr: '' }),
+    10,
+  )
+  assert.equal(bare.detail, 'rejected by harness')
+
+  // run_command gets the same treatment — a negative exit is not a real code.
+  const cmd = summarizeToolResult(
+    'run_command',
+    { command: 'npm' },
+    JSON.stringify({ exitCode: -1, signal: null, stdout: '', stderr: 'not allowed' }),
+    10,
+  )
+  assert.equal(cmd.detail, 'rejected · not allowed')
+})
+
 test('summarizeToolResult marks a tool error as failed and keeps the message short', () => {
   const denied = summarizeToolResult(
     'write_file',

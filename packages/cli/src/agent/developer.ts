@@ -15,7 +15,8 @@ import {
 } from '@codekalakaars/vajra-protocol'
 import { resolve } from 'node:path'
 import { deriveIndexBudget } from '@codekalakaars/vajra-agent-core'
-import { streamChatCompletion, type ChatMessage, type ToolCall } from './chat.js'
+import { streamChatCompletion, type ChatMessage, type ReasoningEffort, type ToolCall } from './chat.js'
+import { getModelLimit } from './context-window.js'
 import { getDeveloperToolSpecs, parseToolCall } from './tools.js'
 import { tokenizeCommand } from '../tools/handle.js'
 import { scanProject } from '../native.js'
@@ -44,21 +45,6 @@ export interface LaunchHandle {
 
 // Approximate tokens per character (conservative estimate)
 const CHARS_PER_TOKEN = 4
-
-// Default context limits by provider (in tokens)
-// Most models fall into these ranges; specific models can override if known
-const PROVIDER_DEFAULTS: Record<string, number> = {
-  'zen/': 128000,         // Zen models
-  'go/': 128000,          // Go models
-  default: 128000,
-}
-
-function getModelLimit(model: string): number {
-  for (const [prefix, limit] of Object.entries(PROVIDER_DEFAULTS)) {
-    if (prefix !== 'default' && model.startsWith(prefix)) return limit
-  }
-  return PROVIDER_DEFAULTS.default
-}
 
 function estimateTokens(message: ChatMessage): number {
   let tokens = 0
@@ -196,36 +182,107 @@ function buildDeveloperConversationPrompt(
     '- NEVER ask more than 2 clarifying questions — prefer making reasonable defaults',
     '- Only read files you need to understand the task',
     '- Tasks must be HIGHLY PRESCRIPTIVE — the worker should not need to think',
-    '- NEVER put "run tests" or "verify" as the first task — always edit code first, then test',
+    '- Every plan opens with Phase One: stub tasks, then test tasks, then the work itself',
     '',
-    'When calling propose_plan, each task MUST include:',
+    'When calling propose_plan, EVERY task uses this shape:',
+    '',
+    '- id: short kebab-case id, unique in the plan (e.g. "todo-clobber")',
     '- title: Short title',
     '- description: What needs to be done and why',
-    '- instructions: EXACT step-by-step instructions (e.g. "Add try-catch around line 42 in src/api.ts")',
-    '- readFile: Files the worker needs to read for context',
-    '- writeFile: Files the worker will create or modify',
-    '- validation: Commands to run after completion (must exit 0 on success). IMPORTANT: Do NOT use commands that require a running server (npm test, curl localhost, etc.) unless the task explicitly starts the server. Use syntax checks (node --check, tsc --noEmit) or static analysis (eslint) instead.',
-    '- dependsOn: Task IDs this depends on',
-    '- type: create, modify, or refactor',
-    '- complexity: low, medium, or high (affects task sizing)',
-    '- rollback: Commands to undo changes if validation fails (optional)',
-    '- alternativeApproaches: Different ways to solve this task (optional)',
+    '- type: create, modify, delete, or refactor',
+    '- dependsOn: task ids that must finish first (empty only when the task is independent)',
+    '- context: [{path, reason}] — files to read AND why, one line of reason each',
+    '- edits: [{op, path, anchor, change}] — the edits themselves, one entry per site',
+    '    · op "create" needs no anchor; op "modify" and "delete" MUST quote the anchor',
+    '- verify: [{command, args, cwd, kind}] — how to prove it works',
+    '    · kind "proves-change" must FAIL now and pass after the task',
+    '    · kind "regression-guard" must pass now and keep passing',
     '',
-    'CRITICAL: Instructions should be so specific that a worker with no context can execute them.',
+    'PLAN STRUCTURE — every plan opens with Phase One, in this order:',
+    '',
+    '1. STUB TASKS. One per file the work will touch. op "create", writing the',
+    '   minimal valid file: imports resolved, the symbols the rest of the work will',
+    '   reference exported, behaviour empty. Nothing can come first, because a test',
+    '   cannot be written against a file that does not exist.',
+    '2. TEST TASKS. One per behaviour. Write a test that runs against its stub and',
+    '   fails right now, because the behaviour is not implemented yet. Its verify',
+    '   checks that the test file itself is valid — NOT that the suite passes. A test',
+    '   that already passed would mean the behaviour is already implemented.',
+    '3. IMPLEMENTATION TASKS. Make those failing tests pass.',
+    '',
+    'Wire the order with dependsOn: each test task depends on the stub for the file',
+    'it tests, and each implementation task depends on the test it satisfies. Every',
+    'task is still a normal task — nothing marks them as groundwork except their',
+    'position and what their verify checks.',
+    '',
+    'WRITTEN EXAMPLE — the shape that passes, with Phase One first:',
+    '',
+    '{',
+    '  "summary": "Stop setTodos from dropping a just-added todo",',
+    '  "tasks": [',
+    '    {',
+    '      "id": "todo-stub",',
+    '      "title": "Create src/state/todo.ts",',
+    '      "description": "Minimal valid module: the Todo type, the initial state, and an exported setTodos. No behaviour yet.",',
+    '      "type": "create",',
+    '      "dependsOn": [],',
+    '      "edits": [{',
+    '        "op": "create",',
+    '        "path": "src/state/todo.ts",',
+    '        "change": "export type Todo = { id: string; text: string }; export const initialTodos: Todo[] = []; export function setTodos(next: Todo[]): void {}"',
+    '      }],',
+    '      "verify": [{ "command": "node", "args": ["--check", "src/state/todo.ts"], "kind": "proves-change" }]',
+    '    },',
+    '    {',
+    '      "id": "todo-clobber-test",',
+    '      "title": "Test that addTodo does not drop the new todo",',
+    '      "description": "A todo added in the same tick as the sync effect must survive it.",',
+    '      "type": "create",',
+    '      "dependsOn": ["todo-stub"],',
+    '      "edits": [{',
+    '        "op": "create",',
+    '        "path": "src/state/todo.test.ts",',
+    '        "change": "node:test test that calls addTodo then the sync effect and asserts the todo is still present"',
+    '      }],',
+    '      "verify": [{ "command": "node", "args": ["--check", "src/state/todo.test.ts"], "kind": "proves-change" }]',
+    '    },',
+    '    {',
+    '      "id": "todo-clobber",',
+    '      "title": "Make addTodo use the functional updater",',
+    '      "description": "addTodo calls setTodos([...todos, t]) and the effect then calls setTodos(todos), so the new todo is lost on the next render.",',
+    '      "type": "modify",',
+    '      "dependsOn": ["todo-clobber-test"],',
+    '      "context": [',
+    '        { "path": "src/state/todo.ts", "reason": "addTodo and the sync effect that clobbers it" }',
+    '      ],',
+    '      "edits": [{',
+    '        "op": "modify",',
+    '        "path": "src/state/todo.ts",',
+    '        "anchor": "  const addTodo = (t: Todo) => setTodos([...todos, t])",',
+    '        "change": "append the new todo to the previous state instead: setTodos(prev => [...prev, t])"',
+    '      }],',
+    '      "verify": [{ "command": "node", "args": ["--test", "src/state/todo.test.ts"], "kind": "proves-change" }]',
+    '    }',
+    '  ]',
+    '}',
+    '',
+    'Do NOT add fields the harness ignores. Omit complexity, validationStrategy,',
+    'estimatedDuration, alternativeApproaches and allowedTools unless the user asked',
+    'for something specific. rollback and timeoutSeconds are only worth setting when a',
+    'task is genuinely risky or slow.',
+    '',
+    'CRITICAL: each edits[].change must be specific enough that a worker with no',
+    'context can execute it. Name the file, the function and the behaviour.',
     'Bad: "Add error handling to the API"',
-    'Good: "In src/api/users.ts, wrap the db.query() call at line 42 in try-catch. In the catch block, return { status: 500, error: e.message }. Import HttpError from src/utils/errors.ts if not already imported."',
+    'Good: "In src/api/users.ts, wrap the db.query() call in try-catch; in the catch ' +
+      'return { status: 500, error: e.message }, importing HttpError from src/utils/errors.ts."',
     '',
-    'Tasks should be independent where possible; specify dependencies explicitly.',
-    'Aim for 2-8 tasks; keep related work together.',
-    '',
-    'Task Sizing Guidelines:',
-    '- Low complexity: Single file, simple changes (1-2 hours)',
-    '- Medium complexity: Multiple files, moderate changes (2-4 hours)',
-    '- High complexity: Architecture changes, many files (4+ hours)',
-    '',
-    'Error Recovery:',
-    '- rollback: Commands to undo changes if validation fails',
-    '- alternativeApproaches: Different ways to solve this task',
+    'SIZING: 2-4 units of work. Phase One adds a stub and a test task per unit, so',
+    'that is roughly 6-12 tasks; 12 is the hard limit. Above that the plan is',
+    'rejected: the work is one concern per task, and a task that needs a list of',
+    'unrelated verbs is two tasks. Keep related edits to one file in one task; split',
+    'across files only when they genuinely do not depend on each other. If the work',
+    'really is larger, plan the first slice and leave the rest for the user.',
     '',
     'Project directory: ' + projectDir,
     '',
@@ -263,6 +320,12 @@ function buildDeveloperConversationPrompt(
     '   shows — a return shape, a field name, which module owns a table — add it to',
     '   `contracts` with the statement written out in full. Assume the agent reading',
     '   it has seen nothing else: no "as discussed", no "the above".',
+    '',
+    '7. PHASE ONE IS NOT OPTIONAL. No implementation task may come first. Every plan',
+    '   starts with the stub for each file it touches, then the test for each',
+    '   behaviour, then the implementation — and each depends on the one before it.',
+    '   An implementation-first plan has no mechanical definition of "done": nothing',
+    '   in it fails before the work and passes after.',
   ].join('\n')
 }
 
@@ -407,74 +470,6 @@ export function parseProposePlanArgs(raw: unknown, projectDir?: string): ParsePl
   }
 }
 
-function detectAndRemoveCircularDeps(tasks: PlannedTask[]): PlannedTask[] {
-  const taskMap = new Map(tasks.map(t => [t.id, t]))
-  const visited = new Set<string>()
-  const recursionStack = new Set<string>()
-  const circularDeps = new Set<string>()
-
-  function dfs(taskId: string): boolean {
-    if (recursionStack.has(taskId)) {
-      circularDeps.add(taskId)
-      return true
-    }
-    if (visited.has(taskId)) return false
-
-    visited.add(taskId)
-    recursionStack.add(taskId)
-
-    const task = taskMap.get(taskId)
-    if (task) {
-      for (const dep of task.dependsOn) {
-        if (dfs(dep)) {
-          circularDeps.add(taskId)
-        }
-      }
-    }
-
-    recursionStack.delete(taskId)
-    return circularDeps.has(taskId)
-  }
-
-  for (const task of tasks) {
-    dfs(task.id)
-  }
-
-  if (circularDeps.size > 0) {
-    console.warn(`Removing circular dependencies from tasks: ${[...circularDeps].join(', ')}`)
-    for (const task of tasks) {
-      if (circularDeps.has(task.id)) {
-        task.dependsOn = []
-      } else {
-        task.dependsOn = task.dependsOn.filter(dep => !circularDeps.has(dep))
-      }
-    }
-  }
-
-  return tasks
-}
-
-function addFileLevelDependencies(tasks: PlannedTask[]): PlannedTask[] {
-  // Edges always point backwards in plan order: a later task that touches a
-  // file an earlier task writes waits for it. Adding the edge in both
-  // directions (as this used to) deadlocks the queue whenever two tasks touch
-  // the same file — neither ever becomes ready and the plan silently stalls.
-  for (let i = 0; i < tasks.length; i++) {
-    const task = tasks[i]
-    for (let j = 0; j < i; j++) {
-      const earlier = tasks[j]
-      const writesFileWeTouch = earlier.writeFile.some(
-        (file) => task.readFile.includes(file) || task.writeFile.includes(file),
-      )
-      if (writesFileWeTouch && !task.dependsOn.includes(earlier.id)) {
-        task.dependsOn.push(earlier.id)
-      }
-    }
-  }
-
-  return tasks
-}
-
 /** Canonical key for a baseline observation: argv (tokenized so a bundled
  *  command string and an argv-form one match) plus the resolved cwd. */
 function baselineKey(
@@ -488,10 +483,88 @@ function baselineKey(
   return JSON.stringify([argv, resolve(projectDir, cwd ?? '.')])
 }
 
-function hasStructuredFields(tasks: readonly PlannedTaskInput[]): boolean {
-  return tasks.some(
-    (t) => (t.edits?.length ?? 0) > 0 || (t.context?.length ?? 0) > 0 || (t.verify?.length ?? 0) > 0,
-  )
+/**
+ * Which task shape a task is written in.
+ *
+ * `structured` is the only shape a plan may use: context/edits/verify are the
+ * fields the validator can actually check (a file was really read, an anchor
+ * really appears, a baseline really failed). `flat` and `empty` declare no
+ * target files and no success criteria, so nothing about them can be verified —
+ * they are reported here so the dispatcher can reject them with an
+ * explanation. A plan that mixes shapes gets half its tasks verified and half
+ * skipped, so it is rejected and named rather than silently lowered.
+ */
+function taskShape(task: PlannedTaskInput): 'structured' | 'flat' | 'empty' {
+  if ((task.edits?.length ?? 0) > 0 || (task.context?.length ?? 0) > 0 || (task.verify?.length ?? 0) > 0) {
+    return 'structured'
+  }
+  if (
+    (task.instructions?.length ?? 0) > 0 ||
+    (task.readFile?.length ?? 0) > 0 ||
+    (task.writeFile?.length ?? 0) > 0
+  ) {
+    return 'flat'
+  }
+  return 'empty'
+}
+
+const q = (s: string): string => `'${s}'`
+
+/** Hard ceiling on one plan, enforced rather than merely suggested. */
+export const MAX_PLAN_TASKS = 12
+
+/**
+ * Feed a rejection back to the model, and make the attempt count visible.
+ *
+ * The validator's messages already say what to fix; what was missing was any
+ * sense of repetition. A model that has been rejected three times keeps
+ * re-proposing the same plan shape, so the third rejection is where telling it
+ * to change strategy — narrow the scope, or ask — saves more time than
+ * another round of errors.
+ */
+function rejectPlan(
+  messages: ChatMessage[],
+  toolCallId: string,
+  errors: readonly string[],
+  attempt = 1,
+): void {
+  const header = attempt >= 3
+    ? `Plan rejected (attempt ${attempt}). Re-reading these will not help — change approach: ` +
+      'propose a smaller plan for the part you are sure about, or ask the user a specific question.'
+    : attempt === 2
+      ? `Plan rejected (attempt 2). Fix every point below in the next call:`
+      : 'Plan rejected:'
+  messages.push({
+    role: 'tool',
+    content: `${header}\n- ${errors.join('\n- ')}`,
+    tool_call_id: toolCallId,
+  })
+}
+
+/** The plan-wide shape decision, with the offenders named for the error. */
+export function planShape(tasks: readonly PlannedTaskInput[]): {
+  kind: 'structured' | 'flat' | 'mixed' | 'empty'
+  offenders?: string
+} {
+  let structured: string[] = []
+  let flat: string[] = []
+  for (const task of tasks) {
+    const shape = taskShape(task)
+    if (shape === 'structured') structured.push(task.title)
+    else if (shape === 'flat') flat.push(task.title)
+  }
+  if (structured.length > 0 && flat.length > 0) {
+    return {
+      kind: 'mixed',
+      offenders: `context/edits/verify: ${structured.slice(0, 3).map(q).join(', ')}; flat: ${flat
+        .slice(0, 3)
+        .map(q)
+        .join(', ')}`,
+    }
+  }
+  if (structured.length > 0) return { kind: 'structured' }
+  if (flat.length > 0) return { kind: 'flat' }
+  return { kind: 'empty' }
 }
 
 /**
@@ -640,6 +713,8 @@ export interface DeveloperTurnInput {
   userMessage: string
   model: string
   apiKey: string
+  /** Omitted from the wire when 'off'. */
+  reasoningEffort?: ReasoningEffort
   handle: LaunchHandle
   messages: ChatMessage[]
   summaryIndex: SummaryEntry[]
@@ -658,7 +733,7 @@ export type DeveloperTurnResult =
 export async function developerConversationTurn(
   input: DeveloperTurnInput,
 ): Promise<DeveloperTurnResult> {
-  const { sessionId, projectDir, userMessage, model, apiKey, handle, messages, summaryIndex, onTextDelta, onThinkingDelta, isInterrupted, signal, onAgentEvent } = input
+  const { sessionId, projectDir, userMessage, model, apiKey, reasoningEffort, handle, messages, summaryIndex, onTextDelta, onThinkingDelta, isInterrupted, signal, onAgentEvent } = input
 
   const agent = { role: 'developer' } as const
   const emit = (event: AgentEvent): void => onAgentEvent?.(event)
@@ -822,6 +897,8 @@ export async function developerConversationTurn(
   // that produce them.
   const filesRead = new Map<string, string>()
   const baselinesByCommand = new Map<string, number>()
+  /** Consecutive rejected plans, so the feedback can escalate. */
+  let planRejections = 0
 
   /** Record the observed exit code of a run_baseline call. Harness rejections
    *  (disallowed command, cwd escape, timeout) arrive as negative exits and are
@@ -879,11 +956,19 @@ export async function developerConversationTurn(
 
     // Compress messages to fit within context window
     const compressedMessages = compressMessages(messages, model)
+    if (compressedMessages.length < messages.length) {
+      emit({
+        type: 'warning',
+        agent,
+        text: `Context compacted: ${messages.length - compressedMessages.length} message(s) dropped to fit the ${getModelLimit(model).toLocaleString('en-US')}-token window`,
+      })
+    }
 
     const result = await streamChatCompletion(
       {
         apiKey,
         model,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
         messages: compressedMessages,
         tools: toolSpecs,
         signal,
@@ -966,55 +1051,81 @@ export async function developerConversationTurn(
           continue
         }
 
-        const structured = hasStructuredFields(proposed.data.tasks)
-        const rejection: string[] = []
-        if (structured) {
-          const evidence = buildEvidence(filesRead, baselinesByCommand, proposed.data.tasks, projectDir)
-          const validation = validatePlan(proposed.data.tasks, evidence, projectDir)
-          if (!validation.ok) rejection.push(...validation.errors)
+        // One shape per plan. A plan that mixes them would have half its tasks
+        // checked for real anchors and read files, and half skipped — worse
+        // than either, because the unchecked half still runs.
+        const shape = planShape(proposed.data.tasks)
+        if (shape.kind === 'mixed') {
+          planRejections += 1
+          rejectPlan(messages, toolCall.id, [
+            `Tasks use two different shapes (${shape.offenders}). Every task in a plan ` +
+              'must use the same one. Convert the flat tasks to context/edits/verify.',
+          ], planRejections)
+          emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
+          continue
         }
+        if (proposed.data.tasks.length > MAX_PLAN_TASKS) {
+          planRejections += 1
+          rejectPlan(messages, toolCall.id, [
+            `Plan has ${proposed.data.tasks.length} tasks; the limit is ${MAX_PLAN_TASKS}. ` +
+              'Consolidate: one concern per task, and merge edits to the same file into ' +
+              'a single task. If the work really is that large, plan the first slice and ' +
+              'leave the rest for the user to schedule.',
+          ], planRejections)
+          emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
+          continue
+        }
+
+        const rejection: string[] = []
+        if (shape.kind !== 'structured') {
+          // context/edits/verify are the only fields the harness can check: that
+          // a cited file was really read, that an anchor really appears once,
+          // that a baseline really failed. A flat or empty task declares no
+          // target files and no success criteria, so there is nothing to check
+          // its claims against — and nothing tells the Worker what it must
+          // produce or how anyone will know it worked. Reject rather than accept
+          // a plan that was never verified, however convenient its shape.
+          rejection.push(
+            'Every task must be built from context/edits/verify. A task made only ' +
+              'of instructions/readFile/writeFile — or of none of those — declares no ' +
+              'target files and no success criteria, so nothing about it can be ' +
+              'verified and a Worker has nothing to execute against. Give each task: ' +
+              'context (the files to read, each with a reason), edits (every change, ' +
+              'with a verbatim anchor for each modify), and verify (a command that ' +
+              'fails now and passes once the task is done).',
+          )
+        }
+
+        const evidence = buildEvidence(filesRead, baselinesByCommand, proposed.data.tasks, projectDir)
+        const validation = validatePlan(proposed.data.tasks, evidence, projectDir)
+        if (!validation.ok) rejection.push(...validation.errors)
         const contractCheck = validateContracts(proposed.data.tasks, proposed.data.contracts)
         rejection.push(...contractCheck.errors)
 
         if (rejection.length > 0) {
-          messages.push({
-            role: 'tool',
-            content: `Plan rejected:\n- ${rejection.join('\n- ')}`,
-            tool_call_id: toolCall.id,
-          })
+          planRejections += 1
+          rejectPlan(messages, toolCall.id, rejection, planRejections)
           emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
           continue
         }
 
         const parsedPlan = parseProposePlanArgs(parsed, projectDir)
         if (!parsedPlan.ok) {
-          messages.push({
-            role: 'tool',
-            content: `Error: ${parsedPlan.error}`,
-            tool_call_id: toolCall.id,
-          })
+          planRejections += 1
+          rejectPlan(messages, toolCall.id, [parsedPlan.error], planRejections)
           emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
           continue
         }
         const plan = parsedPlan.plan
-        if (!structured) {
-          // Flat legacy plans still get file-level ordering inferred for them.
-          // Structured plans declare their own dependsOn and were already
-          // checked for write conflicts by planParallel.
-          plan.tasks = addFileLevelDependencies(plan.tasks)
-        }
-        plan.tasks = detectAndRemoveCircularDeps(plan.tasks)
         enrichHarnessEvidence(plan.tasks, filesRead, baselinesByCommand, projectDir)
         const parallel = planParallel(plan.tasks, projectDir)
         if (parallel.errors.length > 0) {
-          messages.push({
-            role: 'tool',
-            content: `Plan rejected:\n- ${parallel.errors.join('\n- ')}`,
-            tool_call_id: toolCall.id,
-          })
+          planRejections += 1
+          rejectPlan(messages, toolCall.id, parallel.errors, planRejections)
           emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
           continue
         }
+        planRejections = 0
         const warnings = [...parallel.warnings, ...contractCheck.warnings]
         messages.push({
           role: 'tool',

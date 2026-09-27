@@ -89,18 +89,21 @@ function chunk(delta, finish = null) {
 }
 
 function toolCallChunks(name, args) {
+  return multiToolCallChunks([{ name, args }])
+}
+
+/** One assistant message carrying several tool calls, in the given order. */
+function multiToolCallChunks(calls) {
   return [
     chunk({
       role: 'assistant',
       content: null,
-      tool_calls: [
-        {
-          index: 0,
-          id: `call_${name}`,
-          type: 'function',
-          function: { name, arguments: JSON.stringify(args) },
-        },
-      ],
+      tool_calls: calls.map((c, i) => ({
+        index: i,
+        id: `call_${c.name}_${i}`,
+        type: 'function',
+        function: { name: c.name, arguments: JSON.stringify(c.args) },
+      })),
     }),
     chunk({}, 'tool_calls'),
   ]
@@ -125,29 +128,66 @@ function workerReply(system, messages) {
   if (!files || files === '(none)') return sse(finalChunks('nothing to write'))
   const target = files.split(',')[0].trim()
   return sse(
-    toolCallChunks('write_file', { path: target, content: `written by ${target}\n` }),
+    toolCallChunks('write_file', { path: target, content: WORKER_CONTENT }),
   )
 }
 
+/** Valid JavaScript, so a task's `node --check` verification can pass. */
+const WORKER_CONTENT = 'module.exports = { written: true }\n'
+
+/**
+ * The verification a synthesized task carries: `node --check` on the file it
+ * creates. Before the change the file is absent, so this exits non-zero and is
+ * a valid proves-change baseline; after the worker writes WORKER_CONTENT it
+ * parses and exits zero. A task may override to make itself fail.
+ */
+function checkVerify(path, over = {}) {
+  return [{ command: 'node', args: ['--check', path], kind: 'proves-change', ...over }]
+}
+
+/**
+ * A plan the validator will actually accept.
+ *
+ * Every task gets context/edits/verify, because a task built from
+ * instructions/readFile/writeFile declares no target files and no success
+ * criteria and is rejected outright. The proves-change check is baselined by
+ * the run_baseline round in `createProvider` before the plan is proposed.
+ */
 function planArgs(planTasks) {
   return {
     summary: 'Concurrency batch plan',
-    tasks: planTasks.map(t => ({
-      id: t.id,
-      title: t.title,
-      description: t.description ?? t.title,
-      instructions: [],
-      readFile: [],
-      writeFile: t.writeFile ?? [],
-      deleteFile: [],
-      createDir: t.createDir ?? [],
-      validation: t.validation ?? [],
-      dependsOn: t.dependsOn ?? [],
-      type: 'create',
-      retries: 0,
-      timeoutSeconds: 60,
-    })),
+    tasks: planTasks.map(t => {
+      // A task with no file to write still needs an edit to be structured; give
+      // it one on a path of its own so it cannot collide with a sibling.
+      const target = t.writeFile?.[0] ?? `created-by-${t.id}.txt`
+      return {
+        id: t.id,
+        title: t.title,
+        description: t.description ?? t.title,
+        type: 'create',
+        dependsOn: t.dependsOn ?? [],
+        edits: t.edits ?? [{ op: 'create', path: target, change: 'the change this task makes' }],
+        verify: t.verify ?? checkVerify(target),
+        retries: 0,
+        timeoutSeconds: 60,
+      }
+    }),
   }
+}
+
+/** Every verify command the plan proposes, deduplicated. */
+function plannedBaselines(planTasks) {
+  const args = planArgs(planTasks)
+  const seen = new Map()
+  for (const t of args.tasks) {
+    for (const v of t.verify) {
+      seen.set(JSON.stringify([v.command, v.args]), {
+        command: v.command,
+        args: v.args,
+      })
+    }
+  }
+  return [...seen.values()]
 }
 
 function createProvider({ planTasks, latencyMs = 0, workerReplyImpl = workerReply, developerReplyImpl }) {
@@ -159,6 +199,7 @@ function createProvider({ planTasks, latencyMs = 0, workerReplyImpl = workerRepl
     firstWorkerAt: null,
     lastWorkerAt: null,
   }
+  let developerRound = 0
   const request = async (input, init) => {
     stats.requests++
     stats.active++
@@ -175,9 +216,19 @@ function createProvider({ planTasks, latencyMs = 0, workerReplyImpl = workerRepl
         stats.lastWorkerAt = now
         return workerReplyImpl(system, messages)
       }
-      return developerReplyImpl
-        ? developerReplyImpl(system, messages)
-        : sse(toolCallChunks('propose_plan', planArgs(planTasks)))
+      if (developerReplyImpl) {
+        return developerReplyImpl(system, messages)
+      }
+      // Round 1 records the baselines the plan's proves-change checks claim.
+      // Without a recorded baseline the plan is rejected as unverified, so this
+      // round is what earns the plan its acceptance.
+      if (developerRound++ === 0) {
+        return sse(multiToolCallChunks(plannedBaselines(planTasks).map(args => ({
+          name: 'run_baseline',
+          args,
+        }))))
+      }
+      return sse(toolCallChunks('propose_plan', planArgs(planTasks)))
     } finally {
       stats.active--
     }
@@ -407,7 +458,7 @@ test('independent tasks run concurrently: time of the slowest, not the sum', asy
   for (const tsk of planTasks) {
     const file = join(projectDir, tsk.writeFile[0])
     assert.ok(existsSync(file), `${tsk.writeFile[0]} should exist`)
-    assert.equal(readFileSync(file, 'utf-8'), `written by ${tsk.writeFile[0]}\n`)
+    assert.equal(readFileSync(file, 'utf-8'), WORKER_CONTENT)
   }
 
   const persisted = latestSession(projectDir)
@@ -430,7 +481,19 @@ test('a forced failure in one task leaves the others changes intact', async t =>
     task('ok-1', 'Write ok-1', { writeFile: ['ok-1.txt'] }),
     task('bad', 'Write bad then fail', {
       writeFile: ['bad.txt'],
-      validation: ['node -e "process.exit(1)"'],
+      verify: [
+        ...checkVerify('bad.txt'),
+        // Unsatisfiable by construction: nothing ever creates this file, so it
+        // exits non-zero at execution and the task fails — the same lever the
+        // old `node -e "process.exit(1)"` validation provided, expressed as a
+        // verify the validator can actually check a baseline for.
+        {
+          command: 'node',
+          args: ['--check', 'never-created.js'],
+          kind: 'regression-guard',
+          expectExit: 1,
+        },
+      ],
     }),
     task('ok-2', 'Write ok-2', { writeFile: ['ok-2.txt'] }),
   ]
@@ -449,9 +512,9 @@ test('a forced failure in one task leaves the others changes intact', async t =>
 
   // Survivors keep their writes.
   assert.ok(existsSync(join(projectDir, 'ok-1.txt')))
-  assert.equal(readFileSync(join(projectDir, 'ok-1.txt'), 'utf-8'), 'written by ok-1.txt\n')
+  assert.equal(readFileSync(join(projectDir, 'ok-1.txt'), 'utf-8'), WORKER_CONTENT)
   assert.ok(existsSync(join(projectDir, 'ok-2.txt')))
-  assert.equal(readFileSync(join(projectDir, 'ok-2.txt'), 'utf-8'), 'written by ok-2.txt\n')
+  assert.equal(readFileSync(join(projectDir, 'ok-2.txt'), 'utf-8'), WORKER_CONTENT)
   // The failing task was rolled back.
   assert.ok(!existsSync(join(projectDir, 'bad.txt')), 'bad.txt must be rolled back')
 
@@ -608,7 +671,7 @@ test('a turn that only makes tool calls still reports continuous activity', asyn
 
   // Nothing on the wire leaks file contents.
   const text = JSON.stringify(events)
-  assert.ok(!text.includes('written by vis-1.txt'), 'a tool detail leaked file content')
+  assert.ok(!text.includes('written: true'), 'a tool detail leaked file content')
   assert.ok(!text.includes('/tmp/'), `an absolute path leaked: ${text}`)
 })
 
@@ -619,15 +682,23 @@ test('a masked file is reported as masked, never with its contents', async t => 
 
   const planTasks = [task('m1', 'Write mask-1.txt', { writeFile: ['mask-1.txt'] })]
   const ui = makeUI()
+  // read_file .env (masked) → baseline the verify → propose.
+  let maskRound = 0
   const session = startSession({
     projectDir,
     planTasks,
     ui,
-    // The developer asks for .env, gets the derived stub back, then plans.
-    developerReplyImpl: (system, messages) =>
-      messages.some(m => m.role === 'tool')
-        ? sse(toolCallChunks('propose_plan', planArgs(planTasks)))
-        : sse(toolCallChunks('read_file', { path: '.env' })),
+    developerReplyImpl: () => {
+      const round = maskRound++
+      if (round === 0) return sse(toolCallChunks('read_file', { path: '.env' }))
+      if (round === 1) {
+        return sse(multiToolCallChunks(plannedBaselines(planTasks).map(args => ({
+          name: 'run_baseline',
+          args,
+        }))))
+      }
+      return sse(toolCallChunks('propose_plan', planArgs(planTasks)))
+    },
   })
 
   let result

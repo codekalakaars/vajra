@@ -327,6 +327,71 @@ test('§7.2 an explicit dependsOn makes sharing a file fine', () => {
   assert.deepEqual(parallel.errors, [])
 })
 
+test('a dependsOn cycle is an error, not a wave', () => {
+  // Nothing in a cycle can become ready. Emitting the remainder as a wave would
+  // let the pair run concurrently — the exact opposite of what was declared.
+  const parallel = planParallel([
+    task({ id: 'a', dependsOn: ['b'], edits: [{ path: 'src/a.ts', op: 'create', change: 'x' }] }),
+    task({ id: 'b', dependsOn: ['a'], edits: [{ path: 'src/b.ts', op: 'create', change: 'y' }] }),
+  ])
+  assert.equal(parallel.errors.length, 1)
+  assert.match(parallel.errors[0], /Circular dependsOn between 'a', 'b'/)
+  assert.match(parallel.errors[0], /stall/, 'says the plan would never finish')
+  // The tasks are still emitted, so a caller inspecting waves loses nothing.
+  assert.deepEqual(parallel.waves, [['a', 'b']])
+})
+
+test('a three-task cycle is reported with every member named', () => {
+  const parallel = planParallel([
+    task({ id: 'a', dependsOn: ['c'], edits: [{ path: 'src/a.ts', op: 'create', change: 'x' }] }),
+    task({ id: 'b', dependsOn: ['a'], edits: [{ path: 'src/b.ts', op: 'create', change: 'y' }] }),
+    task({ id: 'c', dependsOn: ['b'], edits: [{ path: 'src/c.ts', op: 'create', change: 'z' }] }),
+  ])
+  assert.equal(parallel.errors.length, 1)
+  for (const id of ['a', 'b', 'c']) assert.match(parallel.errors[0], new RegExp(`'${id}'`))
+})
+
+test('a task depending on itself is a cycle', () => {
+  const parallel = planParallel([
+    task({ id: 'a', dependsOn: ['a'], edits: [{ path: 'src/a.ts', op: 'create', change: 'x' }] }),
+  ])
+  assert.equal(parallel.errors.length, 1)
+  assert.match(parallel.errors[0], /Circular dependsOn/)
+})
+
+test('a dangling dependsOn is named as a missing id, not mislabelled a cycle', () => {
+  const parallel = planParallel([
+    task({ id: 'a', dependsOn: ['ghost'], edits: [{ path: 'src/a.ts', op: 'create', change: 'x' }] }),
+  ])
+  assert.equal(parallel.errors.length, 1)
+  assert.match(parallel.errors[0], /not in this plan: 'ghost'/)
+  assert.doesNotMatch(parallel.errors[0], /Circular/, 'a missing id is not a cycle')
+})
+
+test('a cycle reached from validatePlan is rejected too', () => {
+  // The cycle error has to reach the model's rejection feedback, not just the
+  // standalone planParallel caller.
+  const result = validatePlan(
+    [
+      task({
+        id: 'a',
+        dependsOn: ['b'],
+        edits: [{ path: 'src/a.ts', op: 'create', change: 'x' }],
+        verify: [{ command: 'node', args: ['--check', 'src/a.ts'], kind: 'proves-change' }],
+      }),
+      task({
+        id: 'b',
+        dependsOn: ['a'],
+        edits: [{ path: 'src/b.ts', op: 'create', change: 'y' }],
+        verify: [{ command: 'node', args: ['--check', 'src/b.ts'], kind: 'proves-change' }],
+      }),
+    ],
+    evidence({}, { 'a#0': 1, 'b#0': 1 }),
+  )
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some(e => /Circular dependsOn/.test(e)), result.errors.join('\n'))
+})
+
 test('§7.4 three tasks editing one file raise a contention warning', () => {
   const parallel = planParallel([
     task({ id: 'a', dependsOn: [], edits: [{ path: 'src/hot.ts', op: 'create', change: 'x' }] }),

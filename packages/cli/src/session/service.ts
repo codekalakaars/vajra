@@ -14,8 +14,8 @@ import {
 } from '../agent/developer.js'
 import { AgentRegistry, type AgentState } from '../agent/registry.js'
 import { TaskQueue, type TaskState } from '../agent/taskqueue.js'
-import { streamChatCompletion, type ChatMessage } from '../agent/chat.js'
-import { evaluateSkipIf } from '../tasks/skip.js'
+import { streamChatCompletion, type ChatMessage, type ReasoningEffort } from '../agent/chat.js'
+import { evaluateSkipIfDetailed } from '../tasks/skip.js'
 import { computeTaskPermissions, normalizeProjectPath } from '../tasks/permissions.js'
 import { executeTask } from '../tasks/execute.js'
 import { needsServer } from '../tasks/server.js'
@@ -142,9 +142,23 @@ export interface SessionOptions {
   task?: string
   apiKey?: string
   model: string
+  /** Omitted from the wire when 'off'. Set by the TUI's ctrl-r. */
+  /** A level from the catalog for this model; chat.ts maps it to the wire. */
+  reasoningEffort?: ReasoningEffort
   projectDir: string
   autoConfirm?: boolean
   timeout?: number
+  /**
+   * Hand the execution outcome back to the developer and keep the
+   * conversation going, instead of ending the run when the queue drains.
+   *
+   * A task that failed on a bad anchor or a wrong split is planning input, not
+   * a dead end: without this the developer never learns what its plan actually
+   * did and the user cannot redirect. Interactive front-ends opt in; a
+   * non-interactive run leaves it unset so its exit code is still exactly the
+   * report's.
+   */
+  continueAfterExecution?: boolean
   /** Explicit opt-in to run without OS sandbox enforcement. */
   allowUnenforced?: boolean
   /** Overrides `resolveConcurrencyConfig().maxConcurrentWorkers` (P2). */
@@ -546,6 +560,9 @@ export async function runSession(
   // A resumed conversation with no plan to replay starts at the prompt.
   // Without this, userMessage is '' and turn 1 sends an empty user turn to
   // the model — which then "replies" to nothing and pollutes the transcript.
+  /** The last execution report's code, returned if the user leaves after it. */
+  let lastExecutionExitCode: number | null = null
+
   if (resuming && !preselected && !userMessage) {
     userMessage = await ui.askUserMessage()
     if (!userMessage) {
@@ -573,6 +590,7 @@ export async function runSession(
           projectDir,
           userMessage,
           model: options.model,
+          ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
           apiKey: options.apiKey,
           handle: developerHandle,
           messages,
@@ -778,7 +796,7 @@ export async function runSession(
           taskHandle = withCommandResourceLock(taskHandle, commandResourceLocks, task.id)
 
           if (task.skipIf && task.skipIf.length > 0) {
-            const shouldSkip = await evaluateSkipIf(
+            const skipResult = await evaluateSkipIfDetailed(
               task.skipIf,
               projectDir,
               async (command, args) => {
@@ -795,6 +813,8 @@ export async function runSession(
                 }
               },
             )
+            for (const w of skipResult.warnings) ui.warning(`⚠ ${w}`)
+            const shouldSkip = skipResult.shouldSkip
             if (shouldSkip) {
               queue.skipTask(task.id)
               persist(task)
@@ -1001,6 +1021,9 @@ export async function runSession(
                         {
                           apiKey,
                           model: options.model,
+                          ...(options.reasoningEffort
+                            ? { reasoningEffort: options.reasoningEffort }
+                            : {}),
                           messages,
                           tools: MASTER_DECIDE_TOOL_SPECS,
                           ...(abortSignal ? { signal: abortSignal } : {}),
@@ -1042,7 +1065,35 @@ export async function runSession(
       } else {
         ui.error('Completed with failures or pending tasks.')
       }
-      return finish(report.exitCode)
+
+      if (options.continueAfterExecution) {
+        // The outcome becomes the next planning input: what each task did, and
+        // the first line of whatever went wrong for the ones that did not.
+        const outcomes = queue
+          .getAllTasks()
+          .map((t) => {
+            const error = taskErrors.get(t.id)
+            const detail = error ? ` — ${error.split('\n')[0].slice(0, 160)}` : ''
+            return `- ${t.id} [${t.status}] ${t.title}${detail}`
+          })
+          .join('\n')
+        messages.push({
+          role: 'user',
+          content: [
+            '<execution-report>',
+            `The plan ran. ${report.lines.join(' ')}`,
+            outcomes,
+            '</execution-report>',
+            report.exitCode === 0
+              ? 'If the user asks for more, propose a new plan for it.'
+              : 'Some tasks failed. If the user asks for another attempt, re-read the ' +
+                'failing files and propose a corrected plan rather than repeating this one.',
+          ].join('\n'),
+        })
+        lastExecutionExitCode = report.exitCode
+      } else {
+        return finish(report.exitCode)
+      }
     }
 
     userMessage = await ui.askUserMessage()
@@ -1055,7 +1106,9 @@ export async function runSession(
     if (isExitCommand(userMessage)) {
       ui.info('Goodbye!')
       exited = true
-      return finish(0)
+      // A run whose tasks failed still failed, even if the user then asked
+      // about it: the exit code is the report's, not the chat's.
+      return finish(lastExecutionExitCode ?? 0)
     }
   }
 

@@ -269,3 +269,15 @@ test('--quiet restores task-level-only output', () => {
   assert.equal(out, '')
   assert.equal(err, '')
 })
+
+test('a warning prints an annotated line and keeps the piped log clean', () => {
+  const { out, err } = capture(() => {
+    const s = new TerminalStreamer(false)
+    s.agentEvent({ type: 'warning', agent: DEV, text: 'Context compacted: 3 messages dropped' })
+    s.agentEvent({ type: 'phase', agent: DEV, phase: 'scanning' })
+  })
+  assert.match(out, /⚠ Context compacted: 3 messages dropped/)
+  assert.match(out, /scanning project/, 'the warning must not swallow the next event')
+  assert.ok(!/\x1b\[[0-9;]*m|\r/.test(out), `control characters leaked: ${JSON.stringify(out)}`)
+  assert.equal(err, '')
+})

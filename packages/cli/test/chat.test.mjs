@@ -225,3 +225,93 @@ test('no onEvent means no work and no crash', async () => {
     globalThis.fetch = realFetch
   }
 })
+
+// --- token usage (usage meter in the TUI footer) ---------------------------
+
+function sseResponseWithUsage(chunks, usage) {
+  const encoder = new TextEncoder()
+  const body = new ReadableStream({
+    start(controller) {
+      const push = obj =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`))
+      for (const c of chunks) {
+        push({
+          id: 'x',
+          object: 'chat.completion.chunk',
+          created: 0,
+          model: 'm',
+          choices: [{ index: 0, delta: c, finish_reason: null }],
+        })
+      }
+      if (usage) {
+        // The usage chunk arrives after the content, carries no choices, and
+        // is only present because the request asked for it.
+        push({ id: 'x', object: 'chat.completion.chunk', created: 0, model: 'm', choices: [], usage })
+      }
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      controller.close()
+    },
+  })
+  return new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
+  })
+}
+
+test('the stream asks for usage and reports it on llm-end and the result', async () => {
+  const realFetch = globalThis.fetch
+  const events = []
+  let requestBody
+  globalThis.fetch = async (_url, init) => {
+    requestBody = JSON.parse(init.body)
+    return sseResponseWithUsage([{ content: 'hi' }], {
+      prompt_tokens: 1000,
+      completion_tokens: 250,
+      total_tokens: 1250,
+    })
+  }
+  try {
+    const result = await streamChatCompletion(
+      {
+        apiKey: 'sk-test',
+        model: 'zen/test-model',
+        messages: [{ role: 'user', content: 'hello' }],
+        onEvent: e => events.push(e),
+      },
+      () => {},
+    )
+    assert.deepEqual(
+      requestBody.stream_options,
+      { include_usage: true },
+      'without this the provider never sends a usage chunk',
+    )
+    const expected = { promptTokens: 1000, completionTokens: 250, totalTokens: 1250 }
+    const end = events.find(e => e.type === 'llm-end')
+    assert.deepEqual(end.usage, expected, 'llm-end must carry the round usage')
+    assert.deepEqual(result.usage, expected, 'the result must carry it too')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+test('a stream without usage data leaves usage undefined, not zeroed', async () => {
+  const realFetch = globalThis.fetch
+  const events = []
+  globalThis.fetch = async () => sseResponseWithUsage([{ content: 'no meter' }], null)
+  try {
+    const result = await streamChatCompletion(
+      {
+        apiKey: 'sk-test',
+        model: 'zen/test-model',
+        messages: [{ role: 'user', content: 'hi' }],
+        onEvent: e => events.push(e),
+      },
+      () => {},
+    )
+    const end = events.find(e => e.type === 'llm-end')
+    assert.equal(end.usage, undefined)
+    assert.equal(result.usage, undefined, 'absent usage must not read as 0 tokens')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
