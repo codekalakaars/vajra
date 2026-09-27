@@ -57,6 +57,16 @@ export const theme = {
   syntaxOperator: '#56b6c2',
   syntaxPunctuation: '#eeeeee',
   /**
+   * A light cyan for the rows of a list the user is choosing from.
+   *
+   * These rows were `textMuted`, which is the theme's gray — and gray reads as
+   * *disabled* rather than *unselected*, which is a different thing entirely.
+   * It made every command and every model look unavailable while the cursor sat
+   * on one of them. Cyan says "these are all options, this one is the current
+   * one", which is what the list is.
+   */
+  listOption: '#7fd8e0',
+  /**
    * How solid thinking text is. OpenCode's default, and the reason a reasoning
    * block never competes with the answer that follows it.
    */

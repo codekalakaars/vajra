@@ -170,6 +170,12 @@ function paletteRows() {
   return rows
 }
 
+/** The RGB escape the renderer writes for a colour, if it wrote one. */
+const rgbEscape = hex => {
+  const n = parseInt(hex.replace('#', ''), 16)
+  return `\x1b[38;2;${(n >> 16) & 255};${(n >> 8) & 255};${n & 255}m`
+}
+
 let failures = 0
 const problems = []
 const check = (label, ok, detail) => {
@@ -218,6 +224,12 @@ await wait(700)
     JSON.stringify(paletteRows().map(r => r.length)),
   )
   check('the closing rule and the status row are still on screen', lines.some(l => l.includes('/ commands')), 'the status row is gone')
+
+  // The unselected rows are a light cyan, not the theme's gray: gray reads as
+  // disabled, and every option in this list is available.
+  const cyan = rgbEscape('#7fd8e0')
+  check('unselected options are painted the light cyan', out.includes(cyan), 'no cyan in the output stream')
+  check('and the selected row is not', !/❯ \/model[^\n]*${cyan}/.test(out), 'the cursor row is cyan too')
 }
 
 // Scrolling: on a short terminal the cursor must stay visible, and the list must

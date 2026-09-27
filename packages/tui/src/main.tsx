@@ -629,26 +629,6 @@ function App(props: { renderer: CliRenderer }) {
               width: dimensions().width - sidebarWidth() - COLUMN_MARGIN * 2,
             }}
           >
-            <Show when={picker()}>
-              {open => (
-                <Panel title={`${open().title}  (${open().options.length})`}>
-                  {/* The model picker has as many rows as the gateway serves, and a
-                      panel that renders all of them runs off the top of the screen:
-                      the last rows are drawn over the first ones, so the list is
-                      unreadable exactly when it is longest. A fixed-height scrollbox
-                      that follows the cursor is the only arrangement that works for
-                      both a three-option directory picker and a seventy-five-model
-                      catalog. */}
-                  <PickerList
-                    options={open().options}
-                    selected={pickerIdx()}
-                    height={pickerRows() - PICKER_CHROME_ROWS}
-                    cells={panelCells()}
-                  />
-                </Panel>
-              )}
-            </Show>
-
             {/* The transcript: two cells of gutter, one of gap, one of air. */}
             <box
               style={{
@@ -715,6 +695,33 @@ function App(props: { renderer: CliRenderer }) {
               </Show>
             </scrollbox>
             </box>
+
+            {/*
+              The lists live here, between the transcript and the input — not at
+              the top of the column, where a panel of options floated above the
+              conversation it was about. A list you are choosing from belongs
+              next to the thing you are choosing it for, and the input is what
+              the next keystroke goes into.
+            */}
+            <Show when={picker()}>
+              {open => (
+                <Panel title={`${open().title}  (${open().options.length})`}>
+                  {/* The model picker has as many rows as the gateway serves, and a
+                      panel that renders all of them runs off the top of the screen:
+                      the last rows are drawn over the first ones, so the list is
+                      unreadable exactly when it is longest. A fixed-height scrollbox
+                      that follows the cursor is the only arrangement that works for
+                      both a three-option directory picker and a seventy-five-model
+                      catalog. */}
+                  <PickerList
+                    options={open().options}
+                    selected={pickerIdx()}
+                    height={pickerRows() - PICKER_CHROME_ROWS}
+                    cells={panelCells()}
+                  />
+                </Panel>
+              )}
+            </Show>
 
             <Show when={paletteOpen() && !picker()}>
               <Panel>
@@ -936,7 +943,7 @@ function App(props: { renderer: CliRenderer }) {
           {(option, i) => (
             <text
               content={`${i() === props.selected ? CURSOR_MARKER : '  '}${ellipsis(option.label, labelCells())}`}
-              fg={i() === props.selected ? theme.text : theme.textMuted}
+              fg={i() === props.selected ? theme.text : theme.listOption}
               style={{ flexShrink: 0, width: '100%' }}
             />
           )}
