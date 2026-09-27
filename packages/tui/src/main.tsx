@@ -221,8 +221,6 @@ function App(props: { renderer: CliRenderer }) {
   const [paletteIdx, setPaletteIdx] = createSignal(0)
   const [picker, setPicker] = createSignal<{ title: string; options: { value: string; label: string }[] } | null>(null)
   const [gone, setGone] = createSignal<number | null>(null)
-  /** The open picker's measured height, so the transcript can give up the rows. */
-  const [pickerHeight, setPickerHeight] = createSignal(0)
   /**
    * The last copy attempt, and the frame it should disappear on.
    *
@@ -245,7 +243,6 @@ function App(props: { renderer: CliRenderer }) {
   let input: TextareaRenderable | undefined
   let transcript: { scrollTop: number } | undefined
   let promptBlock: { height: number } | undefined
-  let pickerBlock: { height: number } | undefined
 
 
   /** Where replies to the host go; stdout is the screen, so never that. */
@@ -437,42 +434,14 @@ function App(props: { renderer: CliRenderer }) {
     const sidebarWidth = createMemo(() => (dimensions().width >= SIDEBAR_MIN_WIDTH ? SIDEBAR_WIDTH : 0))
 
     /**
-     * How many rows a picker is allowed to take.
+     * The prompt's height, measured after each layout.
      *
-     * The transcript gives them up rather than being overlapped by them: the
-     * prompt's height is subtracted from the terminal for the same reason, and
-     * a panel drawn over the last line of an answer is a panel that hides
-     * something the user came to read.
-     */
-    const measurePicker = (): void => {
-      const height = pickerBlock?.height ?? 0
-      if (height !== pickerHeight()) setPickerHeight(height)
-    }
-    createEffect(() => {
-      // After layout, not during: the panel's height is not known until Yoga
-      // has run, and the transcript's height depends on it.
-      picker()
-      queueMicrotask(measurePicker)
-    })
-    /** The list's own height: what is left, capped at the options there are. */
-    const pickerRows = createMemo(() => {
-      const options = picker()?.options.length ?? 0
-      if (options === 0) return 0
-      // A three-option picker must not reserve a screen, and a seventy-five-model
-      // one must not overrun it; the transcript keeps MIN_TRANSCRIPT_ROWS.
-      const spare = Math.max(0, dimensions().height - promptHeight() - MIN_TRANSCRIPT_ROWS)
-      return Math.min(options, Math.max(3, spare - PICKER_CHROME_ROWS)) + PICKER_CHROME_ROWS
-    })
-
-    /**
-     * The transcript is given what the prompt leaves, measured rather than
-     * hoped for.
-     *
-     * `flexGrow` is not enough on its own: the prompt's height depends on the
-     * editor, and Yoga resolves that after the flex pass, so a long transcript
-     * can push the status row off the bottom of the terminal — the screen looks
-     * complete and its last line is invisible. Measuring the prompt after each
-     * layout and subtracting is the only arrangement that cannot drift.
+     * Nothing lays out against it any more — the column is a fixed height, the
+     * transcript flexes into what is left, and the prompt keeps its natural
+     * height — but a picker does need to know it: the picker and the prompt are
+     * siblings in the same column, so a list sized without regard for the
+     * prompt's editor pushes the prompt off the bottom of the terminal, and the
+     * screen looks complete with its input invisible.
      */
     const [promptHeight, setPromptHeight] = createSignal(0)
     const measure = (): void => {
@@ -485,21 +454,80 @@ function App(props: { renderer: CliRenderer }) {
       queueMicrotask(measure)
     })
 
+    /** The rows a picker takes: its own rows, plus the panel's chrome. */
+    const pickerRows = createMemo(() => {
+      const options = picker()?.options.length ?? 0
+      if (options === 0) return 0
+      // A three-option picker must not reserve a screen, and a seventy-five-model
+      // one must not overrun it; the transcript keeps MIN_TRANSCRIPT_ROWS.
+      const spare = Math.max(0, dimensions().height - promptHeight() - MIN_TRANSCRIPT_ROWS)
+      return Math.min(options, Math.max(3, spare - PICKER_CHROME_ROWS)) + PICKER_CHROME_ROWS
+    })
+
     return (
       <>
-        <box style={{ flexDirection: 'row', flexGrow: 1, minHeight: 0 }}>
-          {/* The transcript column: two cells of gutter, one of gap, one of air. */}
+        {/*
+          Two full-height columns, and nothing crosses between them.
+
+          The prompt used to be a sibling of this row, so it spanned the whole
+          width and the sidebar stopped dead above it: a 42-cell column of dead
+          space next to a full-width input, on a screen whose whole point is
+          using its width. With the prompt inside the left column the division
+          runs top to bottom — transcript and input on the left, the sidebar's
+          own content and footer on the right — and the width is divided once
+          instead of twice.
+
+          The root has numbers for both dimensions, from useTerminalDimensions,
+          because percentage sizing does not resolve against the renderer root;
+          every height below is therefore a plain flex share of a known height,
+          which is what lets the prompt keep its natural height and the
+          transcript take the rest without either being measured.
+        */}
+        <box
+          style={{
+            flexDirection: 'row',
+            width: dimensions().width,
+            height: dimensions().height,
+            minHeight: 0,
+            backgroundColor: theme.background,
+          }}
+        >
+          {/* The left column: picker, transcript, prompt. */}
           <box
             style={{
+              flexDirection: 'column',
               flexShrink: 0,
-              height: Math.max(3, dimensions().height - promptHeight() - pickerHeight()),
-              paddingBottom: 1,
-              paddingLeft: 2,
-              paddingRight: 2,
-              gap: 1,
+              height: dimensions().height,
+              minHeight: 0,
               width: dimensions().width - sidebarWidth(),
             }}
           >
+            <Show when={picker()}>
+              {open => (
+                <Panel title={`${open().title}  (${open().options.length})`}>
+                  {/* The model picker has as many rows as the gateway serves, and a
+                      panel that renders all of them runs off the top of the screen:
+                      the last rows are drawn over the first ones, so the list is
+                      unreadable exactly when it is longest. A fixed-height scrollbox
+                      that follows the cursor is the only arrangement that works for
+                      both a three-option directory picker and a seventy-five-model
+                      catalog. */}
+                  <PickerList options={open().options} selected={paletteIdx()} height={pickerRows() - PICKER_CHROME_ROWS} />
+                </Panel>
+              )}
+            </Show>
+
+            {/* The transcript: two cells of gutter, one of gap, one of air. */}
+            <box
+              style={{
+                flexGrow: 1,
+                minHeight: 3,
+                paddingBottom: 1,
+                paddingLeft: 2,
+                paddingRight: 2,
+                gap: 1,
+              }}
+            >
             <scrollbox
               ref={(r: any) => (transcript = r)}
               style={{ flexGrow: 1 }}
@@ -549,49 +577,29 @@ function App(props: { renderer: CliRenderer }) {
                 </box>
               </Show>
             </scrollbox>
-          </box>
+            </box>
 
-          <Show when={sidebarWidth() > 0}>
-            <Sidebar state={state()} width={sidebarWidth()} />
-          </Show>
-        </box>
+            <Show when={paletteOpen() && !picker()}>
+              <Panel>
+                <For each={matches()}>
+                  {(command, i) => (
+                    <text
+                      content={`${i() === paletteIdx() ? '❯ ' : '  '}/${command.name}  ${command.summary}`}
+                      fg={i() === paletteIdx() ? theme.text : theme.textMuted}
+                    />
+                  )}
+                </For>
+              </Panel>
+            </Show>
 
-        <Show when={picker()}>
-          {open => (
-            <Panel title={`${open().title}  (${open().options.length})`}>
-              {/* The model picker has as many rows as the gateway serves, and a
-                  panel that renders all of them runs off the top of the screen:
-                  the last rows are drawn over the first ones, so the list is
-                  unreadable exactly when it is longest. A fixed-height scrollbox
-                  that follows the cursor is the only arrangement that works for
-                  both a three-option directory picker and a seventy-five-model
-                  catalog. */}
-              <PickerList options={open().options} selected={paletteIdx()} height={pickerRows() - PICKER_CHROME_ROWS} />
-            </Panel>
-          )}
-        </Show>
-
-        <Show when={paletteOpen() && !picker()}>
-          <Panel>
-            <For each={matches()}>
-              {(command, i) => (
-                <text
-                  content={`${i() === paletteIdx() ? '❯ ' : '  '}/${command.name}  ${command.summary}`}
-                  fg={i() === paletteIdx() ? theme.text : theme.textMuted}
-                />
-              )}
-            </For>
-          </Panel>
-        </Show>
-
-        {/* ── the prompt, transcribed from component/prompt/index.tsx ────────── */}
-        <box
-          ref={(r: any) => {
-            promptBlock = r
-            queueMicrotask(measure)
-          }}
-          style={{ width: '100%', flexShrink: 0 }}
-        >
+            {/* ── the prompt, transcribed from component/prompt/index.tsx ────── */}
+            <box
+              ref={(r: any) => {
+                promptBlock = r
+                queueMicrotask(measure)
+              }}
+              style={{ width: '100%', flexShrink: 0 }}
+            >
           <box
             style={{
               width: '100%',
@@ -724,6 +732,14 @@ function App(props: { renderer: CliRenderer }) {
               </box>
             </Show>
           </box>
+            </box>
+            </box>
+
+          {/* The right column: the sidebar, all the way down, with its footer
+              at the bottom of the screen rather than level with the input. */}
+          <Show when={sidebarWidth() > 0}>
+            <Sidebar state={state()} width={sidebarWidth()} height={dimensions().height} />
+          </Show>
         </box>
       </>
     )
@@ -775,10 +791,6 @@ function App(props: { renderer: CliRenderer }) {
   function Panel(props: { title?: string; children?: unknown }) {
     return (
       <box
-        ref={(r: any) => {
-          pickerBlock = r
-          queueMicrotask(() => setPickerHeight(r?.height ?? 0))
-        }}
         style={{ width: '100%', flexShrink: 0, border: ['left'], borderColor: theme.border, customBorderChars: PROMPT_BLOCK }}
       >
         <box
@@ -871,7 +883,7 @@ function UnknownModel() {
  * exactly as their Todo and Context plugins render them, and the directory sits
  * in a footer under a `paddingTop 1` gap.
  */
-function Sidebar(props: { state: UiState; width: number }) {
+function Sidebar(props: { state: UiState; width: number; height: number }) {
   const state = () => props.state
   const busy = createMemo(() => state().prompt === null || state().tasks.some(task => task.status === 'running'))
   const contextLimit = createMemo(() => state().modelInfo?.context ?? UNKNOWN_CONTEXT_LIMIT)
@@ -886,6 +898,10 @@ function Sidebar(props: { state: UiState; width: number }) {
       style={{
         backgroundColor: theme.backgroundPanel,
         width: props.width,
+        // The full height of the column, not "whatever the row above gave it":
+        // the sidebar is a column of the screen, so its footer belongs on the
+        // last row of the terminal rather than level with the input.
+        height: props.height,
         flexShrink: 0,
         paddingTop: 1,
         paddingBottom: 1,

@@ -318,9 +318,6 @@ export async function runSession(
     persistSession('conversing', null, {})
   }
 
-  ui.info(`Model: ${options.model}`)
-  ui.info(`Timeout: ${options.timeout ?? 300}s per task`)
-
   // Q: fork a confined worker for tool execution. Parent never calls
   // applySandbox itself. Fail closed unless the user explicitly opted into
   // unenforced mode; only that explicit mode may fall back in-process.
@@ -334,9 +331,10 @@ export async function runSession(
       requireEnforced: !allowUnenforced,
     })
     notifySandboxClose()
-    if (sandbox.report.enforced) {
-      ui.info(`Sandbox: ${sandbox.report.mechanism}`)
-    } else {
+    // The enforced case says nothing: nothing has gone wrong, and the status
+    // row already shows the run is live. The unenforced case is the one that
+    // needs a line, because it is a security fact and not session metadata.
+    if (!sandbox.report.enforced) {
       ui.warning(
         `Sandbox not enforced (${sandbox.report.mechanism}) — tools run with app-level permissions only`,
       )
