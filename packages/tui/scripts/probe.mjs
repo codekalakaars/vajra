@@ -53,7 +53,9 @@ const state = (over = {}) => ({
     ],
     streaming: '',
     thinking: '',
-    prompt: { kind: 'user', label: '⚡ What would you like me to work on?' },
+    // A user turn, as the store produces one: no label. The first-run label
+    // lives on the 'initial-first' prompt, and a user turn is not a question.
+    prompt: { kind: 'user', label: '' },
     tasks: [
       { title: 'Fix the clobber in the store', status: 'running', activity: { tool: 'edit_file', summary: 'store.ts', since: Date.now() } },
       { title: 'Add a regression test', status: 'pending' },
@@ -156,7 +158,11 @@ send(state({ entries: [
   { title: 'Add a regression test', status: 'done' },
 ], executionIndex: 2, streaming: '', thinking: '' }))
 await wait(700)
-shot('6. run finished: the prompt is back and asking again')
+shot('6. run finished: the prompt is back, unlabelled')
+
+type('fix the todos clobber')
+await wait(500)
+shot('6b. typed into it: the input is a bare row with a cursor, no prefix')
 
 send({ t: 'pick', title: 'Resume which session?', options: [
   { value: 'a1b2c3d4', label: 'a1b2c3d4  fix the todos clobber  ·  2h ago' },

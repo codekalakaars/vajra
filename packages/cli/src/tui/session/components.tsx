@@ -489,7 +489,11 @@ export function ChatInput({
       <Box flexDirection="column" paddingLeft={2}>
         <Text>
           {editor.value === '' ? (
-            <Text dimColor>{'\u26a1 '}{prompt.label}</Text>
+            // The bolt rides along with the label, and a label can be empty: the
+            // user turn has none, and "⚡ " on its own is a glyph asking a
+            // question nothing answers. So an unlabelled prompt is an empty row
+            // with a cursor in it.
+            prompt.label === '' ? <Text> </Text> : <Text dimColor>{'\u26a1 '}{prompt.label}</Text>
           ) : (
             <>
               {before}

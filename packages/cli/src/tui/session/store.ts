@@ -24,7 +24,15 @@ export function streamFlushMs(pendingChars: number): number {
 export const PROMPT_LABELS: Record<PromptKind, string> = {
   'initial-first': 'What would you like me to work on?',
   'initial-reentry': 'Please enter a task (or type "exit" to quit):',
-  user: 'You:',
+  /**
+   * The user turn has no label. Every other prompt here is a question the agent
+   * is asking, and a user turn is not a question — "You:" labelled the box with
+   * the name of the person typing, on every turn, for the rest of the session.
+   * The panel and the cursor are the cue; the other labels are the ones that
+   * carry information (`[y/N]`, "or type exit to quit") and this one carried
+   * none.
+   */
+  user: '',
   'confirm-plan': '? Confirm plan? [y/N]',
   feedback: 'Feedback:',
 }
