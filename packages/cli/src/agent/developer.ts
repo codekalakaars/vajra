@@ -170,9 +170,11 @@ function buildDeveloperConversationPrompt(
     '',
     'You have access to these tools:',
     '- search_files(query): search the summary index to find relevant files (FREE)',
-    '- read_file(path): read a file to understand the codebase',
+    '- read_file(path): read a file to understand the codebase. For a large file pass offset/limit (1-based lines) or symbols (declaration names) — an edit anchor must be copied from text this call actually returned',
     '- list_files(path): list directory contents',
     '- run_baseline(command, args, cwd): run a candidate verify command BEFORE any changes, to record whether it currently passes',
+    '- write_stub(path, content): create a NEW file that does not exist yet — Phase One scaffolding, so you can write and run a test against a real module. It refuses to touch an existing file',
+    '- delete_stub(path): remove a file write_stub created this session, and nothing else',
     '- propose_plan(tasks, summary): propose a detailed plan when ready',
     '',
     'IMPORTANT RULES:',
@@ -200,10 +202,17 @@ function buildDeveloperConversationPrompt(
     '',
     'PLAN STRUCTURE — every plan opens with Phase One, in this order:',
     '',
-    '1. STUB TASKS. One per file the work will touch. op "create", writing the',
-    '   minimal valid file: imports resolved, the symbols the rest of the work will',
-    '   reference exported, behaviour empty. Nothing can come first, because a test',
-    '   cannot be written against a file that does not exist.',
+    '1. STUB TASKS. One per file the work will touch. Writing the minimal valid',
+    '   file: imports resolved, the symbols the rest of the work will reference',
+    '   exported, behaviour empty. Nothing can come first, because a test cannot',
+    '   be written against a file that does not exist.',
+    '',
+    '   To get the stub in front of you before the plan exists, create it with',
+    '   write_stub. That is what lets you write the test in step 2 against',
+    '   something real, and run_baseline it to see it fail. Because the file then',
+    '   exists, the task edit for it must be op "modify" with an anchor from its',
+    '   contents — op "create" will be refused. If you would rather the Worker',
+    '   create it, do not call write_stub and use op "create" as shown below.',
     '2. TEST TASKS. One per behaviour. Write a test that runs against its stub and',
     '   fails right now, because the behaviour is not implemented yet. Its verify',
     '   checks that the test file itself is valid — NOT that the suite passes. A test',
@@ -707,6 +716,40 @@ export function buildInitialPromptContext(
   return { tree, summaryText, summaryBudget }
 }
 
+/**
+ * Harness-collected evidence for plan validation, carried across the turns of
+ * one planning conversation.
+ *
+ * `filesRead` maps a path to the content the model actually read, which is what
+ * lets the validator reject a plan that cites a file nobody opened and check an
+ * edit's anchor against real text. `baselinesByCommand` is keyed the way
+ * `baselineKey` spells a command, holding the exit code observed before any
+ * change.
+ *
+ * The caller owns the lifetime and must call `resetEvidenceLedger` before any
+ * phase that writes to the project: once Workers have edited files, the
+ * recorded content is stale and an anchor would be validated against text that
+ * no longer exists.
+ */
+export interface PlanEvidenceLedger {
+  filesRead: Map<string, string>
+  baselinesByCommand: Map<string, number>
+}
+
+export function createEvidenceLedger(): PlanEvidenceLedger {
+  return { filesRead: new Map(), baselinesByCommand: new Map() }
+}
+
+/**
+ * Drop everything. Called at the execution boundary, not between turns: within
+ * planning nothing writes, so observations stay true, but the moment a plan is
+ * confirmed the Workers start changing the files the evidence describes.
+ */
+export function resetEvidenceLedger(evidence: PlanEvidenceLedger): void {
+  evidence.filesRead.clear()
+  evidence.baselinesByCommand.clear()
+}
+
 export interface DeveloperTurnInput {
   sessionId: string
   projectDir: string
@@ -718,6 +761,11 @@ export interface DeveloperTurnInput {
   handle: LaunchHandle
   messages: ChatMessage[]
   summaryIndex: SummaryEntry[]
+  /**
+   * Evidence carried between turns of one planning conversation. Omit it and
+   * the turn keeps its own, which cannot survive a rejected plan.
+   */
+  evidence?: PlanEvidenceLedger
   onTextDelta?: (text: string) => void
   onThinkingDelta?: (text: string) => void
   isInterrupted?: () => boolean
@@ -863,6 +911,22 @@ export async function developerConversationTurn(
           if (typeof readArgs.path === 'string') {
             filesRead.set(readArgs.path, result)
           }
+        } else if (parsed.call.tool === 'write_stub') {
+          // A stub the Developer just wrote is evidence, not just a side effect.
+          // Without this the plan could not `modify` its own stub — it would be
+          // told it never read the file — even though the Developer authored
+          // every byte of it. It also means `op: 'create'` on that path is
+          // correctly refused, because the file now genuinely exists.
+          const stubArgs = parsed.call.args as { path?: unknown; content?: unknown }
+          if (typeof stubArgs.path === 'string' && typeof stubArgs.content === 'string') {
+            filesRead.set(stubArgs.path, stubArgs.content)
+          }
+        } else if (parsed.call.tool === 'delete_stub') {
+          // The stub is gone, so it must stop counting as available: a plan that
+          // still cited it would be validated against a file that no longer
+          // exists.
+          const stubArgs = parsed.call.args as { path?: unknown }
+          if (typeof stubArgs.path === 'string') filesRead.delete(stubArgs.path)
         } else if (parsed.call.tool === 'run_baseline' && typeof result === 'string') {
           recordBaseline(result, parsed.call.args)
         }
@@ -892,11 +956,14 @@ export async function developerConversationTurn(
     return resultContent
   }
 
-  // Evidence ledger (§4): harness-collected observations for this planning
-  // turn. The model never supplies these values — it only triggers the calls
-  // that produce them.
-  const filesRead = new Map<string, string>()
-  const baselinesByCommand = new Map<string, number>()
+  // Evidence ledger (§4): harness-collected observations for planning. The
+  // model never supplies these values — it only triggers the calls that produce
+  // them. The caller owns it so a plan rejected in one turn can be re-proposed
+  // in the next without re-reading and re-baselining everything: without that,
+  // the rejection feedback ("you never read it", "was never run") is
+  // unsatisfiable, because the evidence it demands died with the turn.
+  const evidence = input.evidence ?? createEvidenceLedger()
+  const { filesRead, baselinesByCommand } = evidence
   /** Consecutive rejected plans, so the feedback can escalate. */
   let planRejections = 0
 

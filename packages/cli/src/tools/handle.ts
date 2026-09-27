@@ -1,5 +1,5 @@
-import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { readdirSync, statSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import type { LaunchHandle } from '../agent/developer.js'
 import type { PermissionsConfig } from '@codekalakaars/vajra-protocol'
 import {
@@ -25,6 +25,141 @@ export interface ToolCache {
   read: Map<string, { mtimeMs: number; value: string }>
   generation: number
 }
+/**
+ * Absolute path for a project-relative one, refusing anything that escapes.
+ *
+ * `normalizeProjectPath` deliberately does not throw — several callers want a
+ * stable key for an outside path. A tool that writes does not: escaping the
+ * project turns a create-only stub tool into an arbitrary-write primitive, so
+ * the boundary is enforced where the write happens.
+ */
+function resolveInsideProject(projectDir: string, filePath: string): string {
+  const abs = isAbsolute(filePath) ? resolve(filePath) : resolve(projectDir, filePath)
+  const rel = relative(projectDir, abs)
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error(`Path '${filePath}' resolves outside project directory`)
+  }
+  return abs
+}
+
+/**
+ * Absolute path for a project-relative one, without a boundary check.
+ *
+ * Every tool schema here promises "project-relative or absolute path", but the
+ * native layer resolves a relative path against the process CWD. That only
+ * agreed with the project when the CLI happened to be started inside it — from
+ * anywhere else, `read_file({path: 'src/a.ts'})` read (or wrote) the wrong tree.
+ * Resolution belongs here, where the project directory is actually known.
+ *
+ * Reads deliberately stay unbounded: read access is broader than write access.
+ */
+function resolveInProject(projectDir: string, filePath: string): string {
+  return isAbsolute(filePath) ? resolve(filePath) : resolve(projectDir, filePath)
+}
+
+/** A declaration keyword, used only to recognise a symbol's opening line. */
+const DECLARATION_RE =
+  /\b(function|class|const|let|var|def|fn|type|interface|struct|enum|impl|module|trait|record)\b/
+
+const indentOf = (line: string): number => line.length - line.trimStart().length
+
+/** Lines of `symbol`'s declaration, by indentation: the match, then everything
+ *  indented further, plus the closers that end it. Crude, and language-blind on
+ *  purpose — a wrong window here would make the validator reject a valid anchor,
+ *  which is worse than showing too much. `narrowRead` therefore reports what it
+ *  could not find rather than guessing. */
+function sliceSymbol(lines: string[], symbol: string): number[] | null {
+  const word = new RegExp(`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
+  let start = -1
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (!word.test(line)) continue
+    // A mention is not a declaration: require one either side of the symbol.
+    const opensSomething = DECLARATION_RE.test(line) || /[({=:<]/.test(line.slice(line.search(word) + symbol.length))
+    if (!opensSomething) continue
+    start = i
+    break
+  }
+  if (start === -1) return null
+
+  const base = indentOf(lines[start])
+  const out = [start]
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.trim() === '') {
+      out.push(i)
+      continue
+    }
+    if (indentOf(line) > base) {
+      out.push(i)
+      continue
+    }
+    // A closer at or below the declaration's indent ends it, and belongs to it.
+    if (/^[)}\]>;]/.test(line.trim())) out.push(i)
+    break
+  }
+  return out
+}
+
+/**
+ * Apply a read window: `offset`/`limit` in lines, and/or named `symbols`.
+ *
+ * Returns undefined when nothing was asked for, so the ordinary full-file read is
+ * byte-identical to before. The result is what the caller is shown *and* what the
+ * plan validator treats as the file's content — a narrowed read narrows the
+ * evidence too, so an anchor outside the window is correctly refused rather than
+ * silently accepted against text the model never saw.
+ */
+function narrowRead(content: string, a: Record<string, unknown>, path: string): string | undefined {
+  const symbols = Array.isArray(a.symbols) ? a.symbols.map(String).filter(s => s.length > 0) : []
+  const rawOffset = typeof a.offset === 'number' ? a.offset : 0
+  const rawLimit = typeof a.limit === 'number' ? a.limit : 0
+  const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.floor(rawOffset) : 0
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 0
+
+  if (symbols.length === 0 && offset === 0 && limit === 0) return undefined
+
+  const lines = content.split('\n')
+
+  if (symbols.length > 0) {
+    const picked = new Set<number>()
+    const missing: string[] = []
+    for (const symbol of symbols) {
+      const slice = sliceSymbol(lines, symbol)
+      if (slice === null) missing.push(symbol)
+      else for (const i of slice) picked.add(i)
+    }
+    if (picked.size === 0) {
+      // Never answer with an empty window: the model would read that as "this
+      // file has nothing in it" and plan against a fiction.
+      return [
+        `# read_file: ${path} — no declaration found for ${missing.join(', ')}.`,
+        '# The file follows in full; the names above were not matched as declarations.',
+        content,
+      ].join('\n')
+    }
+    const sorted = [...picked].sort((x, y) => x - y)
+    const body = sorted.map(i => lines[i]).join('\n')
+    const note =
+      missing.length > 0
+        ? `not found as declarations: ${missing.join(', ')}`
+        : `${symbols.length} symbol${symbols.length === 1 ? '' : 's'}`
+    return [
+      `# read_file: ${path} — ${note}. Lines ${sorted[0] + 1}-${sorted[sorted.length - 1] + 1} of ${lines.length}.`,
+      '# Anchors must be copied from this text; the rest of the file was not shown.',
+      body,
+    ].join('\n')
+  }
+
+  const start = Math.min(offset - 1, lines.length)
+  const end = limit > 0 ? Math.min(start + limit, lines.length) : lines.length
+  const body = lines.slice(start, end).join('\n')
+  return [
+    `# read_file: ${path} — lines ${start + 1}-${end} of ${lines.length}.`,
+    '# Anchors must be copied from this text; the rest of the file was not shown.',
+    body,
+  ].join('\n')
+}
 
 export interface ToolHandleOptions {
   /** When provided, every file tool is gated on this map/callback. */
@@ -32,6 +167,14 @@ export interface ToolHandleOptions {
   /** Called after a successful mutating tool (write/edit/delete/create). */
   onMutate?: () => void
   cache?: ToolCache
+  /**
+   * Absolute paths `write_stub` created, and the only paths `delete_stub` may
+   * remove. Owned by the caller so the set can be dropped at the execution
+   * boundary — once Workers have written, a stub is the implementation and must
+   * not be retractable. Omit it and `delete_stub` can delete nothing, which is
+   * the safe default for any handle that was not given the registry.
+   */
+  stubs?: Set<string>
 }
 
 const MASKED_STUB = '[REDACTED: masked file — contents withheld]'
@@ -314,7 +457,9 @@ export function createToolHandle(
             return MASKED_STUB
           }
           gate(path, 'read')
-          return readThrough(path)
+          const full = readThrough(resolveInProject(projectDir, path))
+          const narrowed = narrowRead(full, a, path)
+          return narrowed ?? full
         }
         case 'write_file': {
           const path = a.path as string
@@ -322,8 +467,9 @@ export function createToolHandle(
             throw new Error(`Access denied: ${path} is a masked file`)
           }
           gate(path, 'write')
-          writeFile(path, a.content as string)
-          invalidateRead(path)
+          const abs = resolveInProject(projectDir, path)
+          writeFile(abs, a.content as string)
+          invalidateRead(abs)
           options.onMutate?.()
           return 'ok'
         }
@@ -333,8 +479,9 @@ export function createToolHandle(
             throw new Error(`Access denied: ${path} is a masked file`)
           }
           gate(path, 'edit')
-          editFile(path, a.oldString as string, a.newString as string, a.replaceAll as boolean | undefined)
-          invalidateRead(path)
+          const abs = resolveInProject(projectDir, path)
+          editFile(abs, a.oldString as string, a.newString as string, a.replaceAll as boolean | undefined)
+          invalidateRead(abs)
           options.onMutate?.()
           return 'ok'
         }
@@ -344,21 +491,74 @@ export function createToolHandle(
             throw new Error(`Access denied: ${path} is a masked file`)
           }
           gate(path, 'delete')
-          deleteFile(path)
-          invalidateRead(path)
+          const abs = resolveInProject(projectDir, path)
+          deleteFile(abs)
+          invalidateRead(abs)
           options.onMutate?.()
           return 'ok'
         }
         case 'create_dir': {
           const path = a.path as string
           gate(path, 'write')
-          createDir(path)
-          invalidateRead(path)
+          const abs = resolveInProject(projectDir, path)
+          createDir(abs)
+          invalidateRead(abs)
           options.onMutate?.()
           return 'ok'
         }
+        case 'write_stub': {
+          // The Developer's only write surface. Two hard rules, both checked
+          // here rather than trusted from the prompt: the path must not exist
+          // (so no existing file is reachable), and it must be inside the
+          // project (so the tool is not a write-anywhere primitive).
+          const path = a.path as string
+          if (isMaskedName(basename(path))) {
+            throw new Error(`Access denied: ${path} is a masked file`)
+          }
+          const abs = resolveInsideProject(projectDir, path)
+          if (existsSync(abs)) {
+            throw new Error(
+              `Refusing to overwrite '${path}': it already exists. write_stub only ` +
+                'creates. To change existing code, describe the edit in a task instead.',
+            )
+          }
+          gate(path, 'write')
+          // Phase One creates new files in new directories as a matter of
+          // course, and the Developer has no create_dir — the write has to bring
+          // its own parents, or every stub under a new folder fails on ENOENT.
+          // The absolute path is what goes to the native layer: it resolves a
+          // relative path against the process CWD, not the project, so passing
+          // the model's own spelling through would write to the wrong tree.
+          createDir(dirname(abs))
+          writeFile(abs, a.content as string)
+          options.stubs?.add(abs)
+          invalidateRead(abs)
+          options.onMutate?.()
+          return `Created ${path}.`
+        }
+        case 'delete_stub': {
+          // Only what this session created. The registry is keyed by absolute
+          // path, so an equivalent spelling of the same file still matches and a
+          // different file never does.
+          const path = a.path as string
+          const abs = resolveInsideProject(projectDir, path)
+          if (!options.stubs?.has(abs)) {
+            throw new Error(
+              `Refusing to delete '${path}': it was not created by write_stub in this ` +
+                'session. Only scaffolding you created may be removed while planning.',
+            )
+          }
+          gate(path, 'delete')
+          deleteFile(abs)
+          options.stubs?.delete(abs)
+          invalidateRead(abs)
+          options.onMutate?.()
+          return `Deleted ${path}.`
+        }
         case 'list_files':
-          return JSON.stringify(listFiles(a.path as string, a.recursive as boolean | undefined))
+          return JSON.stringify(
+            listFiles(resolveInProject(projectDir, a.path as string), a.recursive as boolean | undefined),
+          )
         case 'search_files': {
           if (!summaryCache) {
             try {

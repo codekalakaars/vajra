@@ -21,7 +21,7 @@ const developerUrl = pathToFileURL(
 let handler = null
 globalThis.fetch = (...args) => handler(...args)
 
-const { developerConversationTurn } = await import(developerUrl)
+const { developerConversationTurn, createEvidenceLedger, resetEvidenceLedger } = await import(developerUrl)
 
 /**
  * One SSE event per chunk. Handing the SDK the whole body as a single string
@@ -83,7 +83,11 @@ function makeProject() {
 }
 
 async function runTurn(overrides = {}) {
-  const dir = makeProject()
+  // A caller running several turns of ONE conversation must pin projectDir: the
+  // baseline key includes the resolved project path, so evidence collected
+  // against one temp dir will not match a lookup made from another.
+  const shared = overrides.projectDir
+  const dir = shared ?? makeProject()
   const events = []
   let prose = 0
   try {
@@ -110,7 +114,7 @@ async function runTurn(overrides = {}) {
     })
     return { result, events, prose }
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    if (!shared) rmSync(dir, { recursive: true, force: true })
   }
 }
 
@@ -454,4 +458,201 @@ test('a valid structured plan is accepted', async () => {
 
   const toolText = messages.filter(m => m.role === 'tool').map(m => String(m.content)).join('\n')
   assert.match(toolText, /Plan proposed\. Awaiting user review\./)
+})
+
+test('a rejected plan can be re-proposed in the next turn without re-collecting evidence', async () => {
+  // The bug this pins: the evidence ledger used to be a turn-local, so the
+  // moment a plan was rejected the next turn started with an empty one. Every
+  // context entry then failed "you never read it" and every verify failed "was
+  // never run" — the rejection feedback demanded exactly the evidence that had
+  // just been thrown away, and re-collecting it burned the 30-call tool budget.
+  const ledger = createEvidenceLedger()
+  const projectDir = makeProject()
+  try {
+    // Turn 1 reads and baselines exactly once, then proposes a plan whose anchor
+    // is wrong — the realistic reason a plan comes back.
+    const first = stubPlanProposal(
+      [validStructuredTask({ edits: [{ op: 'modify', path: 'README.md', anchor: '# nope', change: 'x' }] })],
+      VALIDATION_PRELUDE,
+    )
+    const turn1 = await runTurn({ evidence: ledger, projectDir })
+    assert.equal(turn1.result.type, 'response', 'the bad anchor is rejected')
+    assert.match(feedbackSeenBy(first), /does not appear in the file/)
+    assert.equal(ledger.filesRead.size, 1, 'the read is recorded on the shared ledger')
+    assert.equal(ledger.baselinesByCommand.size, 1, 'and so is the baseline')
+
+    // Turn 2 fixes the anchor and proposes again — with no read_file and no
+    // run_baseline of its own. Under the old behaviour this could not pass.
+    const second = stubPlanProposal([validStructuredTask()])
+    const turn2 = await runTurn({ evidence: ledger, projectDir })
+
+    assert.equal(turn2.result.type, 'plan', 'the corrected plan validates on the carried evidence')
+    const retried = feedbackSeenBy(second)
+    assert.doesNotMatch(retried, /never read it/, 'no file has to be read twice')
+    assert.doesNotMatch(retried, /never run/, 'no baseline has to be re-recorded')
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true })
+  }
+})
+
+test('the ledger is dropped when reset, so stale evidence cannot validate a plan', async () => {  // The other half of the contract: once Workers write, the recorded content
+  // no longer describes the files, and an anchor must not be checked against it.
+  const ledger = createEvidenceLedger()
+  stubPlanProposal([validStructuredTask()], VALIDATION_PRELUDE)
+  await runTurn({ evidence: ledger })
+  assert.equal(ledger.filesRead.size, 1)
+
+  resetEvidenceLedger(ledger)
+  assert.equal(ledger.filesRead.size, 0)
+  assert.equal(ledger.baselinesByCommand.size, 0)
+
+  // With the ledger emptied, the same plan is rejected for want of evidence.
+  stubPlanProposal([validStructuredTask()])
+  const { result } = await runTurn({ evidence: ledger })
+  assert.equal(result.type, 'response')
+})
+
+test('a stub the Developer wrote is evidence it can plan against', async () => {
+  // The point of write_stub: Phase One asks for a stub to exist before a test
+  // can be written against it, but a plan is not executed until it is confirmed.
+  // Without this the Developer could only specify a stub it had never seen, and
+  // never run the test it specified against one. The content it wrote has to
+  // count as something it read, or the plan is told it never opened the file.
+  const STUB = 'export const answer = 0\n'
+  const handle = {
+    callTool: async (tool, args) => {
+      if (tool === 'write_stub') return `Created ${args.path}.`
+      if (tool === 'run_baseline') {
+        return JSON.stringify({ exitCode: 1, signal: null, stdout: '', stderr: '' })
+      }
+      return STUB
+    },
+  }
+
+  stubPlanProposal(
+    [
+      {
+        id: 'impl',
+        title: 'Make answer 42',
+        description: 'why it matters',
+        type: 'modify',
+        dependsOn: [],
+        context: [{ path: 'src/answer.ts', reason: 'the constant this changes' }],
+        // `modify`, not `create`: the file genuinely exists now.
+        edits: [{ op: 'modify', path: 'src/answer.ts', anchor: 'export const answer = 0', change: '42' }],
+        verify: [{ command: 'node', args: ['--test'], kind: 'proves-change' }],
+      },
+    ],
+    [
+      { name: 'write_stub', args: { path: 'src/answer.ts', content: STUB } },
+      { name: 'run_baseline', args: { command: 'node', args: ['--test'] } },
+    ],
+  )
+
+  const { result } = await runTurn({ handle })
+
+  assert.equal(result.type, 'plan', `a plan built on the Developer's own stub must validate: ${JSON.stringify(result)}`)
+  assert.deepEqual(result.plan.tasks[0].writeFile, ['src/answer.ts'])
+})
+
+test('a deleted stub stops counting as available evidence', async () => {
+  // Otherwise a plan could still cite a file that no longer exists, and the
+  // validator would check an anchor against content that is gone.
+  const handle = {
+    callTool: async (tool, args) => {
+      if (tool === 'write_stub') return `Created ${args.path}.`
+      if (tool === 'delete_stub') return `Deleted ${args.path}.`
+      if (tool === 'run_baseline') {
+        return JSON.stringify({ exitCode: 1, signal: null, stdout: '', stderr: '' })
+      }
+      return 'export const answer = 0\n'
+    },
+  }
+
+  const requests = stubPlanProposal(
+    [
+      {
+        id: 'impl',
+        title: 'Make answer 42',
+        description: 'why it matters',
+        type: 'modify',
+        dependsOn: [],
+        context: [{ path: 'src/answer.ts', reason: 'the constant this changes' }],
+        edits: [{ op: 'modify', path: 'src/answer.ts', anchor: 'export const answer = 0', change: '42' }],
+        verify: [{ command: 'node', args: ['--test'], kind: 'proves-change' }],
+      },
+    ],
+    [
+      { name: 'write_stub', args: { path: 'src/answer.ts', content: 'export const answer = 0\n' } },
+      { name: 'delete_stub', args: { path: 'src/answer.ts' } },
+      { name: 'run_baseline', args: { command: 'node', args: ['--test'] } },
+    ],
+  )
+
+  const { result } = await runTurn({ handle })
+
+  assert.equal(result.type, 'response', 'a plan citing a deleted stub is rejected')
+  assert.match(feedbackSeenBy(requests), /never read it/)
+})
+
+test('an anchor outside a narrowed read is refused, because it was never shown', async () => {
+  // read_file can now return part of a file. The plan validator checks anchors
+  // against whatever read_file returned, so a window that hid the rest of the
+  // file has to narrow the evidence too — otherwise the model could anchor on
+  // text it never saw and the check would pass for the wrong reason.
+  const WHOLE = [
+    'export function addTodo() {',
+    '  return 1',
+    '}',
+    '',
+    'export function removeTodo() {',
+    '  return initialTodos.filter(Boolean)',
+    '}',
+    '',
+  ].join('\n')
+  // The tool result is a window: only addTodo came back.
+  const WINDOW = [
+    '# read_file: src/todo.ts — lines 1-3 of 8.',
+    '# Anchors must be copied from this text; the rest of the file was not shown.',
+    'export function addTodo() {',
+    '  return 1',
+    '}',
+    '',
+  ].join('\n')
+
+  const requests = stubPlanProposal(
+    [
+      {
+        id: 'impl',
+        title: 'Change removeTodo',
+        description: 'why it matters',
+        type: 'modify',
+        dependsOn: [],
+        context: [{ path: 'src/todo.ts', reason: 'the function this changes' }],
+        // This anchor lives in the part of the file that was NOT returned.
+        edits: [{ op: 'modify', path: 'src/todo.ts', anchor: 'initialTodos.filter(Boolean)', change: 'x' }],
+        verify: [{ command: 'node', args: ['--check'], kind: 'proves-change' }],
+      },
+    ],
+    [
+      { name: 'read_file', args: { path: 'src/todo.ts', offset: 1, limit: 3 } },
+      { name: 'run_baseline', args: { command: 'node', args: ['--check'] } },
+    ],
+  )
+
+  const { result } = await runTurn({
+    handle: {
+      callTool: async tool => {
+        if (tool === 'run_baseline') {
+          return JSON.stringify({ exitCode: 1, signal: null, stdout: '', stderr: '' })
+        }
+        return WINDOW
+      },
+    },
+  })
+
+  assert.equal(result.type, 'response', 'the plan is rejected')
+  const feedback = feedbackSeenBy(requests)
+  assert.match(feedback, /anchor for 'src\/todo\.ts' does not appear in the file/)
+  assert.ok(WHOLE.includes('initialTodos.filter(Boolean)'), 'the anchor does exist in the real file')
 })

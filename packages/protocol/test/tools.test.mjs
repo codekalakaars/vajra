@@ -14,6 +14,8 @@ test('every tool schema validates its own well-formed example', () => {
     edit_file: { path: 'a.txt', oldString: 'foo', newString: 'bar' },
     delete_file: { path: 'old.txt' },
     create_dir: { path: 'src/new' },
+    write_stub: { path: 'src/auth.ts', content: 'export const auth = 1\n' },
+    delete_stub: { path: 'src/auth.ts' },
     propose_plan: {
       tasks: [
         {

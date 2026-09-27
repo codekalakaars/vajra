@@ -15,7 +15,14 @@ type FilePermissions = LaunchJob['defaultFilePermissions']
 const require = createRequire(import.meta.url)
 const native = require('@codekalakaars/vajra-core')
 
-const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'delete_file', 'create_dir'])
+const MUTATING_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'delete_file',
+  'create_dir',
+  'write_stub',
+  'delete_stub',
+])
 
 function send(message: unknown): void {
   if (typeof process.send === 'function') process.send(message)

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -182,6 +182,223 @@ test('task permissions deny writes outside the allow-list', async () => {
     const ok = await handle.callTool('write_file', { path: join(dir, 'allowed.txt'), content: 'ok' })
     assert.equal(ok, 'ok')
     assert.equal(mutated, 1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// --- write_stub / delete_stub ------------------------------------------------
+//
+// The Developer's only write surface. The guarantees are checked here rather
+// than trusted from the prompt, because a model that ignores an instruction is
+// expected and a tool that permits the write is not.
+
+test('write_stub creates a new file', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-stub-'))
+  try {
+    const handle = createToolHandle(dir, { stubs: new Set() })
+    const result = await handle.callTool('write_stub', {
+      path: 'src/auth.ts',
+      content: 'export const auth = () => {}\n',
+    })
+    assert.match(result, /Created src\/auth\.ts/)
+    assert.equal(readFileSync(join(dir, 'src', 'auth.ts'), 'utf-8'), 'export const auth = () => {}\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('write_stub refuses to touch a file that already exists', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-stub-'))
+  try {
+    writeFileSync(join(dir, 'existing.ts'), 'original\n')
+    const handle = createToolHandle(dir, { stubs: new Set() })
+
+    await assert.rejects(
+      () => handle.callTool('write_stub', { path: 'existing.ts', content: 'replaced' }),
+      /already exists/,
+    )
+    // The point is not just the error: the file is untouched.
+    assert.equal(readFileSync(join(dir, 'existing.ts'), 'utf-8'), 'original\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('write_stub refuses a path outside the project', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-stub-'))
+  try {
+    const handle = createToolHandle(dir, { stubs: new Set() })
+    for (const path of ['../escape.ts', '/etc/passwd-stub', '.']) {
+      await assert.rejects(
+        () => handle.callTool('write_stub', { path, content: 'x' }),
+        /outside project directory/,
+        `"${path}" must not be writable`,
+      )
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('write_stub refuses a masked file', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-stub-'))
+  try {
+    const handle = createToolHandle(dir, { stubs: new Set() })
+    await assert.rejects(
+      () => handle.callTool('write_stub', { path: '.env', content: 'SECRET=1' }),
+      /masked file/,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('delete_stub removes only what write_stub created', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-stub-'))
+  try {
+    writeFileSync(join(dir, 'pre-existing.ts'), 'keep me\n')
+    const stubs = new Set()
+    const handle = createToolHandle(dir, { stubs })
+
+    await handle.callTool('write_stub', { path: 'mine.ts', content: 'mine\n' })
+    assert.ok(existsSync(join(dir, 'mine.ts')))
+
+    // Existing code is not retractable, however it is spelled.
+    for (const path of ['pre-existing.ts', join(dir, 'pre-existing.ts'), './pre-existing.ts']) {
+      await assert.rejects(
+        () => handle.callTool('delete_stub', { path }),
+        /not created by write_stub/,
+        `"${path}" must not be deletable`,
+      )
+    }
+    assert.equal(readFileSync(join(dir, 'pre-existing.ts'), 'utf-8'), 'keep me\n')
+
+    // Its own stub, in any equivalent spelling, is.
+    const result = await handle.callTool('delete_stub', { path: './mine.ts' })
+    assert.match(result, /Deleted \.\/mine\.ts/)
+    assert.ok(!existsSync(join(dir, 'mine.ts')))
+
+    // And only once: a second delete is refused, so the registry really emptied.
+    await assert.rejects(() => handle.callTool('delete_stub', { path: 'mine.ts' }), /not created/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('delete_stub can delete nothing when the handle was given no registry', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-stub-'))
+  try {
+    const handle = createToolHandle(dir)
+    await assert.rejects(
+      () => handle.callTool('delete_stub', { path: 'anything.ts' }),
+      /not created by write_stub/,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// --- read_file narrowing -----------------------------------------------------
+
+const TS_FIXTURE = [
+  'export type Todo = { id: string; text: string }',
+  '',
+  'export const initialTodos: Todo[] = []',
+  '',
+  'export function addTodo(t: Todo) {',
+  '  return [...initialTodos, t]',
+  '}',
+  '',
+  'export function removeTodo(id: string) {',
+  '  return initialTodos.filter(t => t.id !== id)',
+  '}',
+  '',
+].join('\n')
+
+test('read_file with no window returns the whole file, byte for byte', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-read-'))
+  try {
+    writeFileSync(join(dir, 'todo.ts'), TS_FIXTURE)
+    const handle = createToolHandle(dir)
+    const full = await handle.callTool('read_file', { path: join(dir, 'todo.ts') })
+    assert.equal(full, TS_FIXTURE, 'the default read is unchanged')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('read_file can return a line window', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-read-'))
+  try {
+    writeFileSync(join(dir, 'todo.ts'), TS_FIXTURE)
+    const handle = createToolHandle(dir)
+    const window = await handle.callTool('read_file', { path: 'todo.ts', offset: 5, limit: 3 })
+
+    assert.match(window, /lines 5-7 of 12/, 'the window is stated')
+    assert.match(window, /export function addTodo/)
+    assert.match(window, /return \[\.\.\.initialTodos, t\]/)
+    assert.doesNotMatch(window, /export function removeTodo/, 'and the rest is not shown')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('read_file can return named symbols', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-read-'))
+  try {
+    writeFileSync(join(dir, 'todo.ts'), TS_FIXTURE)
+    const handle = createToolHandle(dir)
+    const window = await handle.callTool('read_file', { path: 'todo.ts', symbols: ['addTodo'] })
+
+    assert.match(window, /1 symbol/)
+    assert.match(window, /export function addTodo/)
+    assert.match(window, /return \[\.\.\.initialTodos, t\]/)
+    assert.doesNotMatch(window, /removeTodo/, 'an unrequested symbol is not shown')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('read_file reports a symbol it cannot find instead of returning nothing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-read-'))
+  try {
+    writeFileSync(join(dir, 'todo.ts'), TS_FIXTURE)
+    const handle = createToolHandle(dir)
+    const window = await handle.callTool('read_file', { path: 'todo.ts', symbols: ['nopeNotHere'] })
+
+    // An empty window would read as "this file is empty" and the model would
+    // plan against a fiction, so the full file comes back with an explanation.
+    assert.match(window, /no declaration found for nopeNotHere/)
+    assert.match(window, /export function addTodo/, 'the file is still there')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a windowed read narrows the evidence, so an anchor outside it is refused', async () => {
+  // This is the safety property. The plan validator checks anchors against
+  // whatever read_file returned, so a window that hid the rest of the file must
+  // also stop an anchor being accepted against text the model never saw.
+  const dir = mkdtempSync(join(tmpdir(), 'handle-read-'))
+  try {
+    writeFileSync(join(dir, 'todo.ts'), TS_FIXTURE)
+    const handle = createToolHandle(dir)
+    const window = await handle.callTool('read_file', { path: 'todo.ts', offset: 5, limit: 3 })
+    assert.doesNotMatch(window, /initialTodos\.filter/, 'the anchor target is outside the window')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a windowed read does not poison the cache for a later full read', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'handle-read-'))
+  try {
+    writeFileSync(join(dir, 'todo.ts'), TS_FIXTURE)
+    const handle = createToolHandle(dir)
+    await handle.callTool('read_file', { path: 'todo.ts', offset: 5, limit: 3 })
+    const full = await handle.callTool('read_file', { path: 'todo.ts' })
+    assert.equal(full, TS_FIXTURE, 'the full read is still complete')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

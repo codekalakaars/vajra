@@ -159,7 +159,7 @@ function planArgs(planTasks) {
     tasks: planTasks.map(t => {
       // A task with no file to write still needs an edit to be structured; give
       // it one on a path of its own so it cannot collide with a sibling.
-      const target = t.writeFile?.[0] ?? `created-by-${t.id}.txt`
+      const target = t.writeFile?.[0] ?? `created-by-${t.id}.js`
       return {
         id: t.id,
         title: t.title,
@@ -392,7 +392,7 @@ test('TaskQueue.returnToPending undoes assignment without counting a retry', () 
     description: null,
     instructions: [],
     readFile: [],
-    writeFile: ['a.txt'],
+    writeFile: ['a.js'],
     deleteFile: [],
     createDir: [],
     validation: [],
@@ -423,7 +423,7 @@ test('independent tasks run concurrently: time of the slowest, not the sum', asy
   t.after(() => rmSync(projectDir, { recursive: true, force: true }))
 
   const planTasks = [1, 2, 3, 4].map(i =>
-    task(`t${i}`, `Write out-${i}.txt`, { writeFile: [`out-${i}.txt`] }),
+    task(`t${i}`, `Write out-${i}.js`, { writeFile: [`out-${i}.js`] }),
   )
   const ui = makeUI()
   const session = startSession({ projectDir, planTasks, ui })
@@ -478,11 +478,11 @@ test('a forced failure in one task leaves the others changes intact', async t =>
   t.after(() => rmSync(projectDir, { recursive: true, force: true }))
 
   const planTasks = [
-    task('ok-1', 'Write ok-1', { writeFile: ['ok-1.txt'] }),
+    task('ok-1', 'Write ok-1', { writeFile: ['ok-1.js'] }),
     task('bad', 'Write bad then fail', {
-      writeFile: ['bad.txt'],
+      writeFile: ['bad.js'],
       verify: [
-        ...checkVerify('bad.txt'),
+        ...checkVerify('bad.js'),
         // Unsatisfiable by construction: nothing ever creates this file, so it
         // exits non-zero at execution and the task fails — the same lever the
         // old `node -e "process.exit(1)"` validation provided, expressed as a
@@ -495,7 +495,7 @@ test('a forced failure in one task leaves the others changes intact', async t =>
         },
       ],
     }),
-    task('ok-2', 'Write ok-2', { writeFile: ['ok-2.txt'] }),
+    task('ok-2', 'Write ok-2', { writeFile: ['ok-2.js'] }),
   ]
   const ui = makeUI()
   const session = startSession({ projectDir, planTasks, ui, latencyMs: 100 })
@@ -511,12 +511,12 @@ test('a forced failure in one task leaves the others changes intact', async t =>
   assert.notEqual(result.exitCode, 0, ui.text())
 
   // Survivors keep their writes.
-  assert.ok(existsSync(join(projectDir, 'ok-1.txt')))
-  assert.equal(readFileSync(join(projectDir, 'ok-1.txt'), 'utf-8'), WORKER_CONTENT)
-  assert.ok(existsSync(join(projectDir, 'ok-2.txt')))
-  assert.equal(readFileSync(join(projectDir, 'ok-2.txt'), 'utf-8'), WORKER_CONTENT)
+  assert.ok(existsSync(join(projectDir, 'ok-1.js')))
+  assert.equal(readFileSync(join(projectDir, 'ok-1.js'), 'utf-8'), WORKER_CONTENT)
+  assert.ok(existsSync(join(projectDir, 'ok-2.js')))
+  assert.equal(readFileSync(join(projectDir, 'ok-2.js'), 'utf-8'), WORKER_CONTENT)
   // The failing task was rolled back.
-  assert.ok(!existsSync(join(projectDir, 'bad.txt')), 'bad.txt must be rolled back')
+  assert.ok(!existsSync(join(projectDir, 'bad.js')), 'bad.js must be rolled back')
 
   const persisted = latestSession(projectDir)
   assert.ok(persisted, 'session should be persisted')
@@ -530,13 +530,13 @@ test('a task that throws releases its locks and settles dependent work', async t
   const projectDir = tempProject('vajra-conc-lock-')
   t.after(() => rmSync(projectDir, { recursive: true, force: true }))
 
-  // `../escape.txt` resolves outside the project, so ChangeHistory.recordBefore
+  // `../escape-target.js` resolves outside the project, so ChangeHistory.recordBefore
   // throws after this task acquires the write lock. The dependent task must
   // still be able to proceed after the finally-release.
   const planTasks = [
-    task('escape', 'Write outside the project', { writeFile: ['../escape-target.txt'] }),
+    task('escape', 'Write outside the project', { writeFile: ['../escape-target.js'] }),
     task('waiter', 'Create the same path', {
-      createDir: ['../escape-target.txt'],
+      createDir: ['../escape-target.js'],
       dependsOn: ['escape'],
     }),
   ]
@@ -565,7 +565,7 @@ test('interrupt leaves a persisted record of what completed', async t => {
   t.after(() => rmSync(projectDir, { recursive: true, force: true }))
 
   const planTasks = Array.from({ length: 8 }, (_, i) =>
-    task(`t${i + 1}`, `Write out-${i + 1}.txt`, { writeFile: [`out-${i + 1}.txt`] }),
+    task(`t${i + 1}`, `Write out-${i + 1}.js`, { writeFile: [`out-${i + 1}.js`] }),
   )
   const controller = new AbortController()
   const ui = makeUI()
@@ -633,7 +633,7 @@ test('a turn that only makes tool calls still reports continuous activity', asyn
   t.after(() => rmSync(projectDir, { recursive: true, force: true }))
 
   // A slow provider + a slow tool: the two windows §1 exists to cover.
-  const planTasks = [task('v1', 'Write vis-1.txt', { writeFile: ['vis-1.txt'] })]
+  const planTasks = [task('v1', 'Write vis-1.js', { writeFile: ['vis-1.js'] })]
   const ui = makeUI()
   const session = startSession({ projectDir, planTasks, ui, latencyMs: 900 })
 
@@ -680,7 +680,7 @@ test('a masked file is reported as masked, never with its contents', async t => 
   t.after(() => rmSync(projectDir, { recursive: true, force: true }))
   writeFileSync(join(projectDir, '.env'), 'OPENCODE_API_KEY=sk-super-secret\n', 'utf-8')
 
-  const planTasks = [task('m1', 'Write mask-1.txt', { writeFile: ['mask-1.txt'] })]
+  const planTasks = [task('m1', 'Write mask-1.js', { writeFile: ['mask-1.js'] })]
   const ui = makeUI()
   // read_file .env (masked) → baseline the verify → propose.
   let maskRound = 0
