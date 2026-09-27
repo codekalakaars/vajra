@@ -303,8 +303,12 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
       return
     }
     if (command === 'reasoning') {
-      const next = store.cycleReasoning()
-      store.addEntry({ kind: 'info', text: next === 'off' ? 'Reasoning off' : `Reasoning ${next}` })
+      // Silently. A reasoning level is a mode, not a message: the chip in the
+      // prompt's meta row is where it lives, and OpenCode writes nothing to the
+      // transcript when one changes. A line per ctrl-r would also put the
+      // dial's history into the conversation the agent reads — six presses to
+      // reach `max` is six lines of noise above the answer.
+      store.cycleReasoning()
       return
     }
     if (command === 'sessions') {

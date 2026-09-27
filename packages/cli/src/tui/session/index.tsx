@@ -245,15 +245,10 @@ function SessionApp({
     // Reasoning cycles instead of opening a picker: it is one value with four
     // states, and ctrl-r already does the same thing without typing.
     if (cmd === 'reasoning') {
-      const next = store.cycleReasoning()
-      const levels = store.getSnapshot().reasoningLevels
-      store.addEntry({
-        kind: 'info',
-        text:
-          next === 'off'
-            ? 'Reasoning off — the provider decides on its own'
-            : `Reasoning ${next} (${store.getSnapshot().model} takes ${levels.slice(1).join(', ') || 'no levels'})`,
-      })
+      // Silently, for the same reason as the OpenTUI host: the level is a mode
+      // shown in the prompt's meta row, and writing it to the transcript would
+      // both bury the conversation and hand the agent a log of keypresses.
+      store.cycleReasoning()
       return
     }
     if (cmd === 'models') {

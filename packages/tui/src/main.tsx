@@ -5,7 +5,7 @@ import { render, useKeyboard, useTerminalDimensions } from '@opentui/solid'
 // come from ./spinner.ts, which is OpenCode's own.
 import 'opentui-spinner/solid'
 import { For, Show, createEffect, createMemo, createSignal, onMount } from 'solid-js'
-import { bareModel, providerOf, theme, titlecase } from './theme.js'
+import { bareModel, providerOf, theme } from './theme.js'
 import { generateSubtleSyntax } from './syntax.js'
 import type { JSX } from '@opentui/solid'
 import { createColors, createFrames } from './spinner.js'
@@ -122,6 +122,9 @@ const PICKER_CHROME_ROWS = 5
 /** The transcript keeps this many rows even with a picker open over it. */
 const MIN_TRANSCRIPT_ROWS = 6
 
+/** The air on each side of the left column, so nothing touches the edge. */
+const COLUMN_MARGIN = 1
+
 /** The icon column every tool row reserves, so the labels line up. */
 const INLINE_TOOL_ICON_WIDTH = 2
 
@@ -129,9 +132,6 @@ const INLINE_TOOL_ICON_WIDTH = 2
 function thinkingColor(): string {
   return theme.warning
 }
-
-/** OpenCode's default agent is "build"; Vajra has exactly one. */
-const AGENT = 'build'
 
 /** One line, no wrapping surprises: the row is a single cell high. */
 function oneLine(text: string): string {
@@ -454,6 +454,9 @@ function App(props: { renderer: CliRenderer }) {
       queueMicrotask(measure)
     })
 
+    /** The entries the transcript draws: everything except the banner. */
+    const transcriptEntries = createMemo(() => state().entries.filter(entry => entry.kind !== 'banner'))
+
     /** The rows a picker takes: its own rows, plus the panel's chrome. */
     const pickerRows = createMemo(() => {
       const options = picker()?.options.length ?? 0
@@ -492,14 +495,20 @@ function App(props: { renderer: CliRenderer }) {
             backgroundColor: theme.background,
           }}
         >
-          {/* The left column: picker, transcript, prompt. */}
+          {/* The left column: picker, transcript, prompt — inset by a cell on
+              each side, so the `╹` rules and the transcript's gutter are not
+              welded to the edge of the terminal. The width takes the margins
+              off again, because a fixed-width box plus margins in Yoga is a box
+              that overflows its row and pushes the sidebar off the screen. */}
           <box
             style={{
               flexDirection: 'column',
               flexShrink: 0,
               height: dimensions().height,
               minHeight: 0,
-              width: dimensions().width - sidebarWidth(),
+              marginLeft: COLUMN_MARGIN,
+              marginRight: COLUMN_MARGIN,
+              width: dimensions().width - sidebarWidth() - COLUMN_MARGIN * 2,
             }}
           >
             <Show when={picker()}>
@@ -542,7 +551,12 @@ function App(props: { renderer: CliRenderer }) {
               } as any}
             >
               <box style={{ height: 1 }} />
-              <For each={state().entries}>{(entry, i) => <EntryRow entry={entry} first={i() === 0} />}</For>
+              {/* The banner entry is not drawn. `vajra v0.0.1` is in the
+                  sidebar's footer, where a status belongs; the transcript is for
+                  the conversation, and a build number is not part of it. */}
+              <For each={transcriptEntries()}>
+                {(entry, i) => <EntryRow entry={entry} first={i() === 0} />}
+              </For>
               <Show when={state().thinking !== ''}>
                 {/* OpenCode's ReasoningPart: a header that says what is being
                     thought, then the body as markdown at the thinking opacity. */}
@@ -642,34 +656,34 @@ function App(props: { renderer: CliRenderer }) {
               <box
                 style={{ flexDirection: 'row', flexShrink: 0, paddingTop: 1, gap: 1, justifyContent: 'space-between' }}
               >
+                {/* What you are talking to, and nothing else: the model and the
+                    gateway that serves it. There is no agent name here because
+                    there is no choice of agent — one agent, always the same, so
+                    naming it on every prompt is a label for something the user
+                    cannot change.
+
+                    Always shown, run or not. The sidebar no longer repeats the
+                    model id, so this row is the only place it appears, and a
+                    meta row that empties itself while the agent works leaves the
+                    reasoning chip on the right addressing nobody. */}
                 <box style={{ flexDirection: 'row', gap: 1 }}>
-                  <Show
-                    when={state().prompt !== null}
-                    fallback={<box style={{ height: 1 }} />}
-                  >
-                    {/* One box, because a <Show> that returns several elements
-                        becomes a fragment, and a fragment's children are not laid
-                        out by the flex parent they are inside — they end up
-                        side by side, or nowhere. Every branch here is one node. */}
-                    <box style={{ flexDirection: 'row', gap: 1 }}>
-                      <text content={titlecase(AGENT)} fg={theme.text} />
-                      <text content="·" fg={theme.textMuted} />
-                      <text content={bareModel(state().model)} fg={theme.text} style={{ flexShrink: 0 }} />
-                      <text content={providerOf(state().model)} fg={theme.textMuted} />
-                      {/* The variant chip is OpenCode's reasoning level: a muted
-                          separator, then the value in bold warning. */}
-                      <Show when={state().reasoning !== 'off'}>
-                        <box style={{ flexDirection: 'row', gap: 1 }}>
-                          <text content="·" fg={theme.textMuted} />
-                          <text>
-                            <strong>{state().reasoning}</strong>
-                          </text>
-                        </box>
-                      </Show>
-                    </box>
-                  </Show>
+                  <text content={bareModel(state().model)} fg={theme.text} style={{ flexShrink: 0 }} />
+                  <text content={providerOf(state().model)} fg={theme.textMuted} />
                 </box>
-                <box style={{ flexDirection: 'row', gap: 1, alignItems: 'center' }} />
+                {/* The variant chip, in the slot OpenCode puts it in: the right
+                    end of the meta row, a muted separator and the value in bold.
+                    It is a mode rather than part of the model's name, so it does
+                    not belong in the middle of "gpt-5.4 zen" — and a model that
+                    cannot reason shows nothing here rather than an "off" the
+                    user did not ask for. */}
+                <Show when={state().reasoning !== 'off'}>
+                  <box style={{ flexDirection: 'row', gap: 1, alignItems: 'center', flexShrink: 0 }}>
+                    <text content="·" fg={theme.textMuted} />
+                    <text>
+                      <strong>{state().reasoning}</strong>
+                    </text>
+                  </box>
+                </Show>
               </box>
             </box>
           </box>
@@ -689,7 +703,10 @@ function App(props: { renderer: CliRenderer }) {
               when={state().prompt === null}
               fallback={
                 <box style={{ marginLeft: 1 }}>
-                  <text content={shortPath(state().projectDir, Math.floor(dimensions().width / 2))} fg={theme.textMuted} />
+                  <text
+                    content={shortPath(state().projectDir, Math.floor((dimensions().width - sidebarWidth()) / 2))}
+                    fg={theme.textMuted}
+                  />
                 </box>
               }
             >
@@ -885,7 +902,6 @@ function UnknownModel() {
  */
 function Sidebar(props: { state: UiState; width: number; height: number }) {
   const state = () => props.state
-  const busy = createMemo(() => state().prompt === null || state().tasks.some(task => task.status === 'running'))
   const contextLimit = createMemo(() => state().modelInfo?.context ?? UNKNOWN_CONTEXT_LIMIT)
   const [todoOpen, setTodoOpen] = createSignal(true)
   // Padding either side, the content gutter, and the three cells a status
@@ -919,12 +935,11 @@ function Sidebar(props: { state: UiState; width: number; height: number }) {
         } as any}
       >
         <box style={{ flexShrink: 0, gap: 1, paddingRight: 1 }}>
-          <box style={{ paddingRight: 1 }}>
-            <text fg={theme.text}>
-              <b>{state().model}</b>
-            </text>
-            <text content={` ${state().interrupted ? 'interrupted' : busy() ? 'working' : 'idle'}`} fg={theme.textMuted} />
-          </box>
+          {/* No model-and-status header. The Model section two blocks down says
+              what the model is, the status row under the prompt says whether
+              anything is running, and a third copy of the model id at the top of
+              a 42-cell column is the line the eye lands on first and reads
+              last. */}
 
           {/* Their Context plugin: a bold header, then one muted line per fact.
               The denominator is the model's own window, so a 1M-context model
@@ -983,11 +998,14 @@ function Sidebar(props: { state: UiState; width: number; height: number }) {
         </box>
       </scrollbox>
 
+      {/* The footer is the version, and it is the only thing down here.
+          `vajra v0.0.1` used to be the first line of the transcript, which put
+          a build number above the first thing the user came to read and pushed
+          it a screen away from the bottom-left corner where a status belongs.
+          The directory went with it: the status row under the prompt already
+          carries it, and two copies of a path is one too many. */}
       <box style={{ flexShrink: 0, gap: 1, paddingTop: 1 }}>
-        <text fg={theme.textMuted}>
-          <span style={{ fg: theme.success }}>•</span> <b>{state().executionTotal > 0 ? `${state().executionIndex}/${state().executionTotal} tasks` : 'ready'}</b>
-        </text>
-        <text fg={theme.textMuted} content={state().projectDir} />
+        <text fg={theme.textMuted} content={`vajra v${state().version}`} />
       </box>
     </box>
   )
