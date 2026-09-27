@@ -125,6 +125,12 @@ const MIN_TRANSCRIPT_ROWS = 6
 /** The air on each side of the left column, so nothing touches the edge. */
 const COLUMN_MARGIN = 1
 
+/** A panel's rule and its padding: the cells a row cannot use. */
+const PANEL_CHROME_CELLS = 5
+
+/** The cursor in front of the selected row, and the two cells it costs. */
+const CURSOR_MARKER = '❯ '
+
 /** The icon column every tool row reserves, so the labels line up. */
 const INLINE_TOOL_ICON_WIDTH = 2
 
@@ -136,6 +142,26 @@ function thinkingColor(): string {
 /** One line, no wrapping surprises: the row is a single cell high. */
 function oneLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Cut a row to the cells it has, with an ellipsis when anything was lost.
+ *
+ * A row that wraps is the single reason a command palette looks broken: the
+ * continuation lands on a line of its own, outside the panel's rule, so seven
+ * commands occupy twenty rows and the cursor appears to jump. Truncating keeps
+ * one command on one row, and the ellipsis says the text continues rather than
+ * pretending the sentence ended there.
+ *
+ * Counted by code point, not UTF-16 unit, so an emoji or an accent does not
+ * cost two cells of budget and push the cut one character early.
+ */
+function ellipsis(text: string, width: number): string {
+  if (width <= 0) return ''
+  const cells = Array.from(text)
+  if (cells.length <= width) return text
+  if (width === 1) return '…'
+  return `${cells.slice(0, width - 1).join('')}…`
 }
 
 function shortPath(path: string, max: number): string {
@@ -218,7 +244,16 @@ function App(props: { renderer: CliRenderer }) {
   const [state, setState] = createSignal<UiState | null>(null)
   const [commands, setCommands] = createSignal<CommandSpec[]>([])
   const [draft, setDraft] = createSignal('')
+  /**
+   * The cursor, twice, because they are cursors over different lists.
+   *
+   * One index shared by the palette and a picker meant a filter that left the
+   * cursor on row 3 followed the user into the sessions picker, which has two
+   * rows, and the highlighted row was one past the end: Enter there did nothing
+   * at all, silently, because there was no row to run.
+   */
   const [paletteIdx, setPaletteIdx] = createSignal(0)
+  const [pickerIdx, setPickerIdx] = createSignal(0)
   const [picker, setPicker] = createSignal<{ title: string; options: { value: string; label: string }[] } | null>(null)
   const [gone, setGone] = createSignal<number | null>(null)
   /**
@@ -262,9 +297,10 @@ function App(props: { renderer: CliRenderer }) {
   }
 
   const submit = (value: string): void => {
-    if (value.trim() === '') return
+    const trimmed = value.trim()
+    if (trimmed === '') return
     clearField()
-    send({ t: 'submit', value })
+    send({ t: 'submit', value: trimmed })
   }
 
   /**
@@ -273,11 +309,52 @@ function App(props: { renderer: CliRenderer }) {
    * same tick, and answering Enter from a stale copy submits `/help` as a task
    * instead of running it.
    */
-  const hits = (value: string) =>
-    value.startsWith('/') && !/\s/.test(value) ? matchCommands(commands(), value.slice(1)) : []
-  const query = createMemo(() => (draft().startsWith('/') && !/\s/.test(draft()) ? draft().slice(1) : null))
+  /**
+   * The line the user is on, and whether it is a command being typed.
+   *
+   * The last line, not the whole buffer — and that is the fix for a palette
+   * that appeared not to work at all. Enter on an empty prompt submits nothing
+   * but still leaves a newline in the textarea, so the buffer was "\n" and every
+   * rule that asked about "the draft" was asking about a string with whitespace
+   * in it: the palette stayed shut for the rest of the session, with no way for
+   * the user to tell that pressing Enter had broken it. A command is always on
+   * the current line, and the current line is what gets matched.
+   */
+  const commandQuery = (value: string): string | null => {
+    const line = value.slice(value.lastIndexOf('\n') + 1)
+    if (!line.startsWith('/')) return null
+    const typed = line.slice(1)
+    // A space ends the command: "/model x" is a sentence, not a command, and
+    // the palette must not claim it.
+    return /\s/.test(typed) ? null : typed
+  }
+  const hits = (value: string) => {
+    const typed = commandQuery(value)
+    return typed === null ? [] : matchCommands(commands(), typed)
+  }
+  const query = createMemo(() => commandQuery(draft()))
   const matches = createMemo(() => (query() === null ? [] : matchCommands(commands(), query() as string)))
   const paletteOpen = createMemo(() => matches().length > 0)
+
+  /**
+   * The cursor cannot outlive the list.
+   *
+   * Filtering is what changes the list, and it happens on every keystroke: the
+   * cursor was on row 2 of `/m` — model, models — and one more letter left one
+   * row, so index 1 pointed past the end. Nothing highlighted, and Enter had no
+   * row to run, which is the worst possible state for a control whose whole
+   * purpose is to be pressed. Clamped here rather than at each use, because the
+   * highlight has to be right too, not just the Enter.
+   */
+  createEffect(() => {
+    const last = Math.max(0, matches().length - 1)
+    if (paletteIdx() > last) setPaletteIdx(last)
+    if (picker()) {
+      const options = picker()?.options.length ?? 0
+      const at = Math.min(pickerIdx(), Math.max(0, options - 1))
+      if (at !== pickerIdx()) setPickerIdx(at)
+    }
+  })
 
   onMount(() => {
     // Select text, and it is on the clipboard. The renderer owns the mapping
@@ -299,7 +376,7 @@ function App(props: { renderer: CliRenderer }) {
         setPicker({ title: message.title, options: message.options })
         // The host may say where the cursor belongs; a list sorted by price and
         // name is not somewhere a user expects to land on row 0.
-        setPaletteIdx(Math.min(Math.max(0, message.initial ?? 0), Math.max(0, message.options.length - 1)))
+        setPickerIdx(Math.min(Math.max(0, message.initial ?? 0), Math.max(0, message.options.length - 1)))
         clearField()
       } else if (message.t === 'clear') clearField()
       else if (message.t === 'exit') {
@@ -357,6 +434,8 @@ function App(props: { renderer: CliRenderer }) {
       return
     }
 
+    // A picker owns the keyboard while it is open: there is no text being typed
+    // behind it, so the vi keys are safe here and are the only place they are.
     const open = picker()
     if (open) {
       if (key.name === 'escape') {
@@ -364,13 +443,13 @@ function App(props: { renderer: CliRenderer }) {
         setPicker(null)
       } else if (key.name === 'up' || key.name === 'k') {
         key.preventDefault()
-        setPaletteIdx(i => (i === 0 ? open.options.length - 1 : i - 1))
+        setPickerIdx(i => (i === 0 ? open.options.length - 1 : i - 1))
       } else if (key.name === 'down' || key.name === 'j') {
         key.preventDefault()
-        setPaletteIdx(i => (i === open.options.length - 1 ? 0 : i + 1))
+        setPickerIdx(i => (i === open.options.length - 1 ? 0 : i + 1))
       } else if (key.name === 'return') {
         key.preventDefault()
-        const chosen = open.options[paletteIdx()]
+        const chosen = open.options[pickerIdx()]
         setPicker(null)
         if (chosen) send({ t: 'pick', value: chosen.value })
       }
@@ -381,6 +460,11 @@ function App(props: { renderer: CliRenderer }) {
     const options = hits(value)
 
     if (options.length > 0) {
+      // Arrows only. The palette sits on the input line, so every key it claims
+      // is a letter the user was typing: `j` and `k` as "down" and "up" meant
+      // that `/mj` silently typed `/m`, and the palette stayed open waiting for
+      // a name that could never match. A picker has no text behind it and keeps
+      // the vi keys; this one cannot.
       if (key.name === 'up') {
         key.preventDefault()
         setPaletteIdx(i => (i === 0 ? options.length - 1 : i - 1))
@@ -388,22 +472,36 @@ function App(props: { renderer: CliRenderer }) {
         key.preventDefault()
         setPaletteIdx(i => (i === options.length - 1 ? 0 : i + 1))
       } else if (key.name === 'return') {
-        key.preventDefault()
-        const chosen = options[paletteIdx()]
+        // The cursor is clamped above, so there is always a row to run — and if
+        // the list emptied between the keystroke and this handler, Enter falls
+        // through to the submit path rather than swallowing a key the user can
+        // see doing nothing.
+        const chosen = options[Math.min(paletteIdx(), options.length - 1)]
         if (chosen) {
+          key.preventDefault()
           clearField()
+          setPaletteIdx(0)
           send({ t: 'slash', name: chosen.name })
+          return
         }
       } else if (key.name === 'escape') {
         key.preventDefault()
         clearField()
+        setPaletteIdx(0)
       }
-      return
     }
 
     if (key.name === 'return' && value.trim() !== '') {
       key.preventDefault()
       submit(value)
+      return
+    }
+    if (key.name === 'return') {
+      // An empty prompt has nothing to submit, so Enter must not do the one
+      // thing it would otherwise do: grow the textarea by a line. Every stray
+      // Enter — the reflexive one after a run ends — left a blank first line
+      // that no rule about the draft could see past.
+      key.preventDefault()
       return
     }
     if (key.name === 'escape' && draft() !== '') {
@@ -454,18 +552,38 @@ function App(props: { renderer: CliRenderer }) {
       queueMicrotask(measure)
     })
 
+    /**
+     * The cells a panel row may use.
+     *
+     * The panel is the left column, inset by the column margins, with a one-cell
+     * left rule and two cells of padding on each side — so this is the width a
+     * row has to be cut to, and every row in every panel is cut to it.
+     */
+    const panelCells = createMemo(
+      () => Math.max(8, dimensions().width - sidebarWidth() - COLUMN_MARGIN * 2 - PANEL_CHROME_CELLS),
+    )
+
     /** The entries the transcript draws: everything except the banner. */
     const transcriptEntries = createMemo(() => state().entries.filter(entry => entry.kind !== 'banner'))
 
-    /** The rows a picker takes: its own rows, plus the panel's chrome. */
-    const pickerRows = createMemo(() => {
-      const options = picker()?.options.length ?? 0
-      if (options === 0) return 0
-      // A three-option picker must not reserve a screen, and a seventy-five-model
-      // one must not overrun it; the transcript keeps MIN_TRANSCRIPT_ROWS.
+    /**
+     * The rows a list of `count` options may take, chrome included.
+     *
+     * One rule for the palette and the pickers, because they are the same
+     * control in two places, and they failed the same way when they had
+     * separate rules: an uncapped list is a list that pushes the prompt's meta
+     * row, its rule and its status row off the bottom of a short terminal. The
+     * prompt is the one thing that must never be the thing that is missing, so
+     * a list gets what is left after the prompt and a few transcript rows —
+     * and scrolls, rather than overruns.
+     */
+    const panelRows = (count: number): number => {
+      if (count === 0) return 0
       const spare = Math.max(0, dimensions().height - promptHeight() - MIN_TRANSCRIPT_ROWS)
-      return Math.min(options, Math.max(3, spare - PICKER_CHROME_ROWS)) + PICKER_CHROME_ROWS
-    })
+      return Math.min(count, Math.max(3, spare - PICKER_CHROME_ROWS)) + PICKER_CHROME_ROWS
+    }
+    const pickerRows = createMemo(() => panelRows(picker()?.options.length ?? 0))
+    const paletteRows = createMemo(() => panelRows(matches().length))
 
     return (
       <>
@@ -521,7 +639,12 @@ function App(props: { renderer: CliRenderer }) {
                       that follows the cursor is the only arrangement that works for
                       both a three-option directory picker and a seventy-five-model
                       catalog. */}
-                  <PickerList options={open().options} selected={paletteIdx()} height={pickerRows() - PICKER_CHROME_ROWS} />
+                  <PickerList
+                    options={open().options}
+                    selected={pickerIdx()}
+                    height={pickerRows() - PICKER_CHROME_ROWS}
+                    cells={panelCells()}
+                  />
                 </Panel>
               )}
             </Show>
@@ -595,14 +718,21 @@ function App(props: { renderer: CliRenderer }) {
 
             <Show when={paletteOpen() && !picker()}>
               <Panel>
-                <For each={matches()}>
-                  {(command, i) => (
-                    <text
-                      content={`${i() === paletteIdx() ? '❯ ' : '  '}/${command.name}  ${command.summary}`}
-                      fg={i() === paletteIdx() ? theme.text : theme.textMuted}
-                    />
-                  )}
-                </For>
+                {/* The palette is the picker's list with a different source: one
+                    row per command, each cut to the panel's width, scrolling and
+                    following the cursor when the command set is taller than the
+                    terminal. It used to be a <For> of <text>s with no width, so
+                    every summary wrapped onto a line of its own outside the
+                    rule — seven commands in twenty rows. */}
+                <PickerList
+                  options={matches().map(command => ({
+                    value: command.name,
+                    label: `/${command.name}  ${command.summary}`,
+                  }))}
+                  selected={paletteIdx()}
+                  height={paletteRows() - PICKER_CHROME_ROWS}
+                  cells={panelCells()}
+                />
               </Panel>
             </Show>
 
@@ -769,8 +899,16 @@ function App(props: { renderer: CliRenderer }) {
    * terminal should not spend two thirds of its height on a list, and a tall
    * one should not scroll three visible rows at a time.
    */
-  function PickerList(props: { options: { value: string; label: string }[]; selected: number; height: number }) {
+  function PickerList(props: { options: { value: string; label: string }[]; selected: number; height: number; cells: number }) {
     let list: { scrollTop: number } | undefined
+    // A visible scrollbar takes a cell off the right of every row, and a row cut
+    // to the full width is a row the track is drawn on top of — the ellipsis
+    // disappears under a block of scrollbar, which reads as a truncated label
+    // that was never truncated on purpose.
+    const scrolls = () => props.options.length > props.height
+    // One cell of slack for the track, so the ellipsis is never the cell the
+    // scrollbar paints on.
+    const labelCells = () => props.cells - CURSOR_MARKER.length - (scrolls() ? 2 : 0)
     // Keep the cursor in view. Assigning scrollTop on every index change is the
     // whole scroll behaviour: no animation, no scroll events, and the list is
     // exactly where the keypress left it.
@@ -787,16 +925,19 @@ function App(props: { renderer: CliRenderer }) {
         style={{ height: props.height, flexShrink: 0 }}
         verticalScrollbarOptions={{
           paddingLeft: 1,
-          visible: props.options.length > props.height,
+          visible: scrolls(),
           trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.borderActive },
         } as any}
       >
+        {/* Cut, not wrapped: a picker row is one line of facts about one model,
+            and a wrapped one puts half a model's context window on a row with
+            no rule and no cursor. */}
         <For each={props.options}>
           {(option, i) => (
             <text
-              content={`${i() === props.selected ? '❯ ' : '  '}${option.label}`}
+              content={`${i() === props.selected ? CURSOR_MARKER : '  '}${ellipsis(option.label, labelCells())}`}
               fg={i() === props.selected ? theme.text : theme.textMuted}
-              style={{ flexShrink: 0 }}
+              style={{ flexShrink: 0, width: '100%' }}
             />
           )}
         </For>
