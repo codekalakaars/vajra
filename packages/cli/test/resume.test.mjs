@@ -578,13 +578,13 @@ test('a resume replays the conversation it is resuming', async t => {
   )
 })
 
-test('a long history is replayed as its tail, and says how much it left out', async t => {
+test('a long conversation is replayed whole, because that is the session', async t => {
   const { runSession } = await import(pathToFileURL(join(root, 'session', 'service.js')).href)
   const dir = project()
   t.after(() => { rmSync(dir, { recursive: true, force: true }) })
 
   saveSession(makeSession(dir, { phase: 'conversing', plan: null, tasks: {} }))
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 100; i++) {
     appendMessage('sess-1', dir, { role: 'user', content: `question ${i}` })
     appendMessage('sess-1', dir, { role: 'assistant', content: `answer ${i}` })
   }
@@ -626,12 +626,15 @@ test('a long history is replayed as its tail, and says how much it left out', as
 
   await runSession({ model: 'zen/test', apiKey: 'sk-test', projectDir: dir, resumeFrom: 'sess-1' }, ui)
 
-  assert.equal(replayed.length, 20, 'the tail, and only the tail')
-  assert.equal(replayed[0].text, 'question 20', 'the oldest shown turn is the 21st')
-  assert.equal(replayed.at(-1).text, 'answer 29')
+  // 200 turns is a backstop, not a budget: a hundred-turn session is a hundred
+  // turns the user is entitled to read, and a resume that says "15 earlier
+  // messages not shown" about someone's actual conversation is just wrong.
+  assert.equal(replayed.length, 200, 'all two hundred turns')
+  assert.equal(replayed[0].text, 'question 0', 'from the beginning, not the tail')
+  assert.equal(replayed.at(-1).text, 'answer 99')
   assert.ok(
-    calls.some(c => c[0] === 'info' && /40 earlier messages not shown/.test(c[1])),
-    `a truncated history must admit it: ${JSON.stringify(calls)}`,
+    !calls.some(c => c[0] === 'info' && /not shown/.test(c[1])),
+    `nothing was left out, so nothing should be claimed: ${JSON.stringify(calls)}`,
   )
 })
 

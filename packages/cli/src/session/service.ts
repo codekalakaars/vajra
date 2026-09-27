@@ -205,23 +205,31 @@ export function isExitCommand(message: string): boolean {
   return lower === 'exit' || lower === 'quit' || lower === '/exit' || lower === '/quit'
 }
 
-/** How much of a resumed conversation is worth putting back on screen. */
-const RESTORED_TURNS_SHOWN = 20
+/**
+ * A backstop on how much of a resumed conversation is put back on screen.
+ *
+ * Not a display budget. The transcript scrolls and a session's history is
+ * whatever it is, so the conversation a user chose to resume is the conversation
+ * they get to read — all of it, even when that is a hundred turns. This number
+ * exists for a record that is not a conversation (a loop that appended thousands
+ * of turns), where laying the whole thing out would stall the screen rather than
+ * show it.
+ */
+const RESTORED_TURNS_LIMIT = 200
 
 /**
- * Put a resumed conversation's last turns back in the transcript.
+ * Put a resumed conversation back in the transcript.
  *
  * A resume that starts on an empty screen is a resume that looks broken: the
  * model has the history, the user cannot see any of it, and the first thing
- * they are asked is what to do next. So the tail of the conversation is
- * replayed as turns — the same user blocks and markdown answers as a live
- * session renders — and a line says how much was left out, because a truncated
- * history that claims to be the history is worse than one that admits it.
+ * they are asked is what to do next. So the conversation is replayed as turns —
+ * the same user blocks and markdown answers as a live session renders.
  *
  * Tool calls and tool results are not replayed: they are the agent's own
- * bookkeeping and they are long. `system` turns are not replayed either — the
- * prompt would be re-shown on every resume, and it is not something a user
- * said.
+ * bookkeeping, they are long, and a session is resumed to continue the
+ * *conversation*, not to re-read a transcript of every file the agent opened.
+ * `system` turns are not replayed either — the prompt would be re-shown on
+ * every resume, and it is not something a user said.
  */
 function replayHistory(ui: SessionUI, messages: ChatMessage[]): void {
   const turns = messages
@@ -249,9 +257,11 @@ function replayHistory(ui: SessionUI, messages: ChatMessage[]): void {
     }
   }
 
-  const shown = turns.slice(-RESTORED_TURNS_SHOWN)
+  const shown = turns.slice(-RESTORED_TURNS_LIMIT)
   const hidden = turns.length - shown.length
-  if (hidden > 0) ui.info(`… ${hidden} earlier message${hidden === 1 ? '' : 's'} not shown`)
+  if (hidden > 0) {
+    ui.info(`… this session has ${turns.length} turns; the first ${hidden} are not shown`)
+  }
   for (const turn of shown) emit(turn)
 }
 

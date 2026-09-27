@@ -995,22 +995,16 @@ function App(props: { renderer: CliRenderer }) {
               <box style={{ gap: 2, flexDirection: 'row' }}>
                 {/* A copy report takes the usage slot for as long as it is
                     true. It is the newest thing that happened to the user, and
-                    the meter is a number they can read again any time. */}
+                    the meter is a number they can read again any time.
+
+                    With neither, the slot is empty. It used to hold
+                    "ctrl+r reasoning levels" — a keybinding advertisement for
+                    a control the palette already lists, in the one place on the
+                    screen that is meant for what just happened. */}
                 <Show
                   when={copy()}
                   fallback={
-                    <Show
-                      when={state().usage.calls > 0}
-                      fallback={
-                        <text fg={theme.text}>
-                          ctrl+r{' '}
-                          <span style={{ fg: theme.textMuted }}>
-                            reasoning
-                            {state().reasoningLevels.length > 1 ? ' levels' : ' (this model does not reason)'}
-                          </span>
-                        </text>
-                      }
-                    >
+                    <Show when={state().usage.calls > 0}>
                       <text content={usageLine(state())} fg={theme.textMuted} style={{ wrapMode: 'none' }} />
                     </Show>
                   }
