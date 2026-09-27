@@ -49,6 +49,10 @@ export async function runCommand(options: RunOptions): Promise<void> {
     error: message => streamer.error(message),
     warning: message => streamer.warning(message),
     newline: () => streamer.newline(),
+    restoredTurn: turn =>
+      turn.role === 'user'
+        ? streamer.info(`\n\u001b[1mYou:\u001b[0m ${turn.text}`)
+        : streamer.info(`\n${turn.text}`),
     onTextDelta: text => streamer.onTextDelta(text),
     onThinkingDelta: text => streamer.onThinkingDelta(text),
     finishLine: () => streamer.finishLine(),

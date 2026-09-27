@@ -518,6 +518,123 @@ test('a mid-execution resume re-runs only the unfinished task', async t => {
   assert.equal(listSessions(dir).length, 1)
 })
 
+test('a resume replays the conversation it is resuming', async t => {
+  const { runSession } = await import(pathToFileURL(join(root, 'session', 'service.js')).href)
+  const dir = project()
+  t.after(() => { rmSync(dir, { recursive: true, force: true }) })
+
+  // A resume that starts on an empty screen looks broken: the model has the
+  // history and the user cannot see any of it.
+  saveSession(makeSession(dir, { phase: 'conversing', plan: null, tasks: {} }))
+  appendMessage('sess-1', dir, { role: 'system', content: 'You are the Developer' })
+  appendMessage('sess-1', dir, { role: 'user', content: 'earlier question' })
+  appendMessage('sess-1', dir, { role: 'assistant', content: 'earlier answer' })
+  appendMessage('sess-1', dir, { role: 'tool', content: 'tool output' })
+
+  const replayed = []
+  const calls = []
+  const answers = ['exit']
+  const ui = {
+    calls,
+    banner: () => {}, info: m => calls.push(['info', m]), success: () => {}, error: m => calls.push(['error', m]),
+    warning: () => {}, newline: () => {}, onTextDelta: () => {}, onThinkingDelta: () => {},
+    finishLine: () => {}, discardBuffer: () => {},
+    restoredTurn: turn => replayed.push(turn),
+    askInitialTask: () => { throw new Error('resume must not ask for an initial task') },
+    askUserMessage: () => answers.shift() ?? 'exit',
+    showPlan: () => {},
+    askConfirmPlan: () => { throw new Error('no plan expected') },
+    askRejectFeedback: () => { throw new Error('no plan expected') },
+    onTaskEvent: () => {}, onAgentEvent: () => {},
+    text: () => calls.map(c => c.join(' ')).join('\n'),
+  }
+
+  const realFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = realFetch })
+  globalThis.fetch = async () => {
+    const encoder = new TextEncoder()
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+          id: 's', object: 'chat.completion.chunk', created: 0, model: 'm',
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'okay' }, finish_reason: null }],
+        })}\n\n`))
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+        controller.close()
+      },
+    })
+    return new Response(body, { headers: { 'content-type': 'text/event-stream' } })
+  }
+
+  await runSession({ model: 'zen/test', apiKey: 'sk-test', projectDir: dir, resumeFrom: 'sess-1' }, ui)
+
+  assert.deepEqual(replayed, [
+    { role: 'user', text: 'earlier question' },
+    { role: 'assistant', text: 'earlier answer' },
+  ], 'the conversation is replayed as turns, and only the turns someone said')
+  assert.ok(
+    calls.some(c => c[0] === 'info' && /Resumed session sess-1/.test(c[1])),
+    'and the resume says which session it picked up',
+  )
+})
+
+test('a long history is replayed as its tail, and says how much it left out', async t => {
+  const { runSession } = await import(pathToFileURL(join(root, 'session', 'service.js')).href)
+  const dir = project()
+  t.after(() => { rmSync(dir, { recursive: true, force: true }) })
+
+  saveSession(makeSession(dir, { phase: 'conversing', plan: null, tasks: {} }))
+  for (let i = 0; i < 30; i++) {
+    appendMessage('sess-1', dir, { role: 'user', content: `question ${i}` })
+    appendMessage('sess-1', dir, { role: 'assistant', content: `answer ${i}` })
+  }
+
+  const replayed = []
+  const calls = []
+  const answers = ['exit']
+  const ui = {
+    calls,
+    banner: () => {}, info: m => calls.push(['info', m]), success: () => {}, error: () => {},
+    warning: () => {}, newline: () => {}, onTextDelta: () => {}, onThinkingDelta: () => {},
+    finishLine: () => {}, discardBuffer: () => {},
+    restoredTurn: turn => replayed.push(turn),
+    askInitialTask: () => { throw new Error('resume must not ask for an initial task') },
+    askUserMessage: () => answers.shift() ?? 'exit',
+    showPlan: () => {},
+    askConfirmPlan: () => { throw new Error('no plan expected') },
+    askRejectFeedback: () => { throw new Error('no plan expected') },
+    onTaskEvent: () => {}, onAgentEvent: () => {},
+    text: () => calls.map(c => c.join(' ')).join('\n'),
+  }
+
+  const realFetch = globalThis.fetch
+  t.after(() => { globalThis.fetch = realFetch })
+  globalThis.fetch = async () => {
+    const encoder = new TextEncoder()
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+          id: 's', object: 'chat.completion.chunk', created: 0, model: 'm',
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'okay' }, finish_reason: null }],
+        })}\n\n`))
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+        controller.close()
+      },
+    })
+    return new Response(body, { headers: { 'content-type': 'text/event-stream' } })
+  }
+
+  await runSession({ model: 'zen/test', apiKey: 'sk-test', projectDir: dir, resumeFrom: 'sess-1' }, ui)
+
+  assert.equal(replayed.length, 20, 'the tail, and only the tail')
+  assert.equal(replayed[0].text, 'question 20', 'the oldest shown turn is the 21st')
+  assert.equal(replayed.at(-1).text, 'answer 29')
+  assert.ok(
+    calls.some(c => c[0] === 'info' && /40 earlier messages not shown/.test(c[1])),
+    `a truncated history must admit it: ${JSON.stringify(calls)}`,
+  )
+})
+
 test('a conversational resume prompts first instead of sending an empty turn', async t => {
   const { runSession } = await import(pathToFileURL(join(root, 'session', 'service.js')).href)
   const dir = project()

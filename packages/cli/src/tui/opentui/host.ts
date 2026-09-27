@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Writable } from 'node:stream'
 import { resolveApiKeyForModel } from '../../env.js'
+import { listSessions as listPersistedSessions, type SessionSummary } from '../../persist/index.js'
 import { bareModel } from '../../models/catalog.js'
 import type { ReasoningEffort } from '../../agent/chat.js'
 import {
@@ -271,6 +272,20 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     }
   }
 
+  /**
+   * End the run in flight so the loop can pick up what a command just set.
+   *
+   * A slash command is answered at the prompt *without* answering it, which is
+   * right for `/help` and wrong for anything that changes what the next run
+   * should be: the session is parked in `ask`, so `nextRun` is set and never
+   * read, and `/dir` and `/sessions` look like they did nothing at all. The
+   * prompt is answered with `exit`, the run unwinds, and the loop starts the
+   * next one — which is what the Ink shell does for the same two commands.
+   */
+  const endRunForNext = (): void => {
+    if (store.getSnapshot().prompt) store.endPromptQuietly()
+  }
+
   /** A line submitted at the prompt: a slash command, or a task. */
   const submit = (value: string): void => {
     const trimmed = value.trim()
@@ -331,14 +346,19 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
       return
     }
     if (command === 'sessions') {
+      // The DB, not a directory. This used to read `~/.vajra/sessions` and take
+      // ids out of filenames — a directory nothing has ever written, so the
+      // picker offered "new session" and nothing else, and the ids it would have
+      // offered were not the ones `loadSession` looks up. Every run is recorded
+      // in `~/.vajra/vajra.db`, and that is where the list comes from.
       const picked = await ask('Resume which session?', [
         { value: '__none__', label: 'new session' },
-        ...listSessions(projectDir).map(session => ({
-          value: session.id,
-          label: `${session.id}  ${session.title}  ·  ${session.when}`,
-        })),
+        ...listPersistedSessions(projectDir).map(sessionRow),
       ])
-      if (picked !== null && picked !== '__none__') nextRun = { resumeFrom: picked }
+      if (picked !== null && picked !== '__none__') {
+        nextRun = { resumeFrom: picked }
+        endRunForNext()
+      }
       return
     }
     if (command === 'model') {
@@ -388,6 +408,7 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
         projectDir = picked
         store.setSettings({ projectDir })
         nextRun = 'ask'
+        endRunForNext()
       }
       return
     }
@@ -493,17 +514,37 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
 }
 
 /** Persisted sessions for /sessions, newest first. Best effort by design. */
-function listSessions(projectDir: string): { id: string; title: string; when: string }[] {
-  const root = join(process.env.HOME ?? '', '.vajra', 'sessions')
-  if (!existsSync(root)) return []
-  return readdirSync(root)
-    .filter(name => name.startsWith(projectDir.replace(/\//g, '-')))
-    .slice(0, 8)
-    .map(name => ({
-      id: name,
-      title: 'persisted session',
-      when: new Date(Number(name.split('-').pop()) || Date.now()).toISOString().slice(0, 10),
-    }))
+/** Compact age for a session row: 4s, 12m, 3h, 5d. */
+function sessionAge(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return 'unknown'
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+/**
+ * One session as a picker row: the columns the Ink picker shows, so the two
+ * front-ends list a session the same way.
+ *
+ * The id is the row's value, and it is the id the database is keyed by — the
+ * one `loadSession` takes and the only one that can resume anything.
+ */
+function sessionRow(session: SessionSummary): { value: string; label: string } {
+  const title = (session.planTitle ?? session.status).replace(/\s+/g, ' ').trim()
+  return {
+    value: session.sessionId,
+    label: [
+      session.sessionId.slice(0, 8),
+      session.phase.padEnd(12),
+      `${session.done}/${session.total}`.padEnd(6),
+      sessionAge(Date.now() - session.updatedAt).padEnd(6),
+      title,
+    ].join('  '),
+  }
 }
 
 /** Re-exported so the CLI entry can route a raw line without importing both. */

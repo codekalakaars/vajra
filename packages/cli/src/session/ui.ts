@@ -15,6 +15,14 @@ export interface SessionStreamer {
   warning(message: string): void
   /** Blank line (report separators). */
   newline(): void
+  /**
+   * A turn replayed from a resumed session's history, not something said now.
+   *
+   * Separate from `info` because a resumed conversation is not a log line: it
+   * is the two sides of a conversation the user is looking at again, and it has
+   * to look like the transcript they left rather than like a report about it.
+   */
+  restoredTurn(turn: { role: 'user' | 'assistant'; text: string }): void
 }
 
 /** Structured execution progress so frontends can render a task list. */
@@ -325,3 +333,18 @@ function parseExit(text: string): CommandPayload | null {
     return null
   }
 }
+
+/**
+ * What a prompt resolves with when the *shell* ended the turn, not the user.
+ *
+ * `/dir` and `/sessions` change what the next run should be, so the run in
+ * flight has to end — and answering the prompt with `exit` did that at the price
+ * of a transcript showing a user who typed "exit" and a "Goodbye!" nobody said.
+ * The session treats this as an exit in every way that matters (the run unwinds,
+ * the shell's loop starts the next one) and in no other way: it is never typed,
+ * never stored and never rendered.
+ *
+ * It lives here, in the port both sides already import, because a TUI store is
+ * not something the session service may depend on.
+ */
+export const SILENT_EXIT = '\u0000exit'

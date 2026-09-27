@@ -7,6 +7,7 @@ import {
   resolveConcurrencyConfig,
 } from '@codekalakaars/vajra-sandbox'
 import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
+import { SILENT_EXIT } from './ui.js'
 import {
   createEvidenceLedger,
   developerConversationTurn,
@@ -199,8 +200,71 @@ export interface SessionResult {
 }
 
 export function isExitCommand(message: string): boolean {
+  if (message === SILENT_EXIT) return true
   const lower = message.trim().toLowerCase()
   return lower === 'exit' || lower === 'quit' || lower === '/exit' || lower === '/quit'
+}
+
+/** How much of a resumed conversation is worth putting back on screen. */
+const RESTORED_TURNS_SHOWN = 20
+
+/**
+ * Put a resumed conversation's last turns back in the transcript.
+ *
+ * A resume that starts on an empty screen is a resume that looks broken: the
+ * model has the history, the user cannot see any of it, and the first thing
+ * they are asked is what to do next. So the tail of the conversation is
+ * replayed as turns — the same user blocks and markdown answers as a live
+ * session renders — and a line says how much was left out, because a truncated
+ * history that claims to be the history is worse than one that admits it.
+ *
+ * Tool calls and tool results are not replayed: they are the agent's own
+ * bookkeeping and they are long. `system` turns are not replayed either — the
+ * prompt would be re-shown on every resume, and it is not something a user
+ * said.
+ */
+function replayHistory(ui: SessionUI, messages: ChatMessage[]): void {
+  const turns = messages
+    .map(message => {
+      const role = message.role
+      const text = typeof message.content === 'string' ? message.content : ''
+      if (text.trim() === '') return null
+      if (role === 'user') return { role: 'user' as const, text }
+      if (role === 'assistant') return { role: 'assistant' as const, text }
+      return null
+    })
+    .filter((turn): turn is { role: 'user' | 'assistant'; text: string } => turn !== null)
+  if (turns.length === 0) return
+
+  // The port requires `restoredTurn`, but test doubles and embedders are
+  // JavaScript and may not implement it — the same concession the port makes
+  // for `onAgentEvent`. A renderer that throws on one turn must not cost the
+  // user the rest of the history either.
+  const replay = ui as { restoredTurn?: SessionUI['restoredTurn'] }
+  const emit = (turn: { role: 'user' | 'assistant'; text: string }): void => {
+    try {
+      replay.restoredTurn?.(turn)
+    } catch {
+      /* a renderer that throws must not take the session down */
+    }
+  }
+
+  const shown = turns.slice(-RESTORED_TURNS_SHOWN)
+  const hidden = turns.length - shown.length
+  if (hidden > 0) ui.info(`… ${hidden} earlier message${hidden === 1 ? '' : 's'} not shown`)
+  for (const turn of shown) emit(turn)
+}
+
+/**
+ * The user said it, rather than the shell ending the turn on its own.
+ *
+ * `SILENT_EXIT` ends a run exactly as `exit` does — the loop unwinds and the
+ * next run starts — but it is not something anyone typed, so it must not print
+ * "Goodbye!" or land in the transcript as a user message. `isExitCommand` says
+ * both are exits; this says which one to announce.
+ */
+function isUserExit(message: string): boolean {
+  return message !== SILENT_EXIT && isExitCommand(message)
 }
 
 /**
@@ -462,6 +526,7 @@ export async function runSession(
     resumedPlan = stored.plan
     resumedCompleted = new Set(plan.completed)
     ui.info(`Resumed session ${stored.sessionId} (${plan.completed.length} task(s) already done).`)
+    replayHistory(ui, restored as unknown as ChatMessage[])
     if (plan.staleness.checked > 0) {
       ui.info(describeVerdict(plan.staleness))
     }
@@ -536,7 +601,7 @@ export async function runSession(
   // D7: honour exit/quit at the first prompt, not only on later turns.
   while (!resuming && (!initialMessage || isExitCommand(initialMessage))) {
     if (initialMessage && isExitCommand(initialMessage)) {
-      ui.info('Goodbye!')
+      if (isUserExit(initialMessage)) ui.info('Goodbye!')
       exited = true
       return finish(0)
     }
@@ -580,7 +645,7 @@ export async function runSession(
       userMessage = 'exit'
     }
     if (isExitCommand(userMessage)) {
-      ui.info('Goodbye!')
+      if (isUserExit(userMessage)) ui.info('Goodbye!')
       exited = true
       return finish(0)
     }
@@ -648,7 +713,7 @@ export async function runSession(
         ui.warning('Plan rejected. What would you like to change?')
         userMessage = await ui.askRejectFeedback()
         if (userMessage && isExitCommand(userMessage)) {
-          ui.info('Goodbye!')
+          if (isUserExit(userMessage)) ui.info('Goodbye!')
           exited = true
           return finish(0)
         }
@@ -1128,7 +1193,7 @@ export async function runSession(
     }
 
     if (isExitCommand(userMessage)) {
-      ui.info('Goodbye!')
+      if (isUserExit(userMessage)) ui.info('Goodbye!')
       exited = true
       // A run whose tasks failed still failed, even if the user then asked
       // about it: the exit code is the report's, not the chat's.

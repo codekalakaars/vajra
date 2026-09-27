@@ -37,6 +37,10 @@ export class InkSessionUI implements SessionUI {
     this.store.addEntry({ kind: 'blank' })
   }
 
+  restoredTurn(turn: { role: 'user' | 'assistant'; text: string }): void {
+    this.store.addEntry({ kind: turn.role, text: turn.text })
+  }
+
   onTextDelta(text: string): void {
     this.store.appendStream(text)
   }

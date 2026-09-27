@@ -1,6 +1,6 @@
 import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
 import type { AgentEvent } from '../../session/ui.js'
-import { agentDisplay } from '../../session/ui.js'
+import { agentDisplay, SILENT_EXIT } from '../../session/ui.js'
 import { clampReasoning, modelView, reasoningLevelsFor, type ModelView, type ReasoningEffort } from '../../models/catalog.js'
 
 export type PromptKind = 'initial-first' | 'initial-reentry' | 'user' | 'confirm-plan' | 'feedback'
@@ -298,6 +298,22 @@ export class SessionStore {
         queueMicrotask(() => this.submitPrompt('exit'))
       }
     })
+  }
+
+  /**
+   * End the pending prompt without the user having said anything.
+   *
+   * `/dir` and `/sessions` change what the *next* run should be, so the run in
+   * flight has to end — and answering the prompt with `exit` did that, at the
+   * price of the transcript showing a user who typed "exit" and a "Goodbye!"
+   * nobody said. The session treats this sentinel exactly as an exit: the run
+   * unwinds, the shell's loop starts the next one, and nothing is recorded.
+   */
+  endPromptQuietly(): void {
+    const prompt = this.state.prompt
+    if (!prompt) return
+    this.set({ prompt: null })
+    prompt.resolve(SILENT_EXIT)
   }
 
   submitPrompt(value: string): void {
