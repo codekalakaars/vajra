@@ -23,7 +23,7 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   },
   {
     name: 'reasoning',
-    summary: 'Cycle how hard the model thinks, over the levels this model accepts',
+    summary: 'Choose how hard the model thinks — the levels this model accepts',
     aliases: ['think', 'effort'],
   },
   {

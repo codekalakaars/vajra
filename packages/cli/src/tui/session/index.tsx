@@ -244,10 +244,21 @@ function SessionApp({
     // Reasoning cycles instead of opening a picker: it is one value with four
     // states, and ctrl-r already does the same thing without typing.
     if (cmd === 'reasoning') {
-      // Silently, for the same reason as the OpenTUI host: the level is a mode
-      // shown in the prompt's meta row, and writing it to the transcript would
-      // both bury the conversation and hand the agent a log of keypresses.
-      store.cycleReasoning()
+      // The OpenTUI front-end opens a list of the model's levels and lets the
+      // user pick one. This fallback has no list to open, so it steps — and says
+      // what it is stepping through, which is the part that was missing: the
+      // levels are the model's, and a user who does not know they exist cannot
+      // ask for them.
+      const levels = store.getSnapshot().reasoningLevels
+      if (levels.length <= 1) {
+        store.addEntry({
+          kind: 'info',
+          text: `${store.getSnapshot().model} does not reason — there is no level to choose.`,
+        })
+        return
+      }
+      const next = store.cycleReasoning()
+      store.addEntry({ kind: 'info', text: `Reasoning ${next}  ·  levels: ${levels.join(', ')}` })
       return
     }
     const kind = state.prompt?.kind

@@ -527,6 +527,11 @@ function App(props: { renderer: CliRenderer }) {
         setPicker(null)
         setPickerQuery('')
         clearField()
+        // The host is waiting on an answer. Closing a picker silently would
+        // leave the command that opened it — `/reasoning`, `/model`, `/dir` —
+        // hanging for the rest of the session, and the next `/reasoning` would
+        // queue behind it.
+        send({ t: 'pick', value: null })
         return
       }
       if (key.name === 'up' || key.name === 'down' || key.name === 'return') {
@@ -1001,7 +1006,7 @@ function App(props: { renderer: CliRenderer }) {
                           ctrl+r{' '}
                           <span style={{ fg: theme.textMuted }}>
                             reasoning
-                            {state().reasoningLevels.length > 1 ? '' : ' (this model does not reason)'}
+                            {state().reasoningLevels.length > 1 ? ' levels' : ' (this model does not reason)'}
                           </span>
                         </text>
                       }

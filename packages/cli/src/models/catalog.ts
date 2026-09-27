@@ -476,6 +476,15 @@ export function listModels(options: { includeUnavailable?: boolean } = {}): Mode
     })
 }
 
+/**
+ * `zen/space-bunny-free` → `space-bunny-free`, for a question that is about the
+ * model rather than about the routing.
+ */
+export function bareModel(model: string): string {
+  const slash = model.indexOf('/')
+  return slash === -1 ? model : model.slice(slash + 1)
+}
+
 /** The catalog's own idea of which models are reachable at all. */
 export function hasCatalog(): boolean {
   return Object.keys(current.models).length > 0

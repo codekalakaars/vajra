@@ -262,6 +262,26 @@ await wait(800)
   check('and the input is cleared', !leftOf(frame()[frame().findIndex(l => l.includes('▀')) - 1] ?? '').startsWith('claude'), 'the query is still in the input')
 }
 
+// ── escape answers the host ───────────────────────────────────────────────
+// The host is waiting on the promise `ask` returned. A picker closed with
+// escape used to send nothing at all, so `/reasoning`, `/model` and `/dir` hung
+// for the rest of the session and the next one queued behind it.
+await open(0)
+{
+  const before = said.filter(m => m.t === 'pick').length
+  type(ESC)
+  await wait(800)
+  const picks = said.filter(m => m.t === 'pick')
+  check('escape answers the host with nothing chosen', picks.length === before + 1 && picks.at(-1)?.value === null, JSON.stringify(picks.at(-1)))
+  check('the picker is closed', !/Which model\?/.test(title()), title())
+  check('and the input is empty again', !leftOf(frame()[frame().findIndex(l => l.includes('▀')) - 1] ?? '').startsWith('/'), 'the query is still in the input')
+  // And a picker still opens after a dismissal: the host is free again.
+  await open(0)
+  check('a picker opens again after a dismissal', /Which model\?/.test(title()), title())
+  type(ESC)
+  await wait(500)
+}
+
 child.kill('SIGKILL')
 console.log(failures === 0 ? '\nOK — the picker filters, ranks and picks' : `\nFAIL\n${problems.map(p => ` - ${p}`).join('\n')}`)
 process.exit(failures === 0 ? 0 : 1)

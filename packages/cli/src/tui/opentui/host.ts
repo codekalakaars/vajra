@@ -5,6 +5,8 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Writable } from 'node:stream'
 import { resolveApiKeyForModel } from '../../env.js'
+import { bareModel } from '../../models/catalog.js'
+import type { ReasoningEffort } from '../../agent/chat.js'
 import {
   describeModel,
   hasCatalog,
@@ -237,13 +239,13 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
   let closeSandbox: (() => void) | null = null
   let quitRequested = false
   /** A picker the UI is showing; the answer comes back as { t: 'pick' }. */
-  let pendingPick: { resolve: (value: string) => void } | null = null
+  let pendingPick: { resolve: (value: string | null) => void } | null = null
 
   const ask = (
     title: string,
     options: { value: string; label: string }[],
     initial?: number,
-  ): Promise<string> =>
+  ): Promise<string | null> =>
     new Promise(resolve => {
       pendingPick = { resolve }
       send({ t: 'pick', title, options, ...(initial !== undefined ? { initial } : {}) })
@@ -302,12 +304,30 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
       return
     }
     if (command === 'reasoning') {
-      // Silently. A reasoning level is a mode, not a message: the chip in the
-      // prompt's meta row is where it lives, and OpenCode writes nothing to the
-      // transcript when one changes. A line per ctrl-r would also put the
-      // dial's history into the conversation the agent reads — six presses to
-      // reach `max` is six lines of noise above the answer.
-      store.cycleReasoning()
+      // A list to choose from, not a dial to cycle. The levels differ per model
+      // — some take `xhigh` and `max`, some only a toggle, some do not reason at
+      // all — and cycling through them means counting presses without ever
+      // seeing what the options are. A picker shows them, filters as you type,
+      // and opens on the one in play.
+      const state = store.getSnapshot()
+      const levels = state.reasoningLevels
+      if (levels.length <= 1) {
+        store.addEntry({
+          kind: 'info',
+          text: `${state.model} does not reason — there is no level to choose. /models is gone; the sidebar's Model section says what it takes.`,
+        })
+        return
+      }
+      const picked = await ask(
+        `How hard should ${bareModel(model)} think?`,
+        levels.map(level => ({
+          value: level,
+          label: level === 'off' ? 'off  ·  no reasoning parameter is sent' : level,
+        })),
+        Math.max(0, levels.indexOf(state.reasoning)),
+      )
+      if (picked === null) return
+      store.setSettings({ reasoning: picked as ReasoningEffort })
       return
     }
     if (command === 'sessions') {
@@ -318,7 +338,7 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
           label: `${session.id}  ${session.title}  ·  ${session.when}`,
         })),
       ])
-      if (picked !== '__none__') nextRun = { resumeFrom: picked }
+      if (picked !== null && picked !== '__none__') nextRun = { resumeFrom: picked }
       return
     }
     if (command === 'model') {
@@ -353,6 +373,7 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
           options.findIndex(info => info.id === model),
         ),
       )
+      if (picked === null) return
       model = picked
       apiKey = explicitKey ?? resolveApiKeyForModel(model)
       store.setSettings({ model })
@@ -363,7 +384,7 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
         { value: projectDir, label: `${projectDir}  (current)` },
         { value: process.cwd(), label: process.cwd() },
       ])
-      if (picked !== projectDir) {
+      if (picked !== null && picked !== projectDir) {
         projectDir = picked
         store.setSettings({ projectDir })
         nextRun = 'ask'

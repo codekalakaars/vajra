@@ -129,7 +129,12 @@ export type ClientMessage =
   | { t: 'submit'; value: string }
   /** A command chosen from the palette, or a hotkey. `arg` is the argument. */
   | { t: 'slash'; name: string; arg?: string }
-  | { t: 'pick'; value: string }
+  /**
+   * A row was chosen, or the picker was dismissed. `null` is the escape: the
+   * host is waiting on this promise, and a picker the user closed has to answer
+   * it or the command that opened it never finishes.
+   */
+  | { t: 'pick'; value: string | null }
   | { t: 'signal'; name: 'interrupt' }
   | { t: 'bye' }
 
