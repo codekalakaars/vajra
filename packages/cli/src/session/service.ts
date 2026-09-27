@@ -8,7 +8,9 @@ import {
 } from '@codekalakaars/vajra-sandbox'
 import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
 import {
+  createEvidenceLedger,
   developerConversationTurn,
+  resetEvidenceLedger,
   type LaunchHandle,
   type DeveloperTurnResult,
 } from '../agent/developer.js'
@@ -378,7 +380,13 @@ export async function runSession(
     return { exitCode: code, interrupted: isInterrupted(), exited }
   }
 
-  const developerHandle: LaunchHandle = sandbox?.handle ?? createToolHandle(projectDir, { cache: toolCache })
+  // Stubs the Developer created this session, and the only paths delete_stub may
+  // remove. Session-scoped and cleared with the evidence: once a plan is
+  // confirmed a stub is the implementation, not scaffolding.
+  const developerStubs = new Set<string>()
+
+  const developerHandle: LaunchHandle =
+    sandbox?.handle ?? createToolHandle(projectDir, { cache: toolCache, stubs: developerStubs })
 
   // The port requires onAgentEvent, but JavaScript test doubles and embedders
   // may not implement it. Observability must never be able to fail a run.
@@ -537,9 +545,13 @@ export async function runSession(
   }
 
   if (!resuming) {
+    // The phase still goes out — it is what puts the status row on "scanning"
+    // and keeps the elapsed counter ticking. The two lines that also went out
+    // did not: "Scanning project in …" and "Starting conversation with
+    // developer…" restated what the screen was already showing, in a place the
+    // user reads as the conversation, above the first thing they said. The
+    // agent's own first line is what should be at the top of a transcript.
     emitAgent({ type: 'phase', agent: { role: 'developer' }, phase: 'scanning' })
-    ui.info(`\n🔍 Scanning project in ${projectDir}...`)
-    ui.info(`💬 Starting conversation with developer...\n`)
   }
 
   let result: DeveloperTurnResult | undefined
@@ -574,6 +586,11 @@ export async function runSession(
     }
   }
 
+  // Evidence the plan validator checks against, owned here so a plan rejected
+  // in one turn can be re-proposed in the next. Reset before execution begins —
+  // see resetEvidenceLedger.
+  const planEvidence = createEvidenceLedger()
+
   let turn = 0
   for (turn = 0; turn < MAX_CONVERSATION_TURNS; turn++) {
     if (isInterrupted()) break
@@ -593,6 +610,7 @@ export async function runSession(
           handle: developerHandle,
           messages,
           summaryIndex,
+          evidence: planEvidence,
           onTextDelta: text => ui.onTextDelta(text),
           onThinkingDelta: text => ui.onThinkingDelta(text),
           isInterrupted,
@@ -638,6 +656,14 @@ export async function runSession(
       }
 
       ui.info('\n🚀 Executing tasks...\n')
+
+      // The Workers are about to change the files the planning evidence
+      // describes. Anything recorded before this point is stale the moment the
+      // first write lands, so a post-execution planning turn must collect its
+      // own evidence rather than trust this. A stub created here is now the
+      // implementation, so it stops being retractable at the same moment.
+      resetEvidenceLedger(planEvidence)
+      developerStubs.clear()
 
       // D3: queue default timeout comes from the CLI -t flag (seconds).
       const queue = new TaskQueue(sessionId, options.timeout ?? 300)
