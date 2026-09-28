@@ -12,9 +12,9 @@
  *
  *   node scripts/sidebar.mjs
  */
-import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
+import { spawnUi } from './pty.mjs'
 import { reconstruct } from './screen.mjs'
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -69,10 +69,13 @@ const check = (ok, label) => {
 
 /** Boot the real screen at one height and hand it a state. */
 async function sidebarAt(rows) {
-  const child = spawn('script', ['-qfec', `stty rows ${rows} cols ${COLS}; bun src/main.tsx`, '/dev/null'], {
+  const { child, close } = spawnUi({
+    command: 'bun src/main.tsx',
     cwd: pkg,
     env: { ...process.env, TERM: 'xterm-256color', VAJRA_FEED_FD: '3', VAJRA_INPUT_FD: '4' },
-    stdio: ['pipe', 'pipe', 'inherit', 'pipe', 'pipe'],
+    cols: COLS,
+    rows,
+    stdio: ['pipe', 'pipe'],
   })
   let out = ''
   child.stdout.on('data', d => {
@@ -82,7 +85,7 @@ async function sidebarAt(rows) {
   feed.write(`${JSON.stringify(state(TASKS))}\n`)
   await wait(2500)
   const lines = reconstruct(out, COLS, rows).split('\n')
-  child.kill('SIGKILL')
+  close()
   return lines
 }
 

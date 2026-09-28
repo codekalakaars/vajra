@@ -9,11 +9,11 @@
  *
  *   node scripts/select.mjs
  */
-import { spawn } from 'node:child_process'
 import { appendFileSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
+import { spawnUi } from './pty.mjs'
 import { reconstruct } from './screen.mjs'
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -70,10 +70,12 @@ const state = (over = {}) => ({
   },
 })
 
-const child = spawn('script', ['-qfec', `stty rows ${ROWS} cols ${COLS}; bun src/main.tsx --feed ${feed}`, '/dev/null'], {
+const { child, close } = spawnUi({
+  command: `bun src/main.tsx --feed ${feed}`,
   cwd: pkg,
   env: { ...process.env, TERM: 'xterm-256color' },
-  stdio: ['pipe', 'pipe', 'inherit'],
+  cols: COLS,
+  rows: ROWS,
 })
 
 let out = ''
@@ -113,7 +115,7 @@ const frame = reconstruct(out, COLS, ROWS).split('\n')
 const row = frame.findIndex(line => line.includes(TARGET))
 if (row === -1) {
   console.error('FAIL\n - the target line is not on screen; the frame is not what this script expects')
-  child.kill('SIGKILL')
+  close()
   process.exit(1)
 }
 const col = frame[row].indexOf(TARGET) + 1
@@ -154,7 +156,7 @@ if (!/copied \d+ lines?/.test(out)) {
   problems.push('the status row never reported the copy')
 }
 
-child.kill('SIGKILL')
+close()
 if (problems.length > 0) {
   console.error(`\nFAIL\n${problems.map(p => ` - ${p}`).join('\n')}`)
   process.exit(1)

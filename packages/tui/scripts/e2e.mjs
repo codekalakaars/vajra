@@ -4,19 +4,21 @@
  * the model — there is no API key here, so the run is expected to fail, and
  * that failure is itself worth seeing: it must land in the transcript.
  */
-import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import { spawnUi } from './pty.mjs'
 import { reconstruct } from './screen.mjs'
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const COLS = 110
 const ROWS = 28
 
-const child = spawn('script', ['-qfec', `stty rows ${ROWS} cols ${COLS}; node ${pkg}/cli/dist/index.js`, '/dev/null'], {
+const { child, close } = spawnUi({
+  command: `node ${pkg}/cli/dist/index.js`,
   cwd: pkg,
   env: { ...process.env, TERM: 'xterm-256color', VAJRA_BUN: process.env.VAJRA_BUN ?? 'bun' },
-  stdio: ['pipe', 'pipe', 'inherit'],
+  cols: COLS,
+  rows: ROWS,
 })
 
 let out = ''
@@ -52,5 +54,5 @@ child.stdin.write('\r')
 await wait(1500)
 shot('5. /quit')
 
-child.kill('SIGKILL')
+close()
 process.exit(0)

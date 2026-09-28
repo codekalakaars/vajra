@@ -14,11 +14,11 @@
  *
  *   node scripts/palette.mjs
  */
-import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
+import { spawnUi } from './pty.mjs'
 import { reconstruct } from './screen.mjs'
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -74,12 +74,15 @@ const snapshot = (over = {}) => ({
   },
 })
 
-const child = spawn('script', ['-qfec', `stty rows ${ROWS} cols ${COLS}; bun src/main.tsx`, '/dev/null'], {
+const { child, close } = spawnUi({
+  command: 'bun src/main.tsx',
   cwd: pkg,
   env: { ...process.env, TERM: 'xterm-256color', VAJRA_FEED_FD: '3', VAJRA_INPUT_FD: '4' },
+  cols: COLS,
+  rows: ROWS,
   // 0 and 1 are the pty script hands to the screen; 3 and 4 are the two
   // descriptors the UI itself uses, passed through the pty untouched.
-  stdio: ['pipe', 'pipe', 'inherit', 'pipe', 'pipe'],
+  stdio: ['pipe', 'pipe'],
 })
 
 const feed = child.stdio[3]
@@ -374,6 +377,6 @@ await wait(600)
   check('and the palette is gone', paletteRows().length === 0, JSON.stringify(paletteRows()))
 }
 
-child.kill('SIGKILL')
+close()
 console.log(failures === 0 ? '\nOK — the palette behaves' : `\nFAIL\n${problems.map(p => ` - ${p}`).join('\n')}`)
 process.exit(failures === 0 ? 0 : 1)

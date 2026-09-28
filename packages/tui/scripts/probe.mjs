@@ -5,11 +5,11 @@
  *
  *   node scripts/probe.mjs
  */
-import { spawn } from 'node:child_process'
 import { appendFileSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
+import { spawnUi } from './pty.mjs'
 import { reconstruct } from './screen.mjs'
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -100,10 +100,12 @@ const COMMANDS = [
 const feed = join(mkdtempSync(join(tmpdir(), 'vajra-feed-')), 'feed.ndjson')
 appendFileSync(feed, '')
 
-const child = spawn('script', ['-qfec', `stty rows ${ROWS} cols ${COLS}; bun src/main.tsx --feed ${feed}`, '/dev/null'], {
+const { child, close } = spawnUi({
+  command: `bun src/main.tsx --feed ${feed}`,
   cwd: pkg,
   env: { ...process.env, TERM: 'xterm-256color' },
-  stdio: ['pipe', 'pipe', 'inherit'],
+  cols: COLS,
+  rows: ROWS,
 })
 
 let out = ''
@@ -176,5 +178,5 @@ send({ t: 'exit', code: 0 })
 await wait(600)
 shot('8. exit')
 
-child.kill('SIGKILL')
+close()
 process.exit(0)

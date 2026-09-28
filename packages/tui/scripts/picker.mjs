@@ -10,9 +10,9 @@
  *
  *   node scripts/picker.mjs
  */
-import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
+import { spawnUi } from './pty.mjs'
 import { reconstruct } from './screen.mjs'
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -67,10 +67,15 @@ const snapshot = () => ({
   },
 })
 
-const child = spawn('script', ['-qfec', `stty rows ${ROWS} cols ${COLS}; bun src/main.tsx`, '/dev/null'], {
+const { child, close } = spawnUi({
+  command: 'bun src/main.tsx',
   cwd: pkg,
   env: { ...process.env, TERM: 'xterm-256color', VAJRA_FEED_FD: '3', VAJRA_INPUT_FD: '4' },
-  stdio: ['pipe', 'pipe', 'inherit', 'pipe', 'pipe'],
+  cols: COLS,
+  rows: ROWS,
+  // 0 and 1 are the pty script hands to the screen; 3 and 4 are the two
+  // descriptors the UI itself uses, passed through the pty untouched.
+  stdio: ['pipe', 'pipe'],
 })
 const feed = child.stdio[3]
 const answers = child.stdio[4]
@@ -437,6 +442,6 @@ await open(0)
 type(ESC)
 await wait(500)
 
-child.kill('SIGKILL')
+close()
 console.log(failures === 0 ? '\nOK — the picker filters, ranks and picks' : `\nFAIL\n${problems.map(p => ` - ${p}`).join('\n')}`)
 process.exit(failures === 0 ? 0 : 1)
