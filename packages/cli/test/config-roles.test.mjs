@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { isolateEachTest, useTempVajraHome } from './_isolate.mjs'
@@ -32,6 +32,7 @@ const {
 const {
   configOptions,
   directoryOptions,
+  pathCandidates,
   effectiveRoleModel,
   hasOverride,
   itemRole,
@@ -204,15 +205,17 @@ test('the directory list recommends places, and says which is which', () => {
     mkdirSync(other)
     mkdirSync(lately)
     writeFileSync(join(root, 'a-file'), 'not a directory')
-    // `here` is both current and recent, `root` is both home and the parent,
-    // and `other` is only the launch directory — so each row's reason is
-    // decided by priority rather than by which fixture put it there.
+    // `here` is both current and recent, `root` is home, `other` is only the
+    // launch directory, and `inside` is a child of `here` — so each row's reason
+    // is decided by priority rather than by which fixture put it there.
+    mkdirSync(join(here, 'inside'))
     const options = directoryOptions(
       here,
       other,
       [here, lately, join(root, 'a-file'), join(root, 'gone')],
       isWorkingDirectory,
       root,
+      dir => readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name),
     )
     const values = options.map(o => o.value)
     // A list of five bare absolute paths is a list with no way to choose: each
@@ -221,18 +224,71 @@ test('the directory list recommends places, and says which is which', () => {
     assert.match(options.find(o => o.value === lately).label, /\(recent\)$/)
     assert.match(options.find(o => o.value === other).label, /\(launched here\)$/)
     assert.match(options.find(o => o.value === root).label, /\(home\)$/)
+    // Deeper, not above: a package inside the project is the move people make,
+    // and the parent was only on the list because it is easy to add.
+    assert.match(options.find(o => o.value === join(here, 'inside')).label, /\(deeper\)$/)
+    // The parent is not offered *as* one. In this fixture it is also `home`, so
+    // it is legitimately on the list under that name — which is the point: the
+    // rule is about the reason, not about the path.
+    assert.equal(options.some(o => /\(parent\)/.test(o.label)), false, 'nothing is offered for being the parent')
+    assert.match(options.find(o => o.value === dirname(here)).label, /\(home\)$/)
     assert.equal(new Set(values).size, values.length, 'nothing twice')
     // Offering a file as a working directory fails on the first tool call, in
     // the user's project, so it is filtered with everything else.
     assert.equal(values.includes(join(root, 'a-file')), false)
     assert.equal(values.includes(join(root, 'gone')), false)
-    // Current, then where the work has been, then the paths that are always
-    // true — the parent and the home are last because they are a move made
-    // after the fact, not a guess about where the work is.
-    assert.deepEqual(values, [here, lately, other, root])
+    // Current, then where the work has been, then into the project, then the
+    // paths that are always true.
+    assert.deepEqual(values, [here, lately, join(here, 'inside'), other, root])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('typing a path has something to narrow to, two levels deep', () => {
+  const root = mkdtempSync(join(tmpdir(), 'vajra-cand-'))
+  try {
+    // The shape the filter exists for: `projects/vajra` is two levels below
+    // home, so a one-level read of home could never offer it.
+    mkdirSync(join(root, 'projects', 'vajra'), { recursive: true })
+    mkdirSync(join(root, 'notes'), { recursive: true })
+    mkdirSync(join(root, '.hidden'), { recursive: true })
+    mkdirSync(join(root, 'node_modules', 'left-pad'), { recursive: true })
+    const children = dir => readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name)
+    const candidates = pathCandidates(
+      [{ dir: root, depth: 2 }],
+      [join(root, 'from-a-session')],
+      children,
+    )
+    assert.ok(candidates.includes(join(root, 'projects', 'vajra')), 'a grandchild is reachable')
+    assert.ok(candidates.includes(join(root, 'notes')), 'so is a child')
+    assert.ok(candidates.includes(join(root, 'from-a-session')), 'and a recent session directory')
+    // Dot-directories and the ones nobody means when they type a project path.
+    assert.equal(candidates.includes(join(root, '.hidden')), false)
+    assert.equal(candidates.includes(join(root, 'node_modules')), false)
+    assert.equal(candidates.includes(join(root, 'node_modules', 'left-pad')), false)
+    assert.equal(new Set(candidates).size, candidates.length, 'nothing twice')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a directory that is fixed says so, rather than offering a move', () => {
+  const dir = configOptions({
+    defaultModel: 'zen/x',
+    roleOverrides: {},
+    projectDir: '/home/me/project',
+    projectDirLocked: true,
+  }).find(o => o.value === 'projectDir')
+  assert.match(dir.label, /fixed — this session has started/)
+  assert.match(dir.label, /\/home\/me\/project/)
+  // And before anything has run, it is a plain path again.
+  const fresh = configOptions({
+    defaultModel: 'zen/x',
+    roleOverrides: {},
+    projectDir: '/home/me/project',
+  }).find(o => o.value === 'projectDir')
+  assert.doesNotMatch(fresh.label, /fixed/)
 })
 
 test('the current directory is listed once even though it is also recent', () => {

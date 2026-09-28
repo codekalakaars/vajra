@@ -144,6 +144,16 @@ export type ServerMessage =
        * can only be chosen from is a list that can only be chosen from.
        */
       editable?: boolean
+      /**
+       * More paths to narrow, shown only while a path is being typed.
+       *
+       * Sent once and filtered on this side as the draft changes: the host is
+       * blocked waiting for the answer, so asking it per keystroke would ask
+       * the one process that cannot answer. Two levels below home is what makes
+       * `vj` reach `~/projects/vajra`, which is the whole point of typing
+       * instead of choosing.
+       */
+      candidates?: { value: string; label: string }[]
     }
   | { t: 'clear' }
   | { t: 'exit'; code: number }

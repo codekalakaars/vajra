@@ -401,8 +401,9 @@ await openEditable(0)
   await wait(800)
   check('typing goes to the draft, not the filter', draft().includes('/home/me/new'), draft())
   check('and the placeholder is gone', !draft().includes('path/to/a/project'), draft())
-  // The list behind it is untouched: this is a draft, not a query.
-  check('the recommendations are still listed', rows().length === 4, `${rows().length} rows`)
+  // The list behind the draft is the candidates, not the four recommendations:
+  // typing a path is the one thing here that has something to narrow to.
+  check('and the list is the candidates, narrowed by the draft', rows().length > 0 && rows().length < 4, `${rows().length} rows`)
   child.stdin.write('\x7f')
   await wait(400)
   check('backspace edits it', !draft().includes('/home/me/new') && draft().includes('/home/me/ne'), draft())

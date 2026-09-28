@@ -297,6 +297,8 @@ function App(props: { renderer: CliRenderer }) {
     deletable: boolean
     /** The list takes a typed value, not only a chosen one. */
     editable: boolean
+    /** More paths, narrowed as a path is typed. Only for an editable list. */
+    candidates: { value: string; label: string }[]
   } | null>(null)
   /**
    * A path being typed into an editable picker, or null when the list is showing.
@@ -473,12 +475,19 @@ function App(props: { renderer: CliRenderer }) {
   const pickerOptions = createMemo(() => {
     const open = picker()
     if (!open) return []
+    // Drafting replaces the recommendations with the paths being narrowed. The
+    // type-a-path row is not among them: the user is already typing one, and a
+    // row offering to type one while they type is noise at the top of the list.
+    if (pickerDraft() !== null) return open.candidates
     return open.editable ? [{ value: TYPE_A_PATH, label: TYPE_A_PATH_LABEL }, ...open.options] : open.options
   })
 
   const pickerMatches = createMemo(() => {
     const options = pickerOptions()
-    const query = pickerQuery().trim()
+    // While drafting, the draft is the query. It is not on the input line, so
+    // this cannot come from `pickerQuery` — the input is still the filter, and
+    // an empty one.
+    const query = (pickerDraft() ?? pickerQuery()).trim()
     return query === '' ? options : fuzzyFilter(query, options, filterText)
   })
 
@@ -552,6 +561,7 @@ function App(props: { renderer: CliRenderer }) {
           options: message.options,
           deletable: message.deletable === true,
           editable: message.editable === true,
+          candidates: message.candidates ?? [],
         })
         // A picker opening is not a draft: the mode is entered from a row, so a
         // list that is re-sent after a rejected path starts as a list again.
@@ -647,17 +657,34 @@ function App(props: { renderer: CliRenderer }) {
         }
         if (key.name === 'return') {
           key.preventDefault()
-          if (draft.trim() === '') return
+          // A highlighted suggestion wins, because it is one the user can see
+          // and reach with the arrows. Without one, the text is the answer —
+          // which is how a path that is not in the list is entered at all.
+          const suggested = pickerMatches()[pickerIdx()]
+          const value = suggested?.value ?? draft.trim()
+          if (value === '') return
           setPicker(null)
           setPickerDraft(null)
           setPickerQuery('')
           clearField()
-          send({ t: 'pick', value: draft.trim() })
+          send({ t: 'pick', value })
           return
         }
         if (key.name === 'backspace') {
           key.preventDefault()
           setPickerDraft(d => (d ?? '').slice(0, -1))
+          return
+        }
+        // The arrows still move the cursor: they move it through the
+        // suggestions, which is how you take the second match rather than the
+        // first. Typing is what the draft is for; the arrows were never the
+        // draft's business.
+        if (key.name === 'up' || key.name === 'down') {
+          key.preventDefault()
+          const count = pickerMatches().length
+          if (count === 0) return
+          const step = key.name === 'up' ? -1 : 1
+          setPickerIdx(i => (i + step + count) % count)
           return
         }
         if (key.name === 'c' && key.ctrl) {

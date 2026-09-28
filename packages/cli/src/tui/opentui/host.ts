@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -35,6 +35,7 @@ import {
   hasOverride,
   itemRole,
   modelPickerOptions,
+  pathCandidates,
   INHERIT_DEFAULT,
   isWorkingDirectory,
   type ConfigItem,
@@ -299,6 +300,7 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     initial?: number,
     deletable?: boolean,
     editable?: boolean,
+    candidates?: { value: string; label: string }[],
   ): Promise<PickAnswer> =>
     new Promise(resolve => {
       pendingPick = { resolve }
@@ -309,6 +311,7 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
         ...(initial !== undefined ? { initial } : {}),
         ...(deletable === true ? { deletable: true } : {}),
         ...(editable === true ? { editable: true } : {}),
+        ...(candidates !== undefined ? { candidates } : {}),
       })
     })
 
@@ -420,6 +423,15 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
   const applyRoleModels = (): void => {
     store.setSettings({ model: roleModels.developer ?? model })
   }
+
+  /**
+   * Whether a session has run in this process.
+   *
+   * Set by the one place a run begins, so nothing else has to remember it: a
+   * conversation that has produced work owns its directory, and /config says so
+   * rather than offering a move that would be refused.
+   */
+  let sessionStarted = false
 
   /** Directories recent sessions ran in, most recent first, for /config. */
   const recentDirs = (): string[] => {
@@ -535,6 +547,7 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     defaultModel: model,
     roleOverrides: { ...roleModels },
     projectDir,
+    ...(sessionStarted ? { projectDirLocked: true } : {}),
   })
 
   /** `/config` → a role's row → the live catalog, opened on what it runs now. */
@@ -593,14 +606,35 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
    * than saying so in the transcript. The user is standing in a list of
    * directories with something typed; closing it to read a line in the
    * scrollback and come back is the wrong shape for "that one is a file".
+   *
+   * A session that has already started does not get a new directory at all.
+   * Its plans, locks and baselines were all made against that tree, and moving
+   * it would apply them somewhere they were never checked. So the row says it
+   * is fixed and this never opens.
    */
   const pickDirectory = async (state: ConfigState, problem?: string): Promise<void> => {
+    if (sessionStarted) {
+      store.addEntry({
+        kind: 'warning',
+        text: `This session started in ${projectDir}, and that is where it stays — a session's directory is fixed once it begins. Start a new session to work somewhere else.`,
+      })
+      return
+    }
+    const candidates = pathCandidates(
+      [
+        { dir: projectDir, depth: 2 },
+        { dir: process.env.HOME ?? process.env.USERPROFILE ?? '', depth: 2 },
+      ],
+      recentDirs(),
+      subDirectories,
+    )
     const answer = await ask(
       problem ? `Which directory? — ${problem}` : 'Which directory?',
-      directoryOptions(state.projectDir, process.cwd(), recentDirs(), isWorkingDirectory),
+      directoryOptions(projectDir, process.cwd(), recentDirs(), isWorkingDirectory, undefined, subDirectories),
       0,
       false,
       true,
+      candidates.map(dir => ({ value: dir, label: dir })),
     )
     if (answer.action !== 'pick' || answer.value === null) return
     if (answer.value === projectDir) return
@@ -610,11 +644,18 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     }
     projectDir = answer.value
     store.setSettings({ projectDir })
-    // A directory change ends the conversation: the tree the plan was made
-    // against is not the tree the next run is in. Same reason /dir did it.
-    nextRun = 'ask'
-    endRunForNext()
     writeConfig({ projectDir })
+  }
+
+  /** A directory's sub-directories, or none when it cannot be read. */
+  const subDirectories = (dir: string): string[] => {
+    try {
+      return readdirSync(dir, { withFileTypes: true })
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name)
+    } catch {
+      return []
+    }
   }
 
   const runCommand = async (name: string): Promise<void> => {
@@ -743,6 +784,9 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
 
   /** One runSession, wired to the interruptible controller. */
   const runTask = async (task: string | undefined, resumeFrom?: string): Promise<SessionResult | null> => {
+    // Every run goes through here, including one started by resuming a session,
+    // so this is the one place that has to know a session has begun.
+    sessionStarted = true
     const run = new AbortController()
     controller = run
     try {

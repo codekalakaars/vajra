@@ -1,5 +1,5 @@
 import { existsSync, statSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { join } from 'node:path'
 import { ROLE_NAMES, ROLE_PURPOSE, type RoleName } from '../../config.js'
 
 /**
@@ -49,6 +49,15 @@ export interface ConfigState {
   /** Only the roles that have been given a model; absence means inherit. */
   roleOverrides: Partial<Record<RoleName, string>>
   projectDir: string
+  /**
+   * A session under way owns its directory.
+   *
+   * The plans, the locks and the baselines in progress were all made against
+   * that tree, and a session that quietly moved to another one would be
+   * applying them somewhere they were never checked. So the row says it is
+   * fixed rather than offering a change that will be refused.
+   */
+  projectDirLocked?: boolean
 }
 
 /**
@@ -120,7 +129,8 @@ const LABEL_CELLS = 16
 export function configOptions(state: ConfigState): ConfigOption[] {
   return CONFIG_ITEMS.map(item => {
     if (item === 'projectDir') {
-      return { value: item, label: `${'directory'.padEnd(LABEL_CELLS)}${state.projectDir}` }
+      const note = state.projectDirLocked === true ? '  · fixed — this session has started' : ''
+      return { value: item, label: `${'directory'.padEnd(LABEL_CELLS)}${state.projectDir}${note}` }
     }
     if (item === 'model') {
       const inheriting = ROLE_NAMES.filter(role => !hasOverride(state, role))
@@ -159,6 +169,19 @@ export function modelPickerOptions(
   }))
 }
 
+/** Directories that are never worth offering: noise, and never the answer. */
+const SKIPPED = new Set(['node_modules', '.git', 'target', 'dist', 'build', '.cache'])
+
+/**
+ * Whether a directory name is worth offering at all.
+ *
+ * One rule for the recommendations and the candidates, because a name that is
+ * noise in a fuzzy match is still noise when it is a recommendation — and
+ * `node_modules` under "(deeper)" is a directory nobody is ever looking for.
+ */
+export const isOfferable = (name: string): boolean =>
+  name.length > 0 && !name.startsWith('.') && !SKIPPED.has(name)
+
 /**
  * The directories a sub-picker offers, and why each one is on the list.
  *
@@ -167,10 +190,11 @@ export function modelPickerOptions(
  * five bare absolute paths is a list with no way to choose between them: all of
  * them look equally plausible and equally arbitrary.
  *
- * `~` is in the list because "where do I keep my projects" is the first
- * question anyone asks and the one path nobody can find by typing a prefix of
- * it. The parent is last: it is the move you make after the project turns out
- * to be a subdirectory, never the first answer.
+ * Deeper, not above. The parent of the working directory was on this list
+ * because it is a one-line addition to a list of directories, and it is wrong:
+ * the move people make is into a package inside the project they are in, not
+ * out of it. So the current directory's own children are here instead, and its
+ * parent is not.
  */
 export function directoryOptions(
   current: string,
@@ -178,6 +202,7 @@ export function directoryOptions(
   recent: string[],
   exists: (dir: string) => boolean,
   home: string = process.env.HOME ?? process.env.USERPROFILE ?? '',
+  children: (dir: string) => string[] = () => [],
 ): ConfigOption[] {
   const seen = new Set<string>()
   const out: ConfigOption[] = []
@@ -194,9 +219,48 @@ export function directoryOptions(
   // Recent sessions first: where the work has actually been is a better guess
   // than anywhere else on this list.
   for (const dir of recent) add(dir, 'recent')
+  for (const child of children(current)) {
+    if (isOfferable(child)) add(join(current, child), 'deeper')
+  }
   add(launchDir, 'launched here')
   if (home) add(home, 'home')
-  const parent = dirname(current)
-  if (parent) add(parent, 'parent')
+  return out
+}
+
+/**
+ * Every directory worth fuzzy-matching while a path is being typed.
+ *
+ * This is the difference between a list you can only choose from and one you
+ * can type into. Typing `vj` has to be able to reach `~/projects/vajra`, and
+ * that is two levels down from home — so each root is read to a depth of two
+ * rather than one, and the recursion stops there. It is a readdir per directory
+ * at pick time, and a few hundred paths is what makes the filter feel like it
+ * knows something; going deeper than that would be a filesystem walk dressed up
+ * as a completion.
+ */
+export function pathCandidates(
+  roots: { dir: string; depth: number }[],
+  recent: string[],
+  children: (dir: string) => string[],
+  limit = 250,
+): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  const push = (dir: string): void => {
+    if (out.length >= limit || seen.has(dir)) return
+    seen.add(dir)
+    out.push(dir)
+  }
+  const walk = (dir: string, depth: number): void => {
+    push(dir)
+    if (depth <= 0 || out.length >= limit) return
+    for (const name of children(dir)) {
+      if (isOfferable(name)) walk(join(dir, name), depth - 1)
+    }
+  }
+  for (const { dir, depth } of roots) {
+    if (dir) walk(dir, depth)
+  }
+  for (const dir of recent) push(dir)
   return out
 }
