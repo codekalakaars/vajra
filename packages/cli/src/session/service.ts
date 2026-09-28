@@ -25,6 +25,7 @@ import { needsServer } from '../tasks/server.js'
 import { createToolHandle, tokenizeCommand, type ToolCache } from '../tools/handle.js'
 import { finalReport } from '../tasks/report.js'
 import { isSupportedModel } from '../env.js'
+import { planRoleModels, roleReasoningEffort } from '../roles.js'
 import { launchSandboxSessionPool, type SandboxSession } from '../sandbox/launch.js'
 import {
   SESSION_SCHEMA_VERSION,
@@ -177,8 +178,19 @@ export interface SessionOptions {
   /** Task ids the user explicitly accepted rolling back to their baselines. */
   rollbackTasks?: string[]
   /**
+   * ADR-0010: each role's model, configured independently. A role with no
+   * override runs on `model`, which is what every role did before this existed.
+   */
+  developerModel?: string
+  managerModel?: string
+  workerModel?: string
+  /**
    * §4: let the Manager ask the model what to do about a failure. Off by
    * default — the mechanical decisions are the ones that must be predictable.
+   *
+   * Naming a model for the Manager is the same decision, made in config
+   * instead of on a flag, so it turns this on by itself: the Manager is an
+   * agent (ADR-0010), and a model configured for it is a model being asked.
    */
   useMasterLlm?: boolean
   /** Host-owned abort (Ctrl-C / TUI interrupt). Aborting finishes the current step. */
@@ -292,6 +304,27 @@ export async function runSession(
     )
     return { exitCode: 1, interrupted: false, exited: false }
   }
+  /**
+   * What each role runs on, resolved once — see roles.ts for why it is a
+   * function and not three lines here.
+   */
+  const plan = planRoleModels({
+    defaultModel: options.model,
+    ...(options.developerModel !== undefined ? { developerModel: options.developerModel } : {}),
+    ...(options.managerModel !== undefined ? { managerModel: options.managerModel } : {}),
+    ...(options.workerModel !== undefined ? { workerModel: options.workerModel } : {}),
+    ...(options.useMasterLlm !== undefined ? { useMasterLlm: options.useMasterLlm } : {}),
+  })
+  for (const bad of plan.invalid) {
+    ui.error(
+      `Unsupported ${bad.role} model '${bad.model}': only zen/* and go/* are supported`,
+    )
+  }
+  if (plan.invalid.length > 0) return { exitCode: 1, interrupted: false, exited: false }
+  const { developer: developerModel, manager: managerModel, worker: workerModel } = plan
+  const managerAsks = plan.managerAsks
+  const roleReasoning = (roleModel: string): ReasoningEffort =>
+    roleReasoningEffort(roleModel, options.reasoningEffort)
   if (!options.apiKey) {
     ui.error(
       `No API key provided for model '${options.model}'. Run 'vajra auth login <key>', set OPENCODE_API_KEY, or use --api-key`,
@@ -356,6 +389,9 @@ export async function runSession(
       updatedAt: Date.now(),
       config: {
         model: options.model,
+        ...(developerModel !== options.model ? { developerModel } : {}),
+        ...(managerModel !== options.model ? { managerModel } : {}),
+        ...(workerModel !== options.model ? { workerModel } : {}),
         timeoutSeconds: options.timeout ?? 300,
         ...((concurrency ?? options.concurrency) === undefined
           ? {}
@@ -684,8 +720,8 @@ export async function runSession(
           sessionId,
           projectDir,
           userMessage,
-          model: options.model,
-          ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+          model: developerModel,
+          reasoningEffort: roleReasoning(developerModel),
           apiKey: options.apiKey,
           handle: developerHandle,
           messages,
@@ -967,7 +1003,7 @@ export async function runSession(
             task,
             taskHandle,
             apiKey,
-            options.model,
+            workerModel,
             ui,
             changeHistory,
             queue,
@@ -1110,7 +1146,7 @@ export async function runSession(
             commandResourceLocks.canAcquire(resourcePaths, 'write', task.id) &&
             (serverPath === null || fileLocks.canAcquire([serverPath], 'write', task.id))
         },
-        ...(options.useMasterLlm
+        ...(managerAsks
           ? {
               decide: (task, context) =>
                 masterDecide(
@@ -1124,10 +1160,8 @@ export async function runSession(
                       const decided = await streamChatCompletion(
                         {
                           apiKey,
-                          model: options.model,
-                          ...(options.reasoningEffort
-                            ? { reasoningEffort: options.reasoningEffort }
-                            : {}),
+                          model: managerModel,
+                          reasoningEffort: roleReasoning(managerModel),
                           messages,
                           tools: MASTER_DECIDE_TOOL_SPECS,
                           ...(abortSignal ? { signal: abortSignal } : {}),

@@ -13,8 +13,6 @@ import { resolve } from 'node:path'
 import { existsSync, statSync } from 'node:fs'
 import { listAvailableModels, normalizeModelId } from '../env.js'
 import {
-  DEFAULT_DIR_KEY,
-  DEFAULT_MODEL_KEY,
   isPersistedDefault,
   saveDefaults,
 } from '../config.js'
@@ -377,8 +375,8 @@ export function Pickers({
   }
 
   if (screen === 'defaults') {
-    const modelPersisted = isPersistedDefault(DEFAULT_MODEL_KEY)
-    const dirPersisted = isPersistedDefault(DEFAULT_DIR_KEY)
+    const modelPersisted = isPersistedDefault('model')
+    const dirPersisted = isPersistedDefault('projectDir')
     return (
       <Box flexDirection="column" padding={1}>
         <Box marginBottom={1}>

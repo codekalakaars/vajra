@@ -62,11 +62,20 @@ describe('TUI defaults', () => {
 
   test('isPersistedDefault distinguishes a saved value from the built-in fallback', () => {
     inHome((_home, env) => {
-      assert.equal(isPersistedDefault(DEFAULT_MODEL_KEY, env), false)
+      // Config keys, not env var names. The function takes the key the value is
+      // stored under; the old spelling only worked because both happened to
+      // reach the same branch.
+      assert.equal(isPersistedDefault('model', env), false)
+      assert.equal(isPersistedDefault('workerModel', env), false)
 
       saveDefaults({ model: 'zen/space-bunny-free' }, env)
-      assert.equal(isPersistedDefault(DEFAULT_MODEL_KEY, env), true)
-      assert.equal(isPersistedDefault(DEFAULT_DIR_KEY, env), false)
+      assert.equal(isPersistedDefault('model', env), true)
+      assert.equal(isPersistedDefault('projectDir', env), false)
+
+      // A role's model is persisted like any other key.
+      saveDefaults({ workerModel: 'zen/gpt-5.4-mini' }, env)
+      assert.equal(isPersistedDefault('workerModel', env), true)
+      assert.equal(isPersistedDefault('model', env), true, 'a partial save leaves the rest alone')
     })
   })
 

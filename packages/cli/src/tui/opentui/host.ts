@@ -19,6 +19,27 @@ import {
   loadModelCatalog,
   refreshModelStatus,
 } from '../../models/catalog.js'
+import {
+  clearConfig,
+  ROLE_PURPOSE,
+  readConfig,
+  writeConfig,
+  type ConfigKey,
+  type RoleName,
+  type VajraConfig,
+} from '../../config.js'
+import {
+  configOptions,
+  directoryOptions,
+  effectiveRoleModel,
+  hasOverride,
+  itemRole,
+  modelPickerOptions,
+  INHERIT_DEFAULT,
+  isWorkingDirectory,
+  type ConfigItem,
+  type ConfigState,
+} from '../session/config-menu.js'
 import { runSession, type SessionResult } from '../../session/service.js'
 import { SessionStore } from '../session/store.js'
 import { askForTask } from '../session/idle-prompt.js'
@@ -370,6 +391,43 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     return removed
   }
 
+  /**
+   * The role models this session runs on, and only the ones that differ.
+   *
+   * Absence is the point: a role with no entry here has no entry in
+   * config.json either, so it keeps following the default, and the two cannot
+   * drift into disagreeing about what "unset" means.
+   */
+  const roleModels: Partial<Record<RoleName, string>> = (() => {
+    const saved = readConfig()
+    const out: Partial<Record<RoleName, string>> = {}
+    for (const role of ['developer', 'manager', 'worker'] as const) {
+      if (saved[`${role}Model`]) out[role] = saved[`${role}Model`]
+    }
+    return out
+  })()
+
+  /**
+   * The store shows the model you are talking to, which is the developer's.
+   *
+   * The header's context meter and reasoning dial are read off the store's
+   * model, and both describe the conversation. Leaving the default there while
+   * the developer runs something else would put a confident wrong number in
+   * the one place a user checks whether there is room left.
+   */
+  const applyRoleModels = (): void => {
+    store.setSettings({ model: roleModels.developer ?? model })
+  }
+
+  /** Directories recent sessions ran in, most recent first, for /config. */
+  const recentDirs = (): string[] => {
+    const out: string[] = []
+    for (const summary of listPersistedSessions()) {
+      if (summary.projectDir && !out.includes(summary.projectDir)) out.push(summary.projectDir)
+    }
+    return out
+  }
+
   /** A line submitted at the prompt: a slash command, or a task. */
   const submit = (value: string): void => {
     const trimmed = value.trim()
@@ -391,11 +449,122 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     store.submitPrompt(value)
   }
 
+  /**
+   * `/config` — every setting a session runs on, on one screen.
+   *
+   * The screen is a menu of the four settings rather than a walk down them,
+   * because the question being asked is "what is this session running on?", and
+   * an answer you can only reach by walking past the other three is not an
+   * answer. Each row opens a picker of its own and the menu comes back, so all
+   * four stay in view while one of them changes.
+   *
+   * Changes are written to config.json as they are made, not on an exit: a
+   * session that gets killed from another terminal should not take the settings
+   * with it, and a menu that has to be saved is a menu that gets closed
+   * without being saved.
+   */
+  const runConfig = async (): Promise<void> => {
+    // The menu remembers the row you were on. Coming back from a sub-picker
+    // should put the cursor on the setting you just changed, not on row zero.
+    let row = 0
+    for (;;) {
+      const state = configState()
+      const options = configOptions(state)
+      const picked = await ask('Configure this session', options, Math.min(row, options.length - 1))
+      if (picked.action !== 'pick' || picked.value === null) return
+      row = Math.max(0, options.findIndex(option => option.value === picked.value))
+      if (picked.value === 'projectDir') {
+        await pickDirectory(state)
+        continue
+      }
+      const role = itemRole(picked.value as ConfigItem)
+      if (role === null) continue
+      await pickRoleModel(role, state)
+    }
+  }
+
+  /** The models a role has been given, without the ones it has inherited. */
+  const configState = (): ConfigState => ({
+    defaultModel: model,
+    roleOverrides: { ...roleModels },
+    projectDir,
+  })
+
+  /** `/config` → a role's row → the live catalog, opened on what it runs now. */
+  const pickRoleModel = async (role: RoleName, state: ConfigState): Promise<void> => {
+    // Not a forced refresh, unlike `/model`. This picker is nested inside a
+    // menu the user just moved the cursor through, so a second spent on a
+    // network round-trip between two arrow keys is the difference between a
+    // menu and a slideshow. The catalog was primed at startup and has a
+    // twelve-hour TTL, so this is a cache read in the normal case and still a
+    // refetch when the cache has actually gone stale.
+    await primeModels()
+    const models = listModels()
+    if (models.length === 0) {
+      store.addEntry({
+        kind: 'warning',
+        text: `No model catalog available (${hasCatalog() ? 'empty' : 'not fetched'}); the ${role} stays on ${effectiveRoleModel(state, role)}.`,
+      })
+      return
+    }
+    const current = effectiveRoleModel(state, role)
+    const answer = await ask(
+      `Model for the ${role} — ${ROLE_PURPOSE[role]}`,
+      [
+        // Inheriting the default is a choice, so it is a row. Making it the
+        // absence of an override means the only way back to it is a config file
+        // edit, and "I want this role on the default again" is a normal thing
+        // to want three minutes after picking a model.
+        { value: INHERIT_DEFAULT, label: `default — ${state.defaultModel}` },
+        ...modelPickerOptions(
+          models.map(info => ({ id: info.id, label: describeModel(info) })),
+          current,
+        ),
+      ],
+      hasOverride(state, role) ? Math.max(1, models.findIndex(info => info.id === current)) : 0,
+    )
+    if (answer.action !== 'pick' || answer.value === null) return
+    if (answer.value === INHERIT_DEFAULT) {
+      clearConfig([`${role}Model` as ConfigKey])
+      delete roleModels[role]
+    } else {
+      roleModels[role] = answer.value
+      writeConfig({ [`${role}Model`]: answer.value } as Partial<VajraConfig>)
+    }
+    applyRoleModels()
+    store.addEntry({
+      kind: 'success',
+      text: `The ${role} runs on ${configState().roleOverrides[role] ?? model}.`,
+    })
+  }
+
+  /** The directory, from real places rather than a path you have to remember. */
+  const pickDirectory = async (state: ConfigState): Promise<void> => {
+    const answer = await ask(
+      'Which directory?',
+      directoryOptions(state.projectDir, process.cwd(), recentDirs(), isWorkingDirectory),
+    )
+    if (answer.action !== 'pick' || answer.value === null) return
+    if (answer.value === projectDir) return
+    projectDir = answer.value
+    store.setSettings({ projectDir })
+    // A directory change ends the conversation: the tree the plan was made
+    // against is not the tree the next run is in. Same reason /dir does it.
+    nextRun = 'ask'
+    endRunForNext()
+    writeConfig({ projectDir })
+    store.addEntry({ kind: 'success', text: `Working in ${projectDir}. Next task starts there.` })
+  }
+
   const runCommand = async (name: string): Promise<void> => {
     const command = findSlashCommand(name)?.name
     if (!command) return
     if (command === 'quit') {
       quit()
+      return
+    }
+    if (command === 'config') {
+      await runConfig()
       return
     }
     if (command === 'help') {
@@ -497,7 +666,16 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
       if (picked.action !== 'pick' || picked.value === null) return
       model = picked.value
       apiKey = explicitKey ?? resolveApiKeyForModel(model)
-      store.setSettings({ model })
+      applyRoleModels()
+      // The default changed; a role pinned to a model of its own did not. Saying
+      // so is the difference between "my change did nothing" understood and the
+      // same thing felt as a bug.
+      if (roleModels.developer) {
+        store.addEntry({
+          kind: 'info',
+          text: `Default model is now ${model}. The developer still runs ${roleModels.developer} — /config changes that.`,
+        })
+      }
       return
     }
     if (command === 'dir') {
@@ -528,6 +706,12 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
           continueAfterExecution: true,
           apiKey,
           model,
+          // The roles that have a model of their own. Read per run, like the
+          // reasoning dial, so a change made in /config applies to the next
+          // task without restarting anything.
+          ...(roleModels.developer ? { developerModel: roleModels.developer } : {}),
+          ...(roleModels.manager ? { managerModel: roleModels.manager } : {}),
+          ...(roleModels.worker ? { workerModel: roleModels.worker } : {}),
           // Read per run, not once: ctrl-r mid-session changes the next run.
           reasoningEffort: store.getSnapshot().reasoning,
           projectDir,

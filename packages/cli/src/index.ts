@@ -7,10 +7,17 @@ import { readFileSync } from 'node:fs'
 import { parseSetPair, resolveApiKeyForModel } from './env.js'
 import {
   configSource,
+  DEFAULT_DIR_KEY,
+  DEFAULT_MODEL_KEY,
   readConfig,
   resolveDefaultDir,
   resolveDefaultModel,
+  resolveRoleModel,
+  roleModelKey,
+  ROLE_NAMES,
   writeConfig,
+  type ConfigKey,
+  type RoleName,
 } from './config.js'
 import { readAuth, writeAuth, clearAuth } from './auth.js'
 import { resolveVajraHome, authPath } from './home.js'
@@ -281,19 +288,31 @@ function maskKey(value: string): string {
   return `${value.slice(0, 8)}...${value.slice(-4)}`
 }
 
+/** The env var that overrides a config key, for the alias table. */
+const envKeyFor = (key: ConfigKey): string =>
+  key === 'model' ? DEFAULT_MODEL_KEY : key === 'projectDir' ? DEFAULT_DIR_KEY : `VAJRA_${key.replace(/Model$/, '').toUpperCase()}_MODEL`
+
+/** Whether a config key names a role's model. */
+const isRoleKey = (key: ConfigKey): boolean =>
+  ROLE_NAMES.some(role => roleModelKey(role) === key)
+
 program
   .command('config')
   .description('Show or set configuration (~/.vajra/config.json)')
-  .option('-g, --get <key>', 'Get a config value (model | projectDir)')
+  .option('-g, --get <key>', 'Get a config value (model | developerModel | managerModel | workerModel | projectDir)')
   .option('-s, --set <key=value>', 'Set a config value (e.g. -s model=zen/mimo-v2.5-free)')
   .option('-l, --list', 'List all config values with their source')
   .action((options) => {
-    const alias: Record<string, 'model' | 'projectDir'> = {
-      model: 'model',
-      VAJRA_MODEL: 'model',
-      projectDir: 'projectDir',
-      VAJRA_PROJECT_DIR: 'projectDir',
-    }
+    // Every config key, each with the env var that overrides it, so `vajra
+    // config -s workerModel=…` and `VAJRA_WORKER_MODEL=…` are the same key and
+    // the error message can list them.
+    const alias: Record<string, ConfigKey> = Object.fromEntries(
+      (['model', 'projectDir', ...ROLE_NAMES.map(roleModelKey)] as ConfigKey[]).flatMap(key => [
+        [key, key],
+        [envKeyFor(key), key],
+      ]),
+    )
+    const known = Object.keys(alias).join(', ')
 
     if (options.get) {
       const key = alias[options.get]
@@ -301,11 +320,18 @@ program
         if (options.get.includes('KEY')) {
           console.error(`Secrets are stored separately. Use: vajra auth status`)
         } else {
-          console.error(`Config key '${options.get}' not found (known: model, projectDir)`)
+          console.error(`Config key '${options.get}' not found (known: ${known})`)
         }
         process.exit(1)
       }
-      const value = key === 'model' ? resolveDefaultModel() : resolveDefaultDir()
+      const value =
+        key === 'model'
+          ? resolveDefaultModel()
+          : key === 'projectDir'
+            ? resolveDefaultDir()
+            : isRoleKey(key)
+              ? resolveRoleModel(key.replace(/Model$/, '') as RoleName)
+              : ''
       console.log(value)
       return
     }
@@ -326,7 +352,7 @@ program
         if (key.includes('KEY')) {
           console.error('Secrets do not belong in config.json. Use: vajra auth login <key>')
         } else {
-          console.error(`Unknown config key '${key}' (known: model, projectDir)`)
+          console.error(`Unknown config key '${key}' (known: ${known})`)
         }
         process.exit(1)
       }
@@ -346,6 +372,15 @@ program
       console.log(`  \x1b[36m${key.padEnd(18)}\x1b[0m ${value} \x1b[90m(${source})\x1b[0m`)
     }
     row('model', resolveDefaultModel(), configSource('model'))
+    // A role with no model of its own is not a row that says "unset" — it is a
+    // row that says what it will actually run on, and where that came from.
+    for (const role of ROLE_NAMES) {
+      row(
+        `${role}Model`,
+        `${resolveRoleModel(role)} (${readConfig()[roleModelKey(role)] ? 'own' : 'default'})`,
+        configSource(roleModelKey(role)),
+      )
+    }
     row('projectDir', resolveDefaultDir(), configSource('projectDir'))
     row(
       'OPENCODE_API_KEY',

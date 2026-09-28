@@ -54,9 +54,18 @@ export interface PersistedEvidence {
 /** Where the session was when it was last written. */
 export type SessionPhase = 'conversing' | 'awaiting-approval' | 'executing' | 'finished'
 
-/** Resume must not silently change how the session runs. */
+/**
+ * Resume must not silently change how the session runs.
+ *
+ * `model` is the fallback; the three role models are what actually ran, recorded
+ * so a resume can say "this session ran the worker on X" instead of implying the
+ * current default is what produced the history in front of you.
+ */
 export interface PersistedConfig {
   model: string
+  developerModel?: string
+  managerModel?: string
+  workerModel?: string
   timeoutSeconds: number
   concurrency?: number
   allowUnenforced: boolean
@@ -189,8 +198,13 @@ function migrate(raw: unknown, expectedId?: string): PersistedSession | null {
       : 'conversing'
 
   const rawConfig = (s.config ?? {}) as Record<string, unknown>
+  const roleModel = (key: string): { [k: string]: string } | object =>
+    typeof rawConfig[key] === 'string' ? { [key]: rawConfig[key] as string } : {}
   const config: PersistedConfig = {
     model: typeof rawConfig.model === 'string' ? rawConfig.model : CONFIG_DEFAULTS.model,
+    ...roleModel('developerModel'),
+    ...roleModel('managerModel'),
+    ...roleModel('workerModel'),
     timeoutSeconds:
       typeof rawConfig.timeoutSeconds === 'number' && Number.isFinite(rawConfig.timeoutSeconds)
         ? rawConfig.timeoutSeconds

@@ -5,7 +5,15 @@
  * `/help` are both generated from SLASH_COMMANDS, so a command cannot exist in
  * one and be missing from the other.
  */
-export type SlashCommand = 'model' | 'reasoning' | 'dir' | 'defaults' | 'sessions' | 'help' | 'quit'
+export type SlashCommand =
+  | 'config'
+  | 'model'
+  | 'reasoning'
+  | 'dir'
+  | 'defaults'
+  | 'sessions'
+  | 'help'
+  | 'quit'
 
 export interface SlashCommandSpec {
   /** Canonical name, typed after the slash. */
@@ -18,8 +26,15 @@ export interface SlashCommandSpec {
 
 export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
   {
+    name: 'config',
+    summary:
+      'Everything a session runs on — each role’s model and the working directory, in one place',
+    aliases: ['settings', 'setup'],
+  },
+  {
     name: 'model',
-    summary: 'Change the model — the live catalog, searchable, with context, price and reachability',
+    summary:
+      'Change the default model — the fallback every role runs on unless it has one of its own',
   },
   {
     name: 'reasoning',

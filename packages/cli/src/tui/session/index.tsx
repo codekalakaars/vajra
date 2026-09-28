@@ -12,6 +12,8 @@ import {
   parseSlashCommand,
   type SlashCommand,
 } from './commands.js'
+import { configOptions } from './config-menu.js'
+import { readConfig } from '../../config.js'
 import { Pickers, type PickerScreen, type ResumeChoice } from '../pickers.js'
 import {
   StatusBar,
@@ -240,6 +242,30 @@ function SessionApp({
     }
     if (cmd === 'quit') {
       actions.quit()
+      return
+    }
+    if (cmd === 'config') {
+      // This front-end has one picker at a time and no way back into it, so a
+      // menu of four settings that each open another would mean building the
+      // nesting twice. It states the settings instead, from the same builder
+      // the default front-end draws its menu with, so the two can never
+      // disagree about what a role runs on.
+      const saved = readConfig()
+      const options = configOptions({
+        defaultModel: store.getSnapshot().model,
+        roleOverrides: {
+          ...(saved.developerModel ? { developer: saved.developerModel } : {}),
+          ...(saved.managerModel ? { manager: saved.managerModel } : {}),
+          ...(saved.workerModel ? { worker: saved.workerModel } : {}),
+        },
+        projectDir: store.getSnapshot().projectDir,
+      })
+      store.addEntry({ kind: 'info', text: 'This session runs on:' })
+      for (const option of options) store.addEntry({ kind: 'info', text: `  ${option.label}` })
+      store.addEntry({
+        kind: 'info',
+        text: 'Change them with `vajra config -s developerModel=zen/…`, or in the default TUI, which has the menu.',
+      })
       return
     }
     // Reasoning cycles instead of opening a picker: it is one value with four

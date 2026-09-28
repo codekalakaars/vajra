@@ -45,7 +45,7 @@ environment.
 
 | Path | Written by | Holds | Mode | Secret |
 | --- | --- | --- | --- | --- |
-| `config.json` | `vajra config -s` (`config.ts:31`) | Saved defaults: `model`, `projectDir` | `0600` | no |
+| `config.json` | `/config` or `vajra config -s` (`config.ts:32`) | Saved defaults: `model`, `projectDir`, and each role's own model — `developerModel`, `managerModel`, `workerModel` | `0600` | no |
 | `auth.json` | `vajra auth login` (`auth.ts:23`) | `OPENCODE_API_KEY`, in the clear | `0600` | **yes** |
 | `vajra.db` | `saveSession` / `appendMessage` (`persist/db.ts:23`) | Sessions and message transcripts (SQLite) | `0600` | transcripts |
 | `vajra.db-wal`, `vajra.db-shm` | SQLite, because the connection sets `journal_mode=WAL` (`db.ts:36`) | Write-ahead log and shared-memory index | inherit `0600` | transcripts |
@@ -205,6 +205,9 @@ Every environment variable the CLI reads:
 | --- | --- |
 | `VAJRA_HOME` | Where state lives. Defaults to `~/.vajra`. |
 | `VAJRA_MODEL`, `DEFAULT_MODEL` | Default model, below `config.json` |
+| `VAJRA_DEVELOPER_MODEL` | The model the Developer role runs on, below `config.json` |
+| `VAJRA_MANAGER_MODEL` | The model the Manager role runs on, below `config.json` |
+| `VAJRA_WORKER_MODEL` | The model the Worker role runs on, below `config.json` |
 | `VAJRA_PROJECT_DIR` | Default project directory, below `config.json` |
 | `OPENCODE_API_KEY` | The API key. See [llm-providers.md](llm-providers.md). |
 | `VAJRA_TUI` | `ink` selects the fallback front-end over OpenTUI |
@@ -213,6 +216,11 @@ Every environment variable the CLI reads:
 
 Model resolution reads the environment before `config.json`, so an exported
 variable overrides a saved default without editing it.
+
+The three role models are independent of each other and of `model` (ADR-0010), and
+a role with no key of its own runs on `model`. `VAJRA_MANAGER_MODEL` is also the
+opt-in that lets the Manager ask the model anything: the Manager is an agent, and
+a model configured for it is a model that gets asked.
 
 ## See also
 

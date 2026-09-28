@@ -23,6 +23,11 @@ const known = text => {
 }
 
 test('every menu option is reachable as a slash command', () => {
+  assert.equal(known('/config'), 'config')
+  // The names someone would reach for instead, since a settings screen has
+  // three obvious names and picking one arbitrarily makes the other two fail.
+  assert.equal(known('/settings'), 'config')
+  assert.equal(known('/setup'), 'config')
   assert.equal(known('/model'), 'model')
   assert.equal(known('/dir'), 'dir')
   assert.equal(known('/directory'), 'dir')
@@ -34,6 +39,7 @@ test('every menu option is reachable as a slash command', () => {
 })
 
 test('commands are case-insensitive and tolerate surrounding space', () => {
+  assert.equal(known('/Config'), 'config')
   assert.equal(known('/Model'), 'model')
   assert.equal(known('/SESSIONS'), 'sessions')
   assert.equal(known('  /quit  '), 'quit')
@@ -57,7 +63,7 @@ test('an unknown command token is reported, not sent', () => {
 
 test('help lists every command plus the way to start', () => {
   const text = HELP_LINES.join('\n')
-  for (const cmd of ['/model', '/dir', '/defaults', '/sessions', '/help', '/quit']) {
+  for (const cmd of ['/config', '/model', '/dir', '/defaults', '/sessions', '/help', '/quit']) {
     assert.ok(text.includes(cmd), `help should mention ${cmd}`)
   }
   assert.ok(text.includes('Type a task'))
