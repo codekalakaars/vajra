@@ -1094,7 +1094,7 @@ function App(props: { renderer: CliRenderer }) {
           {(option, i) => (
             <text
               content={`${i() === props.selected ? CURSOR_MARKER : '  '}${ellipsis(option.label, labelCells())}`}
-              fg={i() === props.selected ? theme.text : theme.listOption}
+              fg={i() === props.selected ? theme.listSelected : theme.listOption}
               style={{ flexShrink: 0, width: '100%' }}
             />
           )}

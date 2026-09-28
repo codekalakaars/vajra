@@ -57,15 +57,24 @@ export const theme = {
   syntaxOperator: '#56b6c2',
   syntaxPunctuation: '#eeeeee',
   /**
-   * A light cyan for the rows of a list the user is choosing from.
+   * The row the cursor is on: the theme's blue.
    *
-   * These rows were `textMuted`, which is the theme's gray — and gray reads as
-   * *disabled* rather than *unselected*, which is a different thing entirely.
-   * It made every command and every model look unavailable while the cursor sat
-   * on one of them. Cyan says "these are all options, this one is the current
-   * one", which is what the list is.
+   * One list, two colours, and the cursor has to be findable at a glance in a
+   * panel of eight similar lines — which is the whole job of a selection colour.
+   * `secondary` is the theme's blue; it is named here so the list's two colours
+   * sit next to each other and a change to either is one edit.
    */
-  listOption: '#7fd8e0',
+  listSelected: '#5c9cf5',
+  /**
+   * A row the cursor is not on.
+   *
+   * Light gray, not the theme's `textMuted` — that is the gray of things that
+   * are switched off, and every command and every model in these lists is
+   * available. Not cyan either: a second saturated colour beside the cursor
+   * competes with it, and the cursor is the only thing in the panel that is
+   * telling you something.
+   */
+  listOption: '#b4b4b4',
   /**
    * How solid thinking text is. OpenCode's default, and the reason a reasoning
    * block never competes with the answer that follows it.
