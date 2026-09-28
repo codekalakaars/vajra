@@ -57,22 +57,23 @@ export const theme = {
   syntaxOperator: '#56b6c2',
   syntaxPunctuation: '#eeeeee',
   /**
-   * The row the cursor is on: the theme's blue.
+   * The row the cursor is on: a light cyan.
    *
    * One list, two colours, and the cursor has to be findable at a glance in a
    * panel of eight similar lines — which is the whole job of a selection colour.
-   * `secondary` is the theme's blue; it is named here so the list's two colours
-   * sit next to each other and a change to either is one edit.
+   * Cyan rather than white or blue: white is the colour of every other piece of
+   * text on the screen, so the cursor has nothing to be different from, and the
+   * theme's blue reads as a link rather than as "this one".
    */
-  listSelected: '#5c9cf5',
+  listSelected: '#7fd8e0',
   /**
-   * A row the cursor is not on.
+   * A row the cursor is not on: a light gray.
    *
-   * Light gray, not the theme's `textMuted` — that is the gray of things that
-   * are switched off, and every command and every model in these lists is
-   * available. Not cyan either: a second saturated colour beside the cursor
-   * competes with it, and the cursor is the only thing in the panel that is
-   * telling you something.
+   * Not the theme's `textMuted` — that is the gray of things that are switched
+   * off, and every command and every model in these lists is available. Nothing
+   * saturated either: a second colour competing with the cursor is a second
+   * thing in the panel pretending to be important, and the cursor is the only
+   * thing there that is telling you something.
    */
   listOption: '#b4b4b4',
   /**

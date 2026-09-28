@@ -226,12 +226,12 @@ await wait(700)
   check('the closing rule and the status row are still on screen', lines.some(l => l.includes('/ commands')), 'the status row is gone')
 
   // Two colours, and the cursor has to be findable: the row under the cursor is
-  // the theme's blue, everything else is a light gray that says "available" and
-  // not "switched off".
-  const blue = rgbEscape('#5c9cf5')
+  // a light cyan, everything else is a light gray that says "available" and not
+  // "switched off".
+  const cyan = rgbEscape('#7fd8e0')
   const grey = rgbEscape('#b4b4b4')
   check('unselected rows are painted the light gray', out.includes(grey), 'no light gray in the output stream')
-  check('the selected row is painted the blue', out.includes(blue), 'no blue in the output stream')
+  check('the selected row is painted the light cyan', out.includes(cyan), 'no cyan in the output stream')
   // Which colour belongs to which row: the SGR that sets it is written before
   // the run of text it applies to, so the check looks back from the text rather
   // than after it. (Matching it forward needs a pattern, and an escape sequence
@@ -240,7 +240,7 @@ await wait(700)
     const at = out.indexOf(text)
     return at === -1 ? '' : out.slice(Math.max(0, at - 240), at)
   }
-  check('the cursor row is the blue one', colourBefore('❯ /model').includes(blue), 'the ❯ row was not blue')
+  check('the cursor row is the cyan one', colourBefore('❯ /model').includes(cyan), 'the ❯ row was not cyan')
   check('an unselected row is the gray one', colourBefore('  /models').includes(grey), 'an unselected row was not gray')
 }
 
