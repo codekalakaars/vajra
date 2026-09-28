@@ -530,12 +530,20 @@ export const MAX_PLAN_TASKS = 12
  * re-proposing the same plan shape, so the third rejection is where telling it
  * to change strategy — narrow the scope, or ask — saves more time than
  * another round of errors.
+ *
+ * `measured` is the other half. A verify entry's `kind` is decided by the exit
+ * code the Developer already recorded for it, and a rejection that says only
+ * "already passes before any change" sends it back to `run_baseline` to find
+ * out what it already measured — which in a real session was twenty-six
+ * baseline runs across four proposals, twenty-five of them distinct commands,
+ * because every rejection restarted the measurement from nothing.
  */
 function rejectPlan(
   messages: ChatMessage[],
   toolCallId: string,
   errors: readonly string[],
   attempt = 1,
+  measured: readonly string[] = [],
 ): void {
   const header = attempt >= 3
     ? `Plan rejected (attempt ${attempt}). Re-reading these will not help — change approach: ` +
@@ -543,11 +551,50 @@ function rejectPlan(
     : attempt === 2
       ? `Plan rejected (attempt 2). Fix every point below in the next call:`
       : 'Plan rejected:'
+  const body = `${header}\n- ${errors.join('\n- ')}`
   messages.push({
     role: 'tool',
-    content: `${header}\n- ${errors.join('\n- ')}`,
+    content:
+      measured.length === 0
+        ? body
+        : `${body}\n\nYou already measured these. The kind follows the exit code — do not re-run them:\n${measured.join('\n')}`,
     tool_call_id: toolCallId,
   })
+}
+
+/**
+ * The exit codes already recorded for the commands in a rejected plan, with the
+ * kind each one has to carry.
+ *
+ * This is the decision the model was getting wrong, restated with the numbers it
+ * had already collected: `proves-change` needs an exit that is not the expected
+ * one, `regression-guard` needs the expected one. Only the commands in the plan
+ * are listed, and only the ones with an observation, so it is short enough to
+ * read and complete enough to act on.
+ */
+export function measuredBaselines(
+  tasks: readonly PlannedTaskInput[],
+  baselinesByCommand: ReadonlyMap<string, number>,
+  projectDir: string,
+): string[] {
+  const seen = new Set<string>()
+  const lines: string[] = []
+  for (const task of tasks) {
+    for (const v of task.verify ?? []) {
+      const key = baselineKey(v.command, v.args ?? [], v.cwd, projectDir)
+      if (seen.has(key)) continue
+      seen.add(key)
+      const exit = baselinesByCommand.get(key)
+      if (exit === undefined) continue
+      const expected = v.expectExit ?? 0
+      const kind = exit === expected ? 'regression-guard' : 'proves-change'
+      // Not labelled by task: the same command in two tasks needs one kind
+      // decision, and repeating it per task is how a plan ends up labelling the
+      // same command two different ways.
+      lines.push(`  exit ${exit}  ${v.command} ${(v.args ?? []).join(' ')}  → kind ${kind}`)
+    }
+  }
+  return lines
 }
 
 /** The plan-wide shape decision, with the offenders named for the error. */
@@ -1171,7 +1218,13 @@ export async function developerConversationTurn(
 
         if (rejection.length > 0) {
           planRejections += 1
-          rejectPlan(messages, toolCall.id, rejection, planRejections)
+          rejectPlan(
+            messages,
+            toolCall.id,
+            rejection,
+            planRejections,
+            measuredBaselines(proposed.data.tasks, baselinesByCommand, projectDir),
+          )
           emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
           continue
         }

@@ -14,7 +14,7 @@ import { reconstruct } from './screen.mjs'
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const COLS = 120
-const ROWS = 30
+const ROWS = Number(process.env.PROBE_ROWS ?? 30)
 
 // A real answer: a heading, prose, a list, a fenced block and a table, so the
 // markdown path is exercised rather than assumed.

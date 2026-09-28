@@ -495,6 +495,56 @@ test('a rejected plan can be re-proposed in the next turn without re-collecting 
   }
 })
 
+test('a rejection states the exit code already measured, so a kind is a relabel', async () => {
+  // A verify entry's kind is decided by the exit code the Developer already
+  // recorded, and a rejection that omits the number sends it back to
+  // run_baseline to find out what it measured an hour of turns ago. In a real
+  // session that was twenty-six baseline runs across four proposals, twenty-five
+  // of them distinct commands, because every rejection restarted the measuring.
+  const projectDir = makeProject()
+  try {
+    // The same command, labelled as the kind its recorded exit contradicts.
+    const proposal = stubPlanProposal(
+      [validStructuredTask({ verify: [{ command: 'node', args: ['--check', 'README.md'], kind: 'regression-guard' }] })],
+      VALIDATION_PRELUDE,
+    )
+    const { result } = await runTurn({ projectDir })
+    assert.equal(result.type, 'response', 'the mismatched kind is rejected')
+
+    const feedback = feedbackSeenBy(proposal)
+    assert.match(feedback, /already fails/, 'the validator still says what is wrong')
+    // And the rejection carries the measurement, with the kind it implies — so
+    // the next call is the plan with one word changed, not another run.
+    assert.match(
+      feedback,
+      /exit \d+\s+node --check README\.md\s+→ kind proves-change/,
+      `the recorded exit and the kind it implies are both in the rejection: ${JSON.stringify(feedback)}`,
+    )
+    assert.match(feedback, /do not re-run them/, 'and the rejection says so outright')
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true })
+  }
+})
+
+test('a plan whose verify commands were never measured is told to measure them', async () => {
+  // The other side of the same rule: there is nothing to restate, so the
+  // rejection must not imply there is.
+  const projectDir = makeProject()
+  try {
+    const proposal = stubPlanProposal(
+      [validStructuredTask()],
+      [{ name: 'read_file', args: { path: 'README.md' } }],
+    )
+    const { result } = await runTurn({ projectDir })
+    assert.equal(result.type, 'response', 'a plan with an unmeasured verify is rejected')
+    const feedback = feedbackSeenBy(proposal)
+    assert.match(feedback, /was never run/)
+    assert.doesNotMatch(feedback, /do not re-run them/, 'nothing is claimed to be measured')
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true })
+  }
+})
+
 test('the ledger is dropped when reset, so stale evidence cannot validate a plan', async () => {  // The other half of the contract: once Workers write, the recorded content
   // no longer describes the files, and an anchor must not be checked against it.
   const ledger = createEvidenceLedger()
