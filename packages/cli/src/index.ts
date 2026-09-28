@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+// Must stay the first import — see the file for why.
+import './platform-guard.js'
+
 import { Command } from 'commander'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'

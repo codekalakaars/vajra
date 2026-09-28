@@ -6,6 +6,9 @@
 //
 // Never sees the API key or conversation — only individual tool invocations.
 
+// First import: must run before the addon require below. See platform-guard.ts.
+import '../platform-guard.js'
+
 import { createRequire } from 'node:module'
 import { checkToolPermission, type LaunchJob } from '@codekalakaars/vajra-sandbox'
 import { createToolHandle } from '../tools/handle.js'

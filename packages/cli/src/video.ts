@@ -25,13 +25,8 @@ async function fetchRegistry(): Promise<RegistryItem[]> {
   return data.items
 }
 
-/** Platform-correct npx binary (Windows needs npx.cmd). */
-function npxCommand(): string {
-  return process.platform === 'win32' ? 'npx.cmd' : 'npx'
-}
-
 function runNpx(args: string[]): void {
-  execFileSync(npxCommand(), args, { stdio: 'inherit', shell: process.platform === 'win32' })
+  execFileSync('npx', args, { stdio: 'inherit' })
 }
 
 export function isValidFps(fps: string): boolean {

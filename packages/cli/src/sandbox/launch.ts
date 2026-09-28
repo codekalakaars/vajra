@@ -71,15 +71,11 @@ export interface LaunchSandboxOptions {
   onWorkerOutput?: (line: string) => void
 }
 
-const WORKER_ENV_ALLOWLIST = [
-  'PATH',
-  'SystemRoot',
-  'TEMP',
-  'TMP',
-  'HOME',
-  'USERPROFILE',
-  'NODE_ENV',
-] as const
+// The worker inherits only what it needs to find and run a Node interpreter.
+// Anything else in the parent environment — the API key above all — must not
+// cross the boundary. Note there is no SystemRoot/USERPROFILE here: the worker
+// is Linux-only.
+const WORKER_ENV_ALLOWLIST = ['PATH', 'HOME', 'TMPDIR', 'NODE_ENV'] as const
 
 function buildWorkerEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
@@ -112,7 +108,9 @@ function withNodeToolchain(paths: readonly string[]): string[] {
 function resolveSandboxConfig(projectDir: string, allowUnenforced: boolean): SandboxConfig {
   const loaded = loadSandboxConfig(projectDir)
   if (loaded) {
-    // CLI UX: never hard-fail on Windows when the user has no opinion set.
+    // CLI UX: honour an explicit --allow-unenforced on a host with no Landlock
+    // (a kernel older than 5.13) rather than hard-failing, as long as the user
+    // has expressed no opinion in the config itself.
     if (allowUnenforced && loaded.allowUnenforced === false && loaded.fileRules.length === 0) {
       return createSandboxConfig({
         projectDir,
@@ -473,17 +471,6 @@ export async function launchSandboxSession(
         stopWorker(current)
       }
     },
-  }
-}
-
-/** Build a permission lookup from a task permissions map (normalized keys). */
-export function taskPermissionLookupFrom(
-  projectDir: string,
-  permissions: Record<string, TaskFilePermissions>,
-): (path: string) => TaskFilePermissions | null {
-  return (path) => {
-    const key = normalizeProjectPath(projectDir, path)
-    return permissions[key] ?? null
   }
 }
 

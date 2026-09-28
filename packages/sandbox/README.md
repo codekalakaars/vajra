@@ -2,6 +2,9 @@
 
 Programmatically configurable sandbox policy for Vajra. Restricts what files a worker can access and what tools it can call.
 
+**Linux only.** The sandbox is built on Landlock, a Linux kernel feature; both
+entry points refuse to start on any other platform.
+
 ## Install
 
 ```bash

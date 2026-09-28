@@ -152,8 +152,8 @@ pub fn ensure_ext(path: String, ext: String) -> String {
 mod tests {
     use super::*;
 
-    /// Build a platform-native path from segments, so these assertions hold on
-    /// Windows too — normalization preserves the platform separator.
+    /// Build a path from segments so the assertions compare against a
+    /// real joined path rather than a hardcoded string.
     fn native(segments: &[&str]) -> String {
         segments
             .iter()
@@ -187,8 +187,8 @@ mod tests {
     #[test]
     fn parent_of_root_is_root() {
         // Assert the shape rather than a literal: the root renders as "/" on
-        // unix and "\" on Windows, so comparing against a hardcoded string
-        // tests the platform, not the behaviour.
+        // Linux, so comparing against a hardcoded string tests the platform,
+        // not the behaviour.
         for input in ["/..", "/../.."] {
             let normalized = normalize_path(input.into());
             let as_path = Path::new(&normalized);

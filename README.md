@@ -17,18 +17,25 @@ so they can work on your code without reading your secrets.
 
 | Layer | State |
 | --- | --- |
-| File / process / env / path primitives | Implemented, tested on Linux/macOS/Windows in CI |
+| File / process / env / path primitives | Implemented, tested on Linux in CI |
 | Env-file parsing, sample generation, redaction | Implemented; project `.env` entries are masked out of the file index |
 | Per-file permission config | Implemented |
-| Sandbox enforcement (CLI `vajra run`) | Confined worker calls `applySandbox` — Linux (Landlock) and macOS (Seatbelt); **none on Windows** |
+| Sandbox enforcement (CLI `vajra run`) | Confined worker calls `applySandbox` — Landlock |
 | Multi-agent orchestration | Developer/master/worker roles with plan confirmation |
 | LLM providers | **OpenCode Zen only** — `zen/*` and `go/*` model ids, one `OPENCODE_API_KEY`; a second provider is planned ([ADR](docs/adr/0009-opencode-zen-is-the-only-provider.md)) |
 | API key configuration | `vajra auth login` / `status` / `logout`, `--api-key`, env, `~/.vajra/auth.json` at `0600`; a gate holds the screen until a key exists — **not tested end to end yet** ([gaps](docs/testing/gaps.md)) |
 | TypeScript harness | Implemented |
 
+## Supported platforms
+
+**Linux only** (kernel 5.13+ for Landlock). Vajra refuses to start anywhere else
+— macOS and Windows included — because the confinement it exists to provide
+cannot be delivered there. There is no macOS or Windows build, CI run, or
+published package.
+
 ## What the native core provides
 
-Cross-platform primitives, exported to Node with generated TypeScript types
+Linux primitives, exported to Node with generated TypeScript types
 (see [`index.d.ts`](index.d.ts)):
 
 - **file** — `readFile`, `writeFile`, `editFile`, `deleteFile`, `deleteDir`,
@@ -78,7 +85,7 @@ cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnin
 pnpm cli          # build the CLI and run it (vajra --help)
 ```
 
-CI runs on ubuntu, macos and windows.
+CI runs on ubuntu.
 
 ## State on disk
 
@@ -123,15 +130,15 @@ access is unrestricted since agents need their LLM APIs.
 
 Enforced today on the CLI path (`vajra run`):
 
-- **Filesystem confinement** — Landlock on Linux, Seatbelt on macOS. Tools run
+- **Filesystem confinement** — Landlock. Tools run
   in a forked worker that calls `applySandbox` before touching anything.
 - **Output redaction** — `redact` replaces secret values with `[REDACTED:KEY]`.
 - **Secret masking** — project `.env` files are excluded from `listFiles` and
   the summary index, so their contents are not handed to the model.
 
-Not enforced yet:
-
-- **Nothing on Windows.** `applySandbox` refuses rather than pretending.
+This is the whole model. On an unsupported platform Vajra exits at startup
+rather than running unconfined, and `applySandbox` refuses rather than
+pretending.
 
 Confinement is process-wide and irreversible.
 

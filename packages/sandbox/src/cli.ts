@@ -8,15 +8,20 @@
 //   vajra config [--project-dir]
 //   vajra test  [--project-dir]
 //
-// The sandbox uses kernel-level confinement (Landlock on Linux, Seatbelt on
-// macOS) to restrict file access. The `secure` command applies the sandbox
-// and runs a command inside it.
+// The sandbox uses kernel-level confinement (Landlock) to restrict file access.
+// The `secure` command applies the sandbox and runs a command inside it. Other
+// platforms are refused outright — see platform.ts.
 
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
+import { assertSupportedPlatform } from './platform.js'
+
+// Before the require below: on an unsupported platform there is no addon to
+// load, and "Unsupported OS" from the loader says far less than why.
+assertSupportedPlatform()
 
 const require = createRequire(import.meta.url)
 const native = require('@codekalakaars/vajra-core')
@@ -119,8 +124,7 @@ function cmdTest(): void {
 
   if (caps.filesystem === 'unsupported') {
     console.log('\n  ❌ Cannot test — no sandbox mechanism available.')
-    console.log('     On Linux, requires kernel 5.13+ with Landlock.')
-    console.log('     On macOS, Seatbelt is always available.')
+    console.log('     Requires kernel 5.13+ with Landlock.')
     process.exit(1)
   }
 
@@ -164,19 +168,18 @@ function cmdSecure(): void {
   const caps = native.sandboxCapabilities()
 
   if (caps.filesystem === 'unsupported') {
+    // Only reachable on Linux without Landlock, or a kernel too old for it. The
+    // unsupported-*platform* case never gets here.
     console.error('❌ Cannot secure — no sandbox mechanism available on this platform.')
     console.error('')
-    console.error('   Supported platforms:')
+    console.error('   Supported platform:')
     console.error('     Linux:  Kernel 5.13+ with Landlock (filesystem + network)')
-    console.error('     macOS:  Seatbelt (filesystem)')
-    console.error('')
-    console.error('   Unsupported platforms:')
-    console.error('     Windows: No kernel-level sandbox. Use WSL2 or Docker instead.')
-    console.error('     Other:   No sandbox mechanism available.')
     console.error('')
     console.error('   The sandbox enforces file access restrictions at the kernel level,')
     console.error('   preventing the agent from reading/writing outside the project.')
     console.error('   Without it, the agent has full access to your filesystem.')
+    console.error('')
+    console.error(`   ${caps.details}`)
     process.exit(1)
   }
 
@@ -488,9 +491,9 @@ Examples:
   vajra test                              # Test sandbox on current project
 
 How it works:
-  Vajra uses kernel-level sandboxing (Landlock on Linux, Seatbelt on macOS)
-  to confine AI coding assistants to a project directory. The sandbox is
-  applied when a session starts and is irreversible for that process.
+  Vajra uses kernel-level sandboxing (Landlock) to confine AI coding
+  assistants to a project directory. The sandbox is applied when a session
+  starts and is irreversible for that process. Linux only.
 
   1. Create a config: vajra config
   2. Edit .vajra-sandbox.json to set permissions

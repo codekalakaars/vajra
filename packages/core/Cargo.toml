@@ -2,7 +2,7 @@
 name = "vajra-core"
 version = "0.0.1"
 edition = "2021"
-description = "Cross-platform native operations for Vajra"
+description = "Linux native operations for Vajra"
 authors = ["Vajra Contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/codekalakaars/vajra"

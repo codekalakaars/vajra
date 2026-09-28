@@ -623,7 +623,7 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     const candidates = pathCandidates(
       [
         { dir: projectDir, depth: 2 },
-        { dir: process.env.HOME ?? process.env.USERPROFILE ?? '', depth: 2 },
+        { dir: process.env.HOME ?? '', depth: 2 },
       ],
       recentDirs(),
       subDirectories,

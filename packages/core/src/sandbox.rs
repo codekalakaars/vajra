@@ -1,12 +1,7 @@
-#[cfg(target_os = "linux")]
 mod linux;
-
-#[cfg(target_os = "macos")]
-mod macos;
 
 use napi::Error;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub const MAX_DEPTH: u32 = 8;
 
 #[napi(object)]
@@ -36,7 +31,6 @@ pub struct SandboxResult {
     pub warnings: Vec<String>,
 }
 
-#[cfg(target_os = "linux")]
 fn capabilities_impl() -> SandboxCapabilities {
     match linux::detect_abi() {
         Ok(abi) => {
@@ -62,32 +56,6 @@ fn capabilities_impl() -> SandboxCapabilities {
             details: e,
             abi: None,
         },
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn capabilities_impl() -> SandboxCapabilities {
-    SandboxCapabilities {
-        platform: "macos".into(),
-        filesystem: "enforced".into(),
-        mechanism: "seatbelt".into(),
-        details: "Seatbelt (sandbox_init): filesystem access confined to the policy. \
-                  The SPI is deprecated by Apple but functional."
-            .into(),
-        abi: None,
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn capabilities_impl() -> SandboxCapabilities {
-    SandboxCapabilities {
-        platform: std::env::consts::OS.to_string(),
-        filesystem: "unsupported".into(),
-        mechanism: "none".into(),
-        details: "No filesystem confinement is available on this platform. An agent \
-                  run here can read and write anything the user can."
-            .into(),
-        abi: None,
     }
 }
 
@@ -121,7 +89,6 @@ pub fn apply_sandbox(config: SandboxConfig) -> Result<SandboxResult, Error> {
     apply_impl(&config).map_err(Error::from_reason)
 }
 
-#[cfg(target_os = "linux")]
 fn apply_impl(config: &SandboxConfig) -> Result<SandboxResult, String> {
     let (mut warnings, degraded) = linux::apply(config)?;
     warnings.extend(degraded);
@@ -131,23 +98,6 @@ fn apply_impl(config: &SandboxConfig) -> Result<SandboxResult, String> {
         mechanism: "landlock".into(),
         warnings,
     })
-}
-
-#[cfg(target_os = "macos")]
-fn apply_impl(config: &SandboxConfig) -> Result<SandboxResult, String> {
-    let (mut warnings, note) = macos::apply(config)?;
-    warnings.extend(note);
-
-    Ok(SandboxResult {
-        enforced: true,
-        mechanism: "seatbelt".into(),
-        warnings,
-    })
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn apply_impl(_config: &SandboxConfig) -> Result<SandboxResult, String> {
-    Err("No sandbox mechanism on this platform".into())
 }
 
 #[cfg(test)]
@@ -171,9 +121,20 @@ mod tests {
         }
     }
 
+    /// `allowUnenforced` is the escape hatch for a host with no Landlock — a
+    /// kernel older than 5.13. Both refusal paths must hold there, and neither
+    /// may be reached by actually confining this test process, so each test
+    /// skips when a mechanism *is* available.
+    fn unenforceable_host() -> bool {
+        capabilities_impl().filesystem == "unsupported"
+    }
+
     #[test]
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    fn unsupported_platforms_refuse_by_default() {
+    fn unenforceable_hosts_refuse_by_default() {
+        if !unenforceable_host() {
+            return;
+        }
+
         let config = SandboxConfig {
             project_dir: ".".into(),
             read_execute_paths: None,
@@ -187,8 +148,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     fn opting_in_reports_that_nothing_was_enforced() {
+        if !unenforceable_host() {
+            return;
+        }
+
         let config = SandboxConfig {
             project_dir: ".".into(),
             read_execute_paths: None,

@@ -25,16 +25,6 @@ export const CONFIG_ITEMS: readonly ConfigItem[] = [
 ]
 
 /**
- * True for the four keys that name a model, as opposed to a directory.
- *
- * `model` is included deliberately: it is the default every role falls back to,
- * and it is a model, so it opens a list of models like the other three do.
- */
-export function isRoleItem(item: ConfigItem): item is ConfigItem & `${RoleName}Model` {
-  return item !== 'projectDir'
-}
-
-/**
  * The role whose model an item names, or null for the directory and for the
  * default — the default is not a role, it is what roles without one get.
  */
@@ -201,7 +191,7 @@ export function directoryOptions(
   launchDir: string,
   recent: string[],
   exists: (dir: string) => boolean,
-  home: string = process.env.HOME ?? process.env.USERPROFILE ?? '',
+  home: string = process.env.HOME ?? '',
   children: (dir: string) => string[] = () => [],
 ): ConfigOption[] {
   const seen = new Set<string>()

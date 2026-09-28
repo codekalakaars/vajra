@@ -47,14 +47,18 @@ After changing any `#[napi]` signature, run `pnpm build` before `pnpm test`.
   predicates stay synchronous.
 - Prefer refusing an ambiguous or destructive operation over guessing.
 
-### Cross-platform work
+### Platform scope
+
+Vajra ships on **Linux only**. `vajra` exits at startup anywhere else, and CI
+covers `ubuntu-latest` — nothing more.
 
 - Do not hardcode `/` in tests. Build paths with `path.join` (JS) or `PathBuf`
   (Rust).
-- Gate platform-specific code with `#[cfg(...)]`.
+- Platform-gated code uses `#[cfg(target_os = "linux")]`. There is no macOS or
+  Windows target to keep compiling.
 - Skip, rather than fail, tests that need privileges CI may not have.
 
-CI runs clippy, both test suites, and a build on ubuntu, macos and windows.
+CI runs clippy, both test suites, and a build on ubuntu.
 
 ## Commit Convention
 
@@ -81,7 +85,7 @@ Breaking changes use `!` before the colon: `feat!: drop setEnv binding`
 
 1. Open an issue first for significant changes
 2. Keep PRs focused on a single concern
-3. Ensure all tests pass on every platform in the matrix
+3. Ensure all tests pass on every platform in the matrix (Linux)
 4. Squash commits before merge
 
 ## Code Style

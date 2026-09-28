@@ -60,9 +60,7 @@ pub fn set_current_dir(path: String) -> Result<(), Error> {
 pub fn home_dir() -> Option<String> {
     // Resolved from the environment rather than a crate: the sandbox may have
     // been given a different HOME on purpose, and that is the one to honour.
-    let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-
-    env::var_os(key)
+    env::var_os("HOME")
         .map(|v| v.to_string_lossy().to_string())
         .filter(|v| !v.is_empty())
 }
@@ -78,7 +76,7 @@ mod tests {
 
     #[test]
     fn reads_an_existing_var() {
-        // PATH is present on all three target platforms.
+        // PATH is present on the supported platform.
         assert!(env_exists("PATH".into()));
         assert!(get_env("PATH".into()).is_some());
     }

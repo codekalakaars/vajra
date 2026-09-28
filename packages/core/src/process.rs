@@ -1,12 +1,11 @@
 use napi::bindgen_prelude::AsyncTask;
 use napi::{Env, Error, Task};
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 
 #[napi(object)]
 pub struct CommandResult {
@@ -47,17 +46,11 @@ fn collect_stream(handle: thread::JoinHandle<Vec<u8>>, timeout: Duration) -> Vec
     }
 }
 
-#[cfg(unix)]
 fn terminate_process(child: &mut Child) {
     let pid = child.id() as i32;
     unsafe {
         let _ = libc::kill(-pid, libc::SIGKILL);
     }
-    let _ = child.kill();
-}
-
-#[cfg(not(unix))]
-fn terminate_process(child: &mut Child) {
     let _ = child.kill();
 }
 
@@ -120,13 +113,11 @@ fn run_command_blocking(
     }
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    #[cfg(unix)]
     unsafe {
         cmd.pre_exec(|| {
             if libc::setpgid(0, 0) == -1 {
                 return Err(std::io::Error::last_os_error());
             }
-            #[cfg(target_os = "linux")]
             let _ = libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
             Ok(())
         });
@@ -190,17 +181,8 @@ pub fn run_command(
 /// untrusted input — shell interpolation executes as code.
 #[napi]
 pub fn run_shell(command: String, cwd: Option<String>) -> Result<CommandResult, Error> {
-    let mut cmd = if cfg!(target_os = "windows") {
-        let mut c = Command::new("cmd");
-        c.arg("/C");
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.arg("-c");
-        c
-    };
-
-    cmd.arg(&command);
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c").arg(&command);
 
     if let Some(cwd) = cwd {
         cmd.current_dir(&cwd);
@@ -284,41 +266,13 @@ pub fn run_shell_async(command: String, cwd: Option<String>) -> AsyncTask<RunTas
     })
 }
 
-/// Candidate filenames for `command` on this platform.
-#[cfg(windows)]
-fn candidate_names(command: &str) -> Vec<String> {
-    if Path::new(command).extension().is_some() {
-        return vec![command.to_string()];
-    }
-
-    let pathext = std::env::var("PATHEXT")
-        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
-
-    pathext
-        .split(';')
-        .filter(|ext| !ext.is_empty())
-        .map(|ext| format!("{}{}", command, ext))
-        .collect()
-}
-
-#[cfg(not(windows))]
-fn candidate_names(command: &str) -> Vec<String> {
-    vec![command.to_string()]
-}
-
 /// True if `path` is a file we could actually execute.
-#[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
     std::fs::metadata(path)
         .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn is_executable(path: &Path) -> bool {
-    path.is_file()
 }
 
 /// Locate an executable on PATH, returning its full path.
@@ -329,7 +283,7 @@ pub fn which(command: String) -> Option<String> {
     }
 
     // A path with a separator is a location, not a name to look up.
-    if command.contains('/') || (cfg!(windows) && command.contains('\\')) {
+    if command.contains('/') {
         let path = PathBuf::from(&command);
         return is_executable(&path).then(|| path.to_string_lossy().to_string());
     }
@@ -340,11 +294,9 @@ pub fn which(command: String) -> Option<String> {
         if dir.as_os_str().is_empty() {
             continue;
         }
-        for name in candidate_names(&command) {
-            let candidate = dir.join(&name);
-            if is_executable(&candidate) {
-                return Some(candidate.to_string_lossy().to_string());
-            }
+        let candidate = dir.join(&command);
+        if is_executable(&candidate) {
+            return Some(candidate.to_string_lossy().to_string());
         }
     }
 
@@ -357,12 +309,7 @@ mod tests {
 
     #[test]
     fn runs_a_command_and_captures_stdout() {
-        let result = if cfg!(windows) {
-            run_command("cmd".into(), Some(vec!["/C".into(), "echo hi".into()]), None)
-        } else {
-            run_command("echo".into(), Some(vec!["hi".into()]), None)
-        }
-        .unwrap();
+        let result = run_command("echo".into(), Some(vec!["hi".into()]), None).unwrap();
 
         assert_eq!(result.code, 0);
         assert!(result.stdout.contains("hi"));
@@ -381,7 +328,6 @@ mod tests {
     /// thread is therefore SIGKILLed mid-run, and its exit code can only be
     /// reported as -1. If this test ever starts failing, the kernel behaviour
     /// changed and the executor may no longer be necessary.
-    #[cfg(unix)]
     #[test]
     fn pdeathsig_kills_a_child_when_its_spawning_thread_exits() {
         use std::time::Duration;
@@ -413,7 +359,6 @@ mod tests {
 
     /// The regression this fixes: a command must outlive the thread that
     /// requested it, and must report its real exit code rather than -1.
-    #[cfg(unix)]
     #[test]
     fn a_command_outlives_the_thread_that_requested_it() {
         let result = thread::spawn(|| {
@@ -438,18 +383,14 @@ mod tests {
 
     #[test]
     fn which_finds_a_known_executable() {
-        let known = if cfg!(windows) { "cmd" } else { "sh" };
-        let found = which(known.into()).expect("expected to find the shell on PATH");
+        let found = which("sh".into()).expect("expected to find the shell on PATH");
         assert!(Path::new(&found).is_absolute());
         assert!(is_executable(Path::new(&found)));
     }
 
     #[test]
     fn which_returns_a_single_path() {
-        // `where` on Windows prints one line per match; the result must never be
-        // a multi-line blob.
-        let known = if cfg!(windows) { "cmd" } else { "sh" };
-        let found = which(known.into()).unwrap();
+        let found = which("sh".into()).unwrap();
         assert!(!found.contains('\n'));
     }
 

@@ -1,7 +1,7 @@
 {
   "name": "@codekalakaars/vajra-core",
   "version": "0.0.1",
-  "description": "Cross-platform native operations for Vajra",
+  "description": "Linux native operations for Vajra",
   "main": "index.js",
   "types": "index.d.ts",
   "license": "Apache-2.0",
@@ -15,13 +15,12 @@
   "napi": {
     "name": "vajra-core",
     "triples": {
-      "defaults": true,
+      "defaults": false,
       "additional": [
-        "aarch64-apple-darwin",
         "aarch64-unknown-linux-gnu",
-        "x86_64-unknown-linux-musl",
         "aarch64-unknown-linux-musl",
-        "x86_64-pc-windows-msvc"
+        "x86_64-unknown-linux-gnu",
+        "x86_64-unknown-linux-musl"
       ]
     }
   },
@@ -49,6 +48,9 @@
     "turbo": "^2.10.12"
   },
   "packageManager": "pnpm@11.9.0",
+  "os": [
+    "linux"
+  ],
   "engines": {
     "node": ">= 18"
   }

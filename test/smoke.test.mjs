@@ -15,25 +15,13 @@ import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
 const native = require('../index.js')
 
-const isWindows = process.platform === 'win32'
-
-// The shell and a sleep differ per platform; the behaviour under test does not.
-const SHELL = isWindows ? 'cmd' : 'sh'
-const sleepCmd = (seconds) =>
-  isWindows ? `powershell -Command "Start-Sleep -Milliseconds ${seconds * 1000}"` : `sleep ${seconds}`
+// The shell differs between the two supported platforms; the behaviour under
+// test does not.
+const SHELL = 'sh'
+const sleepCmd = (seconds) => `sleep ${seconds}`
 
 function scratch() {
   return mkdtempSync(join(tmpdir(), 'vajra-smoke-'))
-}
-
-/** Creating a symlink on Windows needs privileges CI may not have. */
-function trySymlink(target, linkPath) {
-  try {
-    symlinkSync(target, linkPath, 'dir')
-    return true
-  } catch {
-    return false
-  }
 }
 
 test('addon loads and reports its version', () => {
@@ -166,17 +154,12 @@ test('listFiles returns plain objects, not class instances', () => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-test('listFiles does not follow symlink cycles', (t) => {
+test('listFiles does not follow symlink cycles', () => {
   const dir = scratch()
   const sub = join(dir, 'sub')
   mkdirSync(sub)
   writeFileSync(join(sub, 'f.txt'), 'x')
-
-  if (!trySymlink(dir, join(sub, 'loop'))) {
-    rmSync(dir, { recursive: true, force: true })
-    t.skip('symlink creation not permitted on this host')
-    return
-  }
+  symlinkSync(dir, join(sub, 'loop'), 'dir')
 
   // The previous implementation recursed through this link until it overflowed.
   const entries = native.listFiles(dir, true)
@@ -198,10 +181,7 @@ test('path helpers normalize without touching the filesystem', () => {
 })
 
 test('process helpers run commands and locate executables', () => {
-  // `echo` is a cmd builtin on Windows, not a program, so go through the shell.
-  const result = isWindows
-    ? native.runCommand('cmd', ['/C', 'echo hi'])
-    : native.runCommand('echo', ['hi'])
+  const result = native.runCommand('echo', ['hi'])
 
   assert.equal(Object.getPrototypeOf(result), Object.prototype)
   assert.equal(result.code, 0)
@@ -211,7 +191,7 @@ test('process helpers run commands and locate executables', () => {
 
   const shell = native.which(SHELL)
   assert.ok(native.isAbsolute(shell))
-  // `where` on Windows prints one line per match; the result must be one path.
+  // `which` prints one line per match; the result must be one path.
   assert.ok(!shell.includes('\n'))
   assert.equal(native.which('vajra-no-such-program'), null)
 })
@@ -271,9 +251,7 @@ test('runCommandAsyncTimeout kills a command at the deadline', async () => {
 })
 
 test('runCommandAsync reports failures as rejections', async () => {
-  const ok = isWindows
-    ? await native.runCommandAsync('cmd', ['/C', 'echo hi'])
-    : await native.runCommandAsync('echo', ['hi'])
+  const ok = await native.runCommandAsync('echo', ['hi'])
 
   assert.match(ok.stdout, /hi/)
   await assert.rejects(() => native.runCommandAsync('vajra-no-such-program'))

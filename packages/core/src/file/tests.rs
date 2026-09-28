@@ -198,17 +198,11 @@ fn list_files_does_not_follow_symlink_cycles() {
     let sub = dir.join("sub");
     fs::create_dir_all(&sub).unwrap();
     fs::write(sub.join("f.txt"), "x").unwrap();
-    #[cfg(unix)]
     std::os::unix::fs::symlink(&dir, sub.join("loop")).unwrap();
-    #[cfg(windows)]
-    let _ = std::os::windows::fs::symlink_dir(&dir, sub.join("loop"));
     let entries = list_files(dir.to_string_lossy().to_string(), Some(true)).unwrap();
     assert!(entries.iter().any(|e| e.name == "f.txt"));
-    #[cfg(unix)]
-    {
-        let link = entries.iter().find(|e| e.name == "loop").unwrap();
-        assert!(link.is_symlink);
-    }
+    let link = entries.iter().find(|e| e.name == "loop").unwrap();
+    assert!(link.is_symlink);
 }
 
 #[test]

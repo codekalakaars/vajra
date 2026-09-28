@@ -23,11 +23,10 @@ const CHILD = join(here, 'fixtures', 'sandbox-child.mjs')
 
 /// Fixtures go under $HOME, not the system temp dir.
 ///
-/// On macOS os.tmpdir() is TMPDIR, which sits inside the per-user container the
-/// policy has to grant for the OS to work — so a fixture placed there is inside
-/// an allowed subpath and every "must be denied" assertion passes vacuously.
-/// That is exactly how the profile shipped reporting "enforced" while enforcing
-/// nothing. $HOME is granted by neither backend, so it tests the real thing.
+/// The policy grants the project directory plus an explicit read/execute set —
+/// $HOME is in neither, so a fixture placed there is genuinely outside the
+/// sandbox and every "must be denied" assertion tests the real thing. That is
+/// exactly how the profile shipped reporting "enforced" while enforcing nothing.
 function outsideAnyGrant(tag) {
   return mkdtempSync(join(homedir(), `.vajra-test-${tag}-`))
 }
@@ -55,15 +54,12 @@ test('capabilities report is internally consistent', () => {
     assert.notEqual(caps.mechanism, 'none')
   }
 
-  if (process.platform === 'linux') assert.equal(caps.platform, 'linux')
-  if (process.platform === 'darwin') assert.equal(caps.mechanism, 'seatbelt')
-  if (process.platform === 'win32') {
-    assert.equal(caps.filesystem, 'unsupported')
-    // Loose compare on purpose: napi maps Option::None to `undefined` in an
-    // object field but to `null` as a return value, so a strict compare against
-    // either one is wrong half the time. Do not "fix" this to assert.equal.
-    assert.ok(caps.abi == null)
-  }
+  // Linux is the only supported platform, so an unsupported report here means
+  // "supported platform, no mechanism available" — a kernel too old for
+  // Landlock. The unsupported-*platform* case never reaches JS: the entry
+  // points refuse.
+  assert.equal(process.platform, 'linux')
+  assert.equal(caps.platform, 'linux')
 })
 
 test('an unenforceable platform refuses rather than pretending', (t) => {
@@ -168,11 +164,11 @@ test('a per-file rule can deny reads even when the project default allows them',
     t.skip(`no enforcement on ${caps.platform}`)
     return
   }
+  // Landlock's rules are additive within one ruleset — a directory-level grant
+  // recursively covers everything beneath it, and no narrower rule on a
+  // descendant can revoke it. This regression is specific to that model and is
+  // the reason the test only runs on Linux.
   if (caps.platform !== 'linux') {
-    // Landlock's rules are additive within one ruleset — a directory-level
-    // grant recursively covers everything beneath it, and no narrower rule
-    // on a descendant can revoke it. This regression is specific to that
-    // model; macOS's SBPL backend is last-match-wins and never had it.
     t.skip('regression coverage for the Landlock-specific additive-rule bug')
     return
   }
