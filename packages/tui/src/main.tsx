@@ -133,6 +133,19 @@ const MIN_TRANSCRIPT_ROWS = 6
  */
 const PICKER_HINT_ROWS = 1
 
+/**
+ * The pick value that means "I want to type one", and the row that says so.
+ *
+ * NUL-prefixed for the same reason the host's "use the default" row is: the
+ * picker filters on the value, and anything that looks like ordinary text would
+ * be narrowed away by the first letter or matched by accident.
+ */
+const TYPE_A_PATH = '\u0000path'
+const TYPE_A_PATH_LABEL = '✎ type a path'
+
+/** What the draft line shows when there is nothing typed yet. */
+const PATH_PLACEHOLDER = '~/path/to/a/project'
+
 /** The air on each side of the left column, so nothing touches the edge. */
 const COLUMN_MARGIN = 1
 
@@ -282,7 +295,19 @@ function App(props: { renderer: CliRenderer }) {
     title: string
     options: { value: string; label: string }[]
     deletable: boolean
+    /** The list takes a typed value, not only a chosen one. */
+    editable: boolean
   } | null>(null)
+  /**
+   * A path being typed into an editable picker, or null when the list is showing.
+   *
+   * A second signal rather than a field on the picker because it is a mode, not
+   * a value: while it is set, the keys belong to the draft and the filter stops
+   * being what the input line means. Draft text is deliberately *not* on the
+   * input line — that line is the filter, and a filter that is also the value
+   * being chosen is two things in one keystroke.
+   */
+  const [pickerDraft, setPickerDraft] = createSignal<string | null>(null)
   /**
    * The picker's filter, which is the text on the input line.
    *
@@ -396,6 +421,17 @@ function App(props: { renderer: CliRenderer }) {
    * the same footer — and the footer grows a chord only when the list in front
    * of you can actually be deleted from.
    */
+  /**
+   * An empty draft is a placeholder in the muted grey, not a path in the accent:
+   * a placeholder painted like a real value is a real value as far as a user is
+   * concerned — they read it, and then wonder why the directory is a path to
+   * nowhere. Once there is something typed it is cyan, the colour this screen
+   * uses for the things that are chosen rather than reported.
+   */
+  const pickerDraftFg = createMemo(() =>
+    (pickerDraft() || '') === '' ? theme.textMuted : theme.listSelected,
+  )
+
   const pickerHint = createMemo(() => {
     // Enter is not named: it is the key every list in every program answers to,
     // and the row that fits on the line is the one naming the destructive chord.
@@ -408,7 +444,10 @@ function App(props: { renderer: CliRenderer }) {
   const pickerTitle = createMemo(() => {
     const open = picker()
     if (!open) return ''
-    const total = open.options.length
+    // The rows on screen, not the rows the host sent: the client adds its own
+    // type-a-path row, and a title reading "4 of 3" because two components
+    // counted differently is worse than no count.
+    const total = pickerOptions().length
     const shown = pickerMatches().length
     const count = shown === total ? `(${total})` : `(${shown} of ${total})`
     const typed = pickerQuery().trim()
@@ -424,11 +463,23 @@ function App(props: { renderer: CliRenderer }) {
    * something, and a query that matches nothing is an empty list rather than
    * seventy-five rows with the answer buried somewhere in them.
    */
+  /**
+   * The rows of an open picker, including the client's own type-a-path row.
+   *
+   * Prepended here rather than sent by the host: it is a keyboard mode, not a
+   * place, and a host that had to invent a placeholder path for it would be
+   * inventing a directory that might exist.
+   */
+  const pickerOptions = createMemo(() => {
+    const open = picker()
+    if (!open) return []
+    return open.editable ? [{ value: TYPE_A_PATH, label: TYPE_A_PATH_LABEL }, ...open.options] : open.options
+  })
+
   const pickerMatches = createMemo(() => {
-  const open = picker()
-  if (!open) return []
-  const query = pickerQuery().trim()
-    return query === '' ? open.options : fuzzyFilter(query, open.options, filterText)
+    const options = pickerOptions()
+    const query = pickerQuery().trim()
+    return query === '' ? options : fuzzyFilter(query, options, filterText)
   })
 
   /**
@@ -500,7 +551,11 @@ function App(props: { renderer: CliRenderer }) {
           title: message.title,
           options: message.options,
           deletable: message.deletable === true,
+          editable: message.editable === true,
         })
+        // A picker opening is not a draft: the mode is entered from a row, so a
+        // list that is re-sent after a rejected path starts as a list again.
+        setPickerDraft(null)
         // The host may say where the cursor belongs; a list sorted by price and
         // name is not somewhere a user expects to land on row 0.
         setPickerIdx(Math.min(Math.max(0, message.initial ?? 0), Math.max(0, message.options.length - 1)))
@@ -579,6 +634,55 @@ function App(props: { renderer: CliRenderer }) {
     // "kimi-k3" could not be typed into the list that offered it.
     const open = picker()
     if (open) {
+      // Drafting a value: every key belongs to the draft, because the list is
+      // not what is being answered right now. Esc puts the list back rather
+      // than closing the picker, because a mistyped path is worth correcting
+      // without losing the recommendations.
+      const draft = pickerDraft()
+      if (draft !== null) {
+        if (key.name === 'escape') {
+          key.preventDefault()
+          setPickerDraft(null)
+          return
+        }
+        if (key.name === 'return') {
+          key.preventDefault()
+          if (draft.trim() === '') return
+          setPicker(null)
+          setPickerDraft(null)
+          setPickerQuery('')
+          clearField()
+          send({ t: 'pick', value: draft.trim() })
+          return
+        }
+        if (key.name === 'backspace') {
+          key.preventDefault()
+          setPickerDraft(d => (d ?? '').slice(0, -1))
+          return
+        }
+        if (key.name === 'c' && key.ctrl) {
+          key.preventDefault()
+          setPicker(null)
+          setPickerDraft(null)
+          setPickerQuery('')
+          clearField()
+          send({ t: 'pick', value: null })
+          return
+        }
+        // The character is `key.sequence`, not the component's `input` — that
+        // name is the textarea renderable in this file, and concatenating it
+        // types "[object Object]" into the path.
+        // preventDefault, or the character also lands in the input line and
+        // becomes a filter: the draft fills in *and* the list narrows, which is
+        // two answers to one keystroke. In draft mode the input is not the
+        // query, so it gets nothing.
+        const typed = key.sequence ?? ''
+        if (!key.ctrl && !key.meta && [...typed].length === 1 && typed >= ' ') {
+          key.preventDefault()
+          setPickerDraft(d => (d ?? '') + typed)
+        }
+        return
+      }
       if (key.name === 'escape') {
         key.preventDefault()
         setPicker(null)
@@ -617,6 +721,12 @@ function App(props: { renderer: CliRenderer }) {
         // input, and a user who typed a name with one letter wrong wants to
         // fix the letter, not to start over from the whole list.
         if (!chosen) return
+        // The type-a-path row is a keyboard mode, not a value, so it does not
+        // answer the host — it turns the keys into a draft and stays open.
+        if (chosen.value === TYPE_A_PATH) {
+          setPickerDraft('')
+          return
+        }
         setPicker(null)
         setPickerQuery('')
         clearField()
@@ -893,6 +1003,29 @@ function App(props: { renderer: CliRenderer }) {
                       that follows the cursor is the only arrangement that works for
                       both a three-option directory picker and a seventy-five-model
                       catalog. */}
+                  {/*
+                    The draft, while a value is being typed.
+
+                    It is a row of its own rather than a field in the panel: the
+                    prompt is the only place this program takes typing, and a
+                    second input inside a panel means typing in one place to
+                    answer something in another. So the draft sits where the
+                    input line would be, in the same accent, and the keys go to
+                    it instead of the filter.
+                  */}
+                  {/* One text element, not a row of three: a <Show> whose child
+                      is a multi-child <box> hands the transform's children array
+                      to the renderer, and the row comes out as `[object
+                      Object]`. The colour carries the state instead — muted while
+                      there is nothing typed, cyan once there is, the same accent
+                      as the role and the dial above. */}
+                  <Show when={pickerDraft() !== null}>
+                    <text
+                      content={`✎ ${ellipsis(pickerDraft() || PATH_PLACEHOLDER, panelCells() - 6)}█`}
+                      fg={pickerDraftFg()}
+                      style={{ flexShrink: 0, width: '100%' }}
+                    />
+                  </Show>
                   <Show
                     when={pickerMatches().length > 0}
                     fallback={
@@ -909,7 +1042,7 @@ function App(props: { renderer: CliRenderer }) {
                     <PickerList
                       options={pickerMatches()}
                       selected={pickerIdx()}
-                      height={pickerRows() - PICKER_CHROME_ROWS - PICKER_HINT_ROWS}
+                      height={pickerRows() - PICKER_CHROME_ROWS - PICKER_HINT_ROWS - (pickerDraft() === null ? 0 : 1)}
                       cells={panelCells()}
                     />
                   </Show>

@@ -298,6 +298,7 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     options: { value: string; label: string }[],
     initial?: number,
     deletable?: boolean,
+    editable?: boolean,
   ): Promise<PickAnswer> =>
     new Promise(resolve => {
       pendingPick = { resolve }
@@ -307,6 +308,7 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
         options,
         ...(initial !== undefined ? { initial } : {}),
         ...(deletable === true ? { deletable: true } : {}),
+        ...(editable === true ? { editable: true } : {}),
       })
     })
 
@@ -579,18 +581,37 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     applyRoleModels()
   }
 
-  /** The directory, from real places rather than a path you have to remember. */
-  const pickDirectory = async (state: ConfigState): Promise<void> => {
+  /**
+   * The directory, from places worth being in — and typeable.
+   *
+   * Recommendations and a text field, because they fail in opposite
+   * directions: the recommendations are the paths a user cannot remember, and
+   * the field is the path they already know and cannot find in a list of five.
+   * A list that cannot be typed into can only offer what it already knew.
+   *
+   * A path that is not a directory re-asks with the reason in the title rather
+   * than saying so in the transcript. The user is standing in a list of
+   * directories with something typed; closing it to read a line in the
+   * scrollback and come back is the wrong shape for "that one is a file".
+   */
+  const pickDirectory = async (state: ConfigState, problem?: string): Promise<void> => {
     const answer = await ask(
-      'Which directory?',
+      problem ? `Which directory? — ${problem}` : 'Which directory?',
       directoryOptions(state.projectDir, process.cwd(), recentDirs(), isWorkingDirectory),
+      0,
+      false,
+      true,
     )
     if (answer.action !== 'pick' || answer.value === null) return
     if (answer.value === projectDir) return
+    if (!isWorkingDirectory(answer.value)) {
+      await pickDirectory(state, `not a directory: ${answer.value}`)
+      return
+    }
     projectDir = answer.value
     store.setSettings({ projectDir })
     // A directory change ends the conversation: the tree the plan was made
-    // against is not the tree the next run is in. Same reason /dir does it.
+    // against is not the tree the next run is in. Same reason /dir did it.
     nextRun = 'ask'
     endRunForNext()
     writeConfig({ projectDir })

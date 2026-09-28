@@ -124,7 +124,9 @@ function rows() {
   const out_ = []
   for (const line of frame()) {
     const text = leftOf(line)
-    if (/^(❯ )?(zen\/|go\/)/.test(text)) out_.push(text)
+    // A path row too: the directory list is this same component, and a helper
+    // that only knows models makes every assertion about it vacuously true.
+    if (/^(❯ )?(zen\/|go\/|\/|✎)/.test(text) && !/^\s*\S*█\s*$/.test(text)) out_.push(text)
   }
   return out_
 }
@@ -179,6 +181,25 @@ const openDeletable = (initial = 1) => {
   })
   return wait(800)
 }
+
+/** The directory list: recommendations, and a path you can type. */
+const openEditable = (initial = 0) => {
+  say({
+    t: 'pick',
+    title: 'Which directory?',
+    editable: true,
+    options: [
+      { value: '/home/me/vajra', label: '/home/me/vajra  (current)' },
+      { value: '/home/me/vajra/examples', label: '/home/me/vajra/examples  (recent)' },
+      { value: '/home/me', label: '/home/me  (home)' },
+    ],
+    initial,
+  })
+  return wait(800)
+}
+
+/** The draft line, while a path is being typed. */
+const draft = () => frame().find(l => l.includes('█')) ?? ''
 
 await wait(2000)
 say(snapshot())
@@ -358,6 +379,60 @@ await openDeletable(1)
   check('and the list narrowed to the one that matches', /\(1 of 3\)/.test(title()), title())
   check('and the row on screen is that one', sessionRows().some(r => r.includes('def67890')), JSON.stringify(sessionRows()))
 }
+// ── a list that takes a typed value, not only a chosen one ───────────────
+await openEditable(0)
+{
+  check('the list offers a row for typing one', rows().some(r => r.includes('type a path')), JSON.stringify(rows()))
+  check('and the recommendations are still there', rows().length === 4, `${rows().length} rows`)
+  // Taking that row must not answer the host: it is a keyboard mode, and a host
+  // told to use a path of "\u0000path" would fail on a path that cannot exist.
+  const before = said.filter(m => m.t === 'pick').length
+  child.stdin.write('\r')
+  await wait(700)
+  check(
+    'choosing it asks nothing yet',
+    said.filter(m => m.t === 'pick').length === before,
+    'a pick was sent for the type-a-path row',
+  )
+  check('and the draft is up', draft().includes('path/to/a/project'), draft())
+}
+{
+  child.stdin.write('/home/me/new')
+  await wait(800)
+  check('typing goes to the draft, not the filter', draft().includes('/home/me/new'), draft())
+  check('and the placeholder is gone', !draft().includes('path/to/a/project'), draft())
+  // The list behind it is untouched: this is a draft, not a query.
+  check('the recommendations are still listed', rows().length === 4, `${rows().length} rows`)
+  child.stdin.write('\x7f')
+  await wait(400)
+  check('backspace edits it', !draft().includes('/home/me/new') && draft().includes('/home/me/ne'), draft())
+}
+{
+  child.stdin.write('\x1b')
+  await wait(600)
+  check('esc puts the list back rather than closing', rows().length === 4 && draft() === '', `rows=${rows().length} draft=${JSON.stringify(draft())}`)
+  child.stdin.write('\r') // back into the draft
+  await wait(600)
+  child.stdin.write('/home/me/typed')
+  await wait(700)
+  child.stdin.write('\r')
+  await wait(800)
+  const picks = said.filter(m => m.t === 'pick')
+  check(
+    'enter sends the typed path as the answer',
+    picks.at(-1)?.value === '/home/me/typed' && picks.at(-1)?.action !== 'delete',
+    JSON.stringify(picks.at(-1)),
+  )
+  check('and the picker is closed', rows().length === 0, JSON.stringify(rows()))
+}
+await open(0)
+{
+  check('a list that is not editable has no such row', !rows().some(r => r.includes('type a path')), JSON.stringify(rows()))
+  child.stdin.write('gpt')
+  await wait(700)
+  check('and its keys are still the filter', /“gpt”/.test(title()), title())
+}
+
 type(ESC)
 await wait(500)
 

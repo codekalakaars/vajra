@@ -160,38 +160,43 @@ export function modelPickerOptions(
 }
 
 /**
- * The directories a sub-picker offers: where you are, where you launched from,
- * one level up, and the directories of recent sessions.
+ * The directories a sub-picker offers, and why each one is on the list.
  *
- * There is no way to type a path here — the input line is the filter, and
- * inventing a text prompt to work around that would be a second input model
- * for one setting. So the list offers real places instead: the recent-session
- * directories are usually the ones being asked for, and they are the paths a
- * user cannot remember.
+ * The ordering is by how likely the answer is, not by path length or the order
+ * the filesystem returns. Each row says what put it there, because a list of
+ * five bare absolute paths is a list with no way to choose between them: all of
+ * them look equally plausible and equally arbitrary.
+ *
+ * `~` is in the list because "where do I keep my projects" is the first
+ * question anyone asks and the one path nobody can find by typing a prefix of
+ * it. The parent is last: it is the move you make after the project turns out
+ * to be a subdirectory, never the first answer.
  */
 export function directoryOptions(
   current: string,
   launchDir: string,
   recent: string[],
   exists: (dir: string) => boolean,
+  home: string = process.env.HOME ?? process.env.USERPROFILE ?? '',
 ): ConfigOption[] {
   const seen = new Set<string>()
   const out: ConfigOption[] = []
-  for (const dir of [current, launchDir, ...recent]) {
+  const add = (dir: string, why: string): void => {
     const resolved = dir.trim()
-    if (!resolved || seen.has(resolved) || !exists(resolved)) continue
+    if (!resolved || seen.has(resolved) || !exists(resolved)) return
     seen.add(resolved)
-    out.push({
-      value: resolved,
-      label: resolved === current ? `${resolved}  (current)` : resolved,
-    })
+    out.push({ value: resolved, label: `${resolved}  (${why})` })
   }
-  // The parent of the current directory, offered last: it is the move people
-  // want when the project turned out to be a subdirectory, and it is never the
-  // first answer anyone would give.
+  // Priority order, and the dedupe falls out of it: the current directory is
+  // added first, so when it is also in the recent list the row keeps saying
+  // "current", which is the truer of the two things about it.
+  add(current, 'current')
+  // Recent sessions first: where the work has actually been is a better guess
+  // than anywhere else on this list.
+  for (const dir of recent) add(dir, 'recent')
+  add(launchDir, 'launched here')
+  if (home) add(home, 'home')
   const parent = dirname(current)
-  if (parent && parent !== current && !seen.has(parent) && exists(parent)) {
-    out.push({ value: parent, label: `${parent}  (parent)` })
-  }
+  if (parent) add(parent, 'parent')
   return out
 }

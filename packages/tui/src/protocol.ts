@@ -130,6 +130,15 @@ export type ServerMessage =
       options: { value: string; label: string }[]
       initial?: number
       deletable?: boolean
+      /**
+       * The list takes a value the user types rather than one they choose.
+       *
+       * The client owns the affordance — a row of its own above the
+       * recommendations, and a draft line once that row is taken — so the host
+       * sends the flag and validates whatever comes back. A list of paths that
+       * can only be chosen from is a list that can only be chosen from.
+       */
+      editable?: boolean
     }
   | { t: 'clear' }
   | { t: 'exit'; code: number }

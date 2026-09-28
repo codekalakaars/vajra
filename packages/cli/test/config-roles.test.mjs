@@ -194,32 +194,58 @@ test('a model row marks the model in play, and the default is its own choice', (
   assert.notEqual(INHERIT_DEFAULT, '')
 })
 
-test('the directory list offers real places, without repeating itself', () => {
+test('the directory list recommends places, and says which is which', () => {
   const root = mkdtempSync(join(tmpdir(), 'vajra-dirs-'))
   try {
     const here = join(root, 'here')
     const other = join(root, 'other')
+    const lately = join(root, 'lately')
     mkdirSync(here)
     mkdirSync(other)
+    mkdirSync(lately)
     writeFileSync(join(root, 'a-file'), 'not a directory')
+    // `here` is both current and recent, `root` is both home and the parent,
+    // and `other` is only the launch directory — so each row's reason is
+    // decided by priority rather than by which fixture put it there.
     const options = directoryOptions(
       here,
       other,
-      [here, other, join(root, 'a-file'), join(root, 'gone')],
+      [here, lately, join(root, 'a-file'), join(root, 'gone')],
       isWorkingDirectory,
+      root,
     )
     const values = options.map(o => o.value)
-    // The launch dir, the current dir and the recent ones, once each, and the
-    // two that are not directories left out — offering a file as a working
-    // directory fails on the first tool call, in the user's project.
-    assert.deepEqual(values.slice(0, 2).sort(), [here, other].sort())
-    assert.equal(new Set(values).size, values.length)
+    // A list of five bare absolute paths is a list with no way to choose: each
+    // row says what put it there, or there is nothing to choose between.
+    assert.match(options[0].label, /\(current\)$/)
+    assert.match(options.find(o => o.value === lately).label, /\(recent\)$/)
+    assert.match(options.find(o => o.value === other).label, /\(launched here\)$/)
+    assert.match(options.find(o => o.value === root).label, /\(home\)$/)
+    assert.equal(new Set(values).size, values.length, 'nothing twice')
+    // Offering a file as a working directory fails on the first tool call, in
+    // the user's project, so it is filtered with everything else.
     assert.equal(values.includes(join(root, 'a-file')), false)
     assert.equal(values.includes(join(root, 'gone')), false)
-    // The parent is last: it is the move you make after the project turns out
-    // to be a subdirectory, never the first answer.
-    assert.equal(values.at(-1), root)
-    assert.match(options.find(o => o.value === here).label, /\(current\)/)
+    // Current, then where the work has been, then the paths that are always
+    // true — the parent and the home are last because they are a move made
+    // after the fact, not a guess about where the work is.
+    assert.deepEqual(values, [here, lately, other, root])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the current directory is listed once even though it is also recent', () => {
+  const root = mkdtempSync(join(tmpdir(), 'vajra-dirs-once-'))
+  try {
+    const here = join(root, 'here')
+    mkdirSync(here)
+    const options = directoryOptions(here, root, [here, root], isWorkingDirectory, here)
+    const values = options.map(o => o.value)
+    assert.deepEqual(values, [here, root])
+    // The row keeps saying "current" rather than being downgraded to "recent",
+    // because that is the truer of the two things about it.
+    assert.match(options[0].label, /\(current\)/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
