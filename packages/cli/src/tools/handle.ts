@@ -542,7 +542,17 @@ export function createToolHandle(
           // different file never does.
           const path = a.path as string
           const abs = resolveInsideProject(projectDir, path)
-          if (!options.stubs?.has(abs)) {
+          // A missing registry is a wiring fault, not a verdict on the file. It
+          // used to be read as "this file was never created", which is how a
+          // Developer that had just written four files was told it had written
+          // none, and left them in the user's tree.
+          if (!options.stubs) {
+            throw new Error(
+              `Cannot delete '${path}': this handle has no stub registry, so nothing can ` +
+                'be proven to be scaffolding. Only a handle built with { stubs } can retract.',
+            )
+          }
+          if (!options.stubs.has(abs)) {
             throw new Error(
               `Refusing to delete '${path}': it was not created by write_stub in this ` +
                 'session. Only scaffolding you created may be removed while planning.',
@@ -550,7 +560,7 @@ export function createToolHandle(
           }
           gate(path, 'delete')
           deleteFile(abs)
-          options.stubs?.delete(abs)
+          options.stubs.delete(abs)
           invalidateRead(abs)
           options.onMutate?.()
           return `Deleted ${path}.`

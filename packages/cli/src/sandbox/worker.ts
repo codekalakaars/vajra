@@ -111,7 +111,15 @@ function main(job: LaunchJob): void {
 
   // In-process handle provides B-group behaviour (redaction, tokenizer, C1).
   // App-level task permissions are enforced by the parent before forwarding.
-  const handle = createToolHandle(job.projectDir)
+  //
+  // The `stubs` registry is not optional here. Without it, `write_stub` writes
+  // the file and records nothing (the `?.` on an absent registry is a silent
+  // no-op), so the `delete_stub` that follows it in the same turn finds nothing
+  // to match and refuses — Phase One scaffolding the Developer cannot retract,
+  // leaving the project's test suite broken with no way out but the human. The
+  // parent keeps its own set for the unsandboxed handle; the registry that
+  // governs the write is the one in the process that performs it.
+  const handle = createToolHandle(job.projectDir, { stubs: new Set<string>() })
   const allowedTools = job.allowedTools ?? null
 
   process.on('message', (message: { type?: string; callId?: string; tool?: string; args?: unknown }) => {

@@ -286,12 +286,32 @@ test('delete_stub removes only what write_stub created', async () => {
   }
 })
 
-test('delete_stub can delete nothing when the handle was given no registry', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'handle-stub-'))
+test('a registry-less handle says it cannot prove a file is scaffolding', async () => {
+  // This test used to assert the opposite, and the bug it pinned was real: the
+  // sandbox worker's handle was built without a `stubs` set, so `write_stub`
+  // wrote the file and recorded nothing while `delete_stub` reported it was
+  // "not created by write_stub in this session". Read out of a real session:
+  // four Phase One files written, the project's test suite broken by them, four
+  // deletion attempts refused, and the Developer had to ask the human to clean
+  // up after itself. A missing registry is a wiring fault and now says so —
+  // the old message was a false statement about the file.
+  const dir = mkdtempSync(join(tmpdir(), 'handle-stub-noreg-'))
   try {
     const handle = createToolHandle(dir)
+    const written = await handle.callTool('write_stub', { path: 'src/scaffold.ts', content: 'export {}\n' })
+    assert.match(written, /Created src\/scaffold\.ts/)
     await assert.rejects(
-      () => handle.callTool('delete_stub', { path: 'anything.ts' }),
+      () => handle.callTool('delete_stub', { path: 'src/scaffold.ts' }),
+      /no stub registry/,
+      'the refusal must name the wiring fault, not claim the file was never created',
+    )
+    assert.equal(readFileSync(join(dir, 'src', 'scaffold.ts'), 'utf-8'), 'export {}\n', 'and change nothing')
+    // A handle that does have a registry still refuses a foreign file on its
+    // merits — the wiring message replaced one lie with the truth, it did not
+    // replace a check.
+    const withRegistry = createToolHandle(dir, { stubs: new Set() })
+    await assert.rejects(
+      () => withRegistry.callTool('delete_stub', { path: 'anything.ts' }),
       /not created by write_stub/,
     )
   } finally {
