@@ -49,10 +49,6 @@ export function httpTarget(ref: string): TestTarget {
   return { kind: 'http', ref }
 }
 
-export function contractTarget(ref: string): TestTarget {
-  return { kind: 'contract', ref }
-}
-
 export function cliTarget(ref: string): TestTarget {
   return { kind: 'cli', ref }
 }

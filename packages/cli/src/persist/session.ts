@@ -27,7 +27,6 @@ import {
 /** P4: sessions persist in ~/.vajra/vajra.db (see persist/db.ts). */
 export const SESSION_SCHEMA_VERSION = 2
 /** v1 records are still loadable and are migrated forward on read. */
-export const LEGACY_SESSION_SCHEMA_VERSION = 1
 /** Skipped while fingerprinting a repo — also a legacy (pre-db) location. */
 export const VAJRA_DIR = '.vajra'
 export const MISSING_FILE_HASH = '__missing__'

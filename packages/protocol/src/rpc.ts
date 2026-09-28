@@ -74,6 +74,3 @@ export interface RpcMethods {
   'projects.setModel': { params: { projectId: string; model: string }; result: { ok: true } }
 }
 
-export type RpcMethodName = keyof RpcMethods
-export type RpcMethodParams<M extends RpcMethodName> = RpcMethods[M]['params']
-export type RpcMethodResult<M extends RpcMethodName> = RpcMethods[M]['result']

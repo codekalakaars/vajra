@@ -90,14 +90,6 @@ export function captureVariables(
   }
 }
 
-export interface OrderedProbe {
-  probe: ApiProbe
-  /** Probes that must have produced their captures first. */
-  requires: string[]
-  /** Probes whose captures this one needs. */
-  provides: string[]
-}
-
 export function orderProbes(probes: readonly ApiProbe[]): {
   ordered: ApiProbe[]
   problems: string[]

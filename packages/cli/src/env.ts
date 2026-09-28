@@ -3,19 +3,6 @@ import { listModels, loadModelCatalog, modelHint, refreshModelStatus } from './m
 
 export const DEFAULT_MODEL = 'zen/space-bunny-free'
 
-/**
- * Load the model catalog and the gateway's live listing, in the background.
- *
- * Called once at shell start: a picker opened a second later finds the facts
- * already there, and one opened before the fetch lands falls back rather than
- * failing. Resolves when both are done so a caller that wants the facts now
- * (`/models`) can await it.
- */
-export async function primeModelCatalog(apiKey?: string): Promise<void> {
-  await loadModelCatalog()
-  await refreshModelStatus(apiKey)
-}
-
 export interface ModelPreset {
   id: string
   hint: string

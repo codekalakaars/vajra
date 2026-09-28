@@ -82,21 +82,6 @@ export interface DeveloperPlan {
   estimatedWorkers: number
 }
 
-export interface AgentStatePayload {
-  id: string
-  role: AgentRole
-  status: AgentStatus
-  taskSummary: string | null
-}
-
-export interface TaskStatePayload {
-  id: string
-  title: string
-  status: TaskStatus
-  assignedAgentId: string | null
-  validationPassed: boolean | null
-}
-
 export interface ConflictPayload {
   agentId?: string
   taskId?: string
@@ -104,22 +89,6 @@ export interface ConflictPayload {
   task2: string
   files: string[]
 }
-
-export interface ProjectLoadPermissionsParams {
-  projectDir: string
-}
-export type ProjectLoadPermissionsResult = PermissionsConfig
-
-export interface ProjectSavePermissionsParams {
-  projectDir: string
-  config: PermissionsConfig
-}
-export type ProjectSavePermissionsResult = { ok: true }
-
-export interface ProjectScanParams {
-  projectDir: string
-}
-export type ProjectScanResult = ProjectFileEntry[]
 
 export interface SessionCreateParams {
   projectDir: string

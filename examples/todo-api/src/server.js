@@ -1,6 +1,7 @@
 import { createServer } from 'http';
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
+import { pathToFileURL } from 'url';
 
 const PORT = 3000;
 const DATA_FILE = join(process.cwd(), 'data.json');
@@ -29,7 +30,7 @@ async function parseBody(req) {
   });
 }
 
-const server = createServer(async (req, res) => {
+export async function handleRequest(options, req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   
   // CORS headers
@@ -117,8 +118,21 @@ const server = createServer(async (req, res) => {
     res.writeHead(500);
     res.end(JSON.stringify({ error: 'Internal server error' }));
   }
-});
+}
 
-server.listen(PORT, () => {
-  console.log(`Todo API running on http://localhost:${PORT}`);
-});
+export function createApp(options = {}) {
+  return handleRequest.bind(null, options);
+}
+
+export function startServer(port = PORT) {
+  return createServer(createApp()).listen(port, () => {
+    console.log('Todo API running on http://localhost:' + port);
+  });
+}
+
+// Only listen when run directly (node src/server.js), never when imported.
+const isEntryModule = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isEntryModule) {
+  startServer(PORT);
+}

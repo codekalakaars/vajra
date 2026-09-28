@@ -38,15 +38,6 @@ export interface ApiTargetDeps extends ExecDeps {
   createHarness?: (config: ApiTargetConfig, build: boolean) => ApiHarness
 }
 
-export interface ApiTargetSelectors {
-  /**
-   * Source files that define each probe's route. Without this a task that
-   * changes a route handler selects no probes, because a route file is not
-   * imported by anything — it defines the thing being tested.
-   */
-  routes?: RouteIndex
-}
-
 export function createApiTarget(
   config: ApiTargetConfig,
   options: ApiTargetOptions = {},

@@ -315,21 +315,11 @@ let current: Catalog = { fetchedAt: 0, models: {} }
 let availability: Map<string, ModelStatus> = new Map()
 let inFlight: Promise<Catalog> | null = null
 
-/** The catalog as last loaded. Empty before the first load resolves. */
-export function loadedCatalog(): Catalog {
-  return current
-}
-
 /** Forget everything — used by tests, and by `/models refresh`. */
 export function resetCatalog(): void {
   current = { fetchedAt: 0, models: {} }
   availability = new Map()
   inFlight = null
-}
-
-/** Record availability for tests and for the listing refresh. */
-export function setAvailability(map: Map<string, ModelStatus>): void {
-  availability = new Map(map)
 }
 
 /**

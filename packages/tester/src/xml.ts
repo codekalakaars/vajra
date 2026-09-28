@@ -172,10 +172,6 @@ export function childrenNamed(node: XmlNode, name: string): XmlNode[] {
   return node.children.filter((c) => c.name === name || c.name.endsWith(`:${name}`))
 }
 
-export function firstNamed(node: XmlNode, name: string): XmlNode | undefined {
-  return childrenNamed(node, name)[0]
-}
-
 /** Depth-first collection of every descendant with the given name. */
 export function findAll(node: XmlNode, name: string): XmlNode[] {
   const found: XmlNode[] = []

@@ -21,7 +21,6 @@ export {
   countExports,
   getPreview,
   shouldSkipFile,
-  formatSummaryIndex,
   formatSummaryIndexHierarchical,
   searchSummary,
 } from './summary.js'
@@ -33,11 +32,6 @@ export {
   type AgentRole,
   type AgentStatus,
   type AgentState,
-  detectAndRemoveCircularDeps,
-  addFileLevelDependencies,
-  computeWaves,
-  optimizeTaskOrder,
-  computeReadyTasks,
 } from './plan.js'
 
 export {

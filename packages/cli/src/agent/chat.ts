@@ -377,47 +377,6 @@ function watchRound(request: ChatCompletionRequest): (usage?: TokenUsage) => voi
   }
 }
 
-export async function chatCompletion(
-  request: ChatCompletionRequest,
-): Promise<ChatCompletionResult> {
-  const baseURL = resolveBaseURL(request.model)
-  const resolvedModel = stripProviderPrefix(request.model)
-  const client = createClient(request.apiKey, baseURL)
-  const params = {
-    model: resolvedModel,
-    messages: toSdkMessages(request.messages),
-    ...reasoningParamsFor(request.model, request.reasoningEffort, request.reasoningToggle),
-    ...(request.tools ? { tools: toSdkTools(request.tools) } : {}),
-    ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
-    timeout: REQUEST_TIMEOUT_MS,
-    ...(request.signal ? { signal: request.signal } : {}),
-  }
-
-  const endRound = watchRound(request)
-  let roundUsage: TokenUsage | undefined
-  try {
-    for (let attempt = 0; ; attempt++) {
-      throwIfAborted(request.signal)
-      try {
-        const completion = await client.chat.completions.create(params)
-        const result = toResult(completion)
-        roundUsage = result.usage
-        return result
-      } catch (err) {
-        if (isAbortError(err)) throw err
-        if (isRetryable(err) && attempt < MAX_RETRIES) {
-          const delay = computeRetryDelayMs(err, attempt)
-          await sleep(delay, request.signal)
-          continue
-        }
-        throw new Error(extractErrorMessage(err))
-      }
-    }
-  } finally {
-    endRound(roundUsage)
-  }
-}
-
 export async function streamChatCompletion(
   request: ChatCompletionRequest,
   onTextDelta: (text: string) => void,

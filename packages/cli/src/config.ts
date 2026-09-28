@@ -125,13 +125,6 @@ export function resolveRoleModel(role: RoleName, env: NodeJS.ProcessEnv = proces
   return readConfig(env)[roleModelKey(role)] ?? resolveDefaultModel(env)
 }
 
-/** Every role's model, resolved, for a screen that shows all of them at once. */
-export function resolveRoleModels(env: NodeJS.ProcessEnv = process.env): Record<RoleName, string> {
-  const out = {} as Record<RoleName, string>
-  for (const role of ROLE_NAMES) out[role] = resolveRoleModel(role, env)
-  return out
-}
-
 /** Default project dir: env.VAJRA_PROJECT_DIR > config.json > cwd. */
 export function resolveDefaultDir(env: NodeJS.ProcessEnv = process.env): string {
   const fromEnv = env[DEFAULT_DIR_KEY]

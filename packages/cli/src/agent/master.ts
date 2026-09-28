@@ -337,10 +337,7 @@ export async function masterLoop(deps: MasterLoopDeps<TaskState>): Promise<Maste
 
 // --- the LLM-driven loop (opt-in) ----------------------------------------
 
-export const MAX_MASTER_LLM_TURNS = 10
-
 const MASTER_TOOL_NAMES = ['get_task_status', 'retry_task', 'amend_task', 'abort_plan'] as const
-export type MasterToolName = (typeof MASTER_TOOL_NAMES)[number]
 
 /** Tool specs for the opt-in LLM decision loop. */
 export const MASTER_DECIDE_TOOL_SPECS = [
