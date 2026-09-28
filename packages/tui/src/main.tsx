@@ -1468,11 +1468,67 @@ function Sidebar(props: { state: UiState; width: number; height: number }) {
         } as any}
       >
         <box style={{ flexShrink: 0, gap: 1, paddingRight: 1 }}>
-          {/* No model-and-status header. The Model section two blocks down says
+          {/* No model-and-status header. The Model section further down says
               what the model is, the status row under the prompt says whether
               anything is running, and a third copy of the model id at the top of
               a 42-cell column is the line the eye lands on first and reads
               last. */}
+
+          {/*
+            Tasks first.
+
+            They were last, after Context and Model, and that is the order that
+            hid them: the sidebar is a scrollbox with no scrollbar, so whatever
+            does not fit is cut with no indication, and the block that was cut
+            was the only live thing in the column. A plan of four tasks in a
+            30-row terminal showed one row and no sign there were three more —
+            which reads as "the tasks were never created" rather than as "the
+            column ran out".
+
+            Context and Model are static for the length of a session. Tasks
+            change while you watch them. Order the column by what moves.
+          */}
+          <Show when={state().tasks.length > 0}>
+            <box>
+              <box style={{ flexDirection: 'row', gap: 1 }}>
+                <Show when={state().tasks.length > 2}>
+                  <text content={todoOpen() ? '▼' : '▶'} fg={theme.text} />
+                </Show>
+                <text fg={theme.text}>
+                  <b>Tasks</b>
+                </text>
+                {/* The count, because a list that is still cut has to say how
+                    many it did not show. */}
+                <text content={`${state().tasks.length}`} fg={theme.textMuted} />
+              </box>
+              <Show when={state().tasks.length <= 2 || todoOpen()}>
+                <For each={state().tasks}>
+                  {task => (
+                    <box style={{ flexDirection: 'row', gap: 0 }}>
+                      <text
+                        content={`[${task.status === 'done' ? '✓' : task.status === 'running' ? '•' : ' '}] `}
+                        fg={task.status === 'running' ? theme.warning : theme.textMuted}
+                        style={{ flexShrink: 0 }}
+                      />
+                      {/* Ellipsised, not sliced. A 42-cell column cannot hold a
+                          task title, and a hard cut is a lie: "Replace the TODO
+                          placeholder with" is not a task, it is the first 33
+                          characters of one, and a user reading the sidebar has
+                          no way to tell the difference. */}
+                      <text
+                        content={ellipsis(
+                          oneLine(`${task.title}${task.activity ? ` ${task.activity.tool} ${task.activity.summary}` : ''}`),
+                          inner(),
+                        )}
+                        fg={task.status === 'running' ? theme.warning : theme.textMuted}
+                        style={{ flexGrow: 1 }}
+                      />
+                    </box>
+                  )}
+                </For>
+              </Show>
+            </box>
+          </Show>
 
           {/* Their Context plugin: a bold header, then one muted line per fact.
               The denominator is the model's own window, so a 1M-context model
@@ -1494,39 +1550,6 @@ function Sidebar(props: { state: UiState; width: number; height: number }) {
               heard of shows one line saying so, not six blank ones. */}
           <Show when={state().modelInfo} fallback={<UnknownModel />}>
             {info => <ModelFacts info={info()} />}
-          </Show>
-
-          {/* Their Todo plugin: a collapsible header once the list is long, and
-              the bracket status rows from component/todo-item.tsx. */}
-          <Show when={state().tasks.length > 0}>
-            <box>
-              <box style={{ flexDirection: 'row', gap: 1 }}>
-                <Show when={state().tasks.length > 2}>
-                  <text content={todoOpen() ? '▼' : '▶'} fg={theme.text} />
-                </Show>
-                <text fg={theme.text}>
-                  <b>Tasks</b>
-                </text>
-              </box>
-              <Show when={state().tasks.length <= 2 || todoOpen()}>
-                <For each={state().tasks}>
-                  {task => (
-                    <box style={{ flexDirection: 'row', gap: 0 }}>
-                      <text
-                        content={`[${task.status === 'done' ? '✓' : task.status === 'running' ? '•' : ' '}] `}
-                        fg={task.status === 'running' ? theme.warning : theme.textMuted}
-                        style={{ flexShrink: 0 }}
-                      />
-                      <text
-                        content={oneLine(`${task.title}${task.activity ? ` ${task.activity.tool} ${task.activity.summary}` : ''}`).slice(0, inner())}
-                        fg={task.status === 'running' ? theme.warning : theme.textMuted}
-                        style={{ flexGrow: 1 }}
-                      />
-                    </box>
-                  )}
-                </For>
-              </Show>
-            </box>
           </Show>
         </box>
       </scrollbox>
