@@ -9,6 +9,7 @@ This is the first document a new contributor should read. It describes the core 
 - [Core Philosophy](#core-philosophy)
 - [Fundamental Principle](#fundamental-principle)
 - [Agent Hierarchy](#agent-hierarchy)
+- [Every Role Is an LLM Agent](#every-role-is-an-llm-agent)
 - [Execution Model](#execution-model)
 - [Separation of Responsibilities](#separation-of-responsibilities)
 - [The Task](#the-task)
@@ -54,6 +55,25 @@ Traffic flows strictly downward, with one exception: **problems flow upward** fr
 | Developer | **Yes** | No | No | Yes |
 | Manager | No | No | **Yes** | No |
 | Worker | No | **Yes** (one at a time) | No | No |
+
+## Every Role Is an LLM Agent
+
+The three roles below the Human — **Developer, Manager and Worker — are all agents**: each is an LLM-backed instance of its role, and **each is configured with its own model**. The Human holds a role but is not an agent and has no model.
+
+This is worth stating plainly because it settles three questions at once. What a Manager *is* — an agent like the others, not a special kind of rule engine. Whether all three roles cost the same to run — they do not, and a submission that runs one Developer is not comparable to a plan that runs four Workers. And whether one model for the whole system is acceptable — it is not, because the three roles want different things from a model:
+
+| Role | What it reasons about | What that demands |
+|------|----------------------|---------------------|
+| Developer | Requirement ambiguity, codebase shape, decomposition | Strong reasoning — it decides whether the work is specified correctly at all |
+| Manager | Whether output satisfies stated criteria | Sound judgement — it is the only independent check in the system |
+| Worker | One concrete edit inside a known scope | Capability and speed, multiplied by concurrency |
+
+One global model forces a single compromise across all three. Configuring each separately means the expensive reasoning happens once, in the Developer, instead of on every task in a parallel fan-out.
+
+Two boundaries hold regardless of configuration:
+
+- **A model grants no authority.** Choosing a different model changes how well a role does its job, never what it may do. Every restriction in the table above and every prohibition in [System Roles](../system-roles/README.md) is enforced by the harness, not by the model.
+- **The provider is not per role.** All three reach the one provider fixed by [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md); this is about which *model* each role uses. See [ADR-0010](../adr/0010-every-role-is-an-llm-agent.md) for the decision, its benefits, and the costs it accepts — chiefly that a run is no longer described by a single model id, and that configuring a weak Manager spends the independence [ADR-0004](../adr/0004-manager-inspects-never-repairs.md) depends on.
 
 ## Execution Model
 

@@ -10,6 +10,7 @@ This document defines the formal task schema and state machine. Field definition
 - [Submission Schema](#submission-schema)
 - [Phase Schema](#phase-schema)
 - [Success Criteria](#success-criteria)
+- [Criterion Tiers](#criterion-tiers)
 - [Task Permissions Reference](#task-permissions-reference)
 - [State Machine](#state-machine)
 - [Validation Rules](#validation-rules)
@@ -136,6 +137,58 @@ interface SuccessCriterion {
 
 At least one criterion is required. A `test` criterion requires a `command`; an `assertion` criterion requires an `assertion`; a `review` criterion requires only a `description`.
 
+## Criterion Tiers
+
+Criteria are not equally strong, and a plan that does not say which it is using cannot be judged honestly. Every criterion sits on one of three tiers. See [ADR-0011](../adr/0011-tiered-success-criteria.md).
+
+| Tier | Types | What it establishes | Judged by |
+|------|-------|---------------------|-----------|
+| **1 — Behavioural** | `test` | The behaviour is right, not merely present | A command that fails before the change and passes after |
+| **2 — Structural** | `test` | The change is real, wired in, and well-formed | A command that fails before and passes after, over a property weaker than behaviour |
+| **3 — Review** | `review` | A judgement no command can decide | The Manager reads the output |
+
+A `test` criterion carries its tier explicitly, because the same mechanism — a command that fails then passes — can establish either a behavioural or a structural fact, and the difference is entirely in what the command asserts:
+
+```typescript
+interface TestCriterion extends SuccessCriterion {
+  type: "test";
+  /** The command that must exit zero after the change. */
+  command: string;
+  /** Whether this proves behaviour or only structure. Default: "behavioural". */
+  tier?: 1 | 2;
+  /**
+   * For tier 2: what the command establishes. Stated so the weakness is
+   * visible in the plan rather than discovered at inspection.
+   */
+  establishes?: string;
+}
+```
+
+**The rule: every task carries at least one tier 1 or tier 2 criterion. A `review` criterion is additive and never sufficient on its own.**
+
+Tier 2 is the middle position that lets the harness take work with no test yet — a new endpoint, a new screen, a new module. It is a real before/after transition: the import does not resolve before, the route is not registered before, the module does not compile before. It simply does not claim more than it can, and it must say what it does claim.
+
+```typescript
+// Tier 1 — the behaviour is correct.
+{ id: "c1", type: "test", tier: 1,
+  description: "POST /login returns 200 with a token for valid credentials",
+  command: "npm test -- login" }
+
+// Tier 2 — the endpoint exists, is routed, and compiles.
+{ id: "c2", type: "test", tier: 2,
+  description: "src/api/login.ts compiles and the route is registered",
+  command: "tsc --noEmit",
+  establishes: "type-correctness and route registration, not behaviour" }
+
+// Tier 3 — a judgement no command can make.
+{ id: "c3", type: "review",
+  description: "the 401 response body matches the shape used elsewhere in the API" }
+```
+
+**A tier 2 pass is not a tier 1 pass.** The distinction is a reporting obligation rather than a validation one: the tier appears in the plan, in the verdict, and in the final report to the Human. Reporting both as "passed" would reintroduce the false pass that [ADR-0007](../adr/0007-test-verdict-contract.md) exists to prevent.
+
+**Assumption:** `establishes` is required on a tier 2 criterion. Without it the weaker proof is invisible in the plan, and a reader cannot tell what was actually established. The open question in [ADR-0011](../adr/0011-tiered-success-criteria.md) is where the floor sits for tier 2 — a `tsc` that passes on a file exporting nothing useful is a clean pass over an empty deliverable, so tier 2 needs a stated lower bound.
+
 ## Task Permissions Reference
 
 Permissions are derived from a task, never authored independently.
@@ -203,7 +256,8 @@ A task is valid when:
 
 1. `title` and `description` are non-empty.
 2. `targetFiles` contains at least one path, and all paths are absolute or repo-relative and normalized.
-3. `successCriteria` contains at least one entry, and each is well-formed per its type.
+3. `successCriteria` contains at least one entry, and each is well-formed per its type. **At least one entry is tier 1 or tier 2**: a task whose criteria are all `review` is invalid, because nothing about it can be established mechanically. See [Criterion Tiers](#criterion-tiers).
+3a. A `test` criterion declared `tier: 2` carries a non-empty `establishes` string. A structural proof that does not say what it structurally proves cannot be reviewed, and a plan that hides its own weakness is worse than one that admits it.
 4. `phase` and `group` are set, and both resolve within the submission.
 5. `dependsOn` contains no self-reference, and **every referenced task is in the same group**. A cross-group reference is invalid — use `groupOrder` or a later phase instead.
 6. `dependsOn` is acyclic within the group.

@@ -155,10 +155,10 @@ left over from an older build, nothing reads it.
 
 Stated as plainly as the inventory, because the absence is a decision:
 
-- **No OS keychain.** No macOS Keychain, no libsecret, no Windows Credential
-  Manager. `auth.json` at `0600` is the whole credential story.
+- **No OS keychain.** No libsecret. `auth.json` at `0600` is the whole
+  credential story.
 - **No XDG directories.** No `~/.config/vajra`, no `~/.cache/vajra`, no
-  `$XDG_*`, no `%APPDATA%`.
+  `$XDG_*`.
 - **No logs, no crash dumps, no telemetry.** There is no log directory and no
   log file; a worker that writes to stdout has its output put in the session
   transcript instead.
@@ -166,8 +166,8 @@ Stated as plainly as the inventory, because the absence is a decision:
   survives a crash — a restart is a clean slate.
 - **No OS temp writes.** Production code never writes to the temp directory.
   (Tests do; `pnpm test` drops `.vajra-test-*` directories in your home
-  directory by design, because on macOS the temp directory is inside a
-  per-user container that the sandbox cannot see.)
+  directory by design — the sandbox grants neither `$HOME` nor a temp path, so a
+  fixture there is genuinely outside the policy.)
 - **No automatic cleanup.** Nothing expires. Growth in `index/` and in the
   database is bounded only by what you delete yourself.
 

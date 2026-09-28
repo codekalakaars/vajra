@@ -37,6 +37,11 @@ The conceptual model is documented and internally consistent. Every role, the ta
 | Contract-driven test generation | OpenAPI derivation built; AsyncAPI, protobuf, GraphQL, JSON Schema not |
 | Permission model | Settled conceptually; enforcement mechanism open |
 | Message protocol | Types settled; transport and versioning open |
+| Agent identity & per-role models | Settled — see [ADR-0010](../adr/0010-every-role-is-an-llm-agent.md); **not implemented** — one `--model` per session, and the LLM Manager path is unreachable |
+| Criterion tiers | Settled — see [ADR-0011](../adr/0011-tiered-success-criteria.md); **not implemented** — the validator still requires a `proves-change` command on every task |
+| Parallelism ceiling | Fixed constant only. `adaptiveConcurrency`, `maxCpuUsage`, `maxMemoryUsage` and `minConcurrentWorkers` are declared in config and **read by nothing** |
+| Worker crash containment | Built — per-task Worker pool, locks released in `finally`; documented in [ADR-0011](../adr/0011-tiered-success-criteria.md) |
+| Manager inspection | **Not implemented** — the Manager receives a boolean from validation exit codes; no `rejected` state exists |
 | Runtime | Not started |
 | LLM provider (shipped CLI) | Settled — OpenCode Zen only, see [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md); a second provider is planned |
 | API key configuration (shipped CLI) | Implemented; **not tested end to end** — see [Before a Release](#before-a-release) |

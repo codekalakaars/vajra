@@ -12,12 +12,15 @@ This section is the conceptual documentation for the task model — what a task 
 - [Phase One](#phase-one)
 - [Task Groups](#task-groups)
 - [Parallel Order](#parallel-order)
+- [The limit is a ceiling, and the ceiling belongs to the host](#the-limit-is-a-ceiling-and-the-ceiling-belongs-to-the-host)
 - [Two Kinds of Ordering](#two-kinds-of-ordering)
 - [Task States](#task-states)
 - [Task Lifecycle](#task-lifecycle)
 - [Task Dependencies](#task-dependencies)
 - [Task Scheduling Rules](#task-scheduling-rules)
 - [Task Completion Rules](#task-completion-rules)
+- [A completed task is not automatically a verified one](#a-completed-task-is-not-automatically-a-verified-one)
+- [Failure Containment](#failure-containment)
 
 ## What a Task Is
 
@@ -157,6 +160,25 @@ The parallelism limit — how many groups may be in flight at once — is also p
 
 A task is eligible when its phase is active, its group is active, its in-group dependencies are `completed`, and no higher-priority task holds a file it needs.
 
+### The limit is a ceiling, and the ceiling belongs to the host
+
+Two different questions get confused here, and they are answered in different places:
+
+| Question | Answered by | Changing it |
+|----------|-------------|-------------|
+| How much of this work is independent? | The Developer, at submission | Re-planning the submission |
+| How many Workers can this machine carry? | The host, at runtime | Machine load, or an explicit override |
+
+The Developer declares **how much parallelism the work admits** — the shape of the plan. The harness enforces **how much the host can carry** — the ceiling. The Manager is not involved in either: assignment, locking and admission are deterministic code, because a model in that loop would make the same plan schedule differently and would put liveness beyond reasoning. See [ADR-0005](../adr/0005-predefined-parallel-order.md) and [ADR-0011](../adr/0011-tiered-success-criteria.md).
+
+The ceiling is **derived from the machine, not fixed at a constant**, and it moves with load:
+
+- It rises when the host is idle and falls when the host is busy, bounded below by one Worker so a run always makes progress.
+- It is overridable, because the harness cannot know what else the machine is doing.
+- **Degrading under load is always available to the harness; crashing the host is not.** When the two conflict, the host wins.
+
+**Assumption:** the ceiling is reported alongside the results rather than applied silently. A run that took 40 seconds because the machine was busy is not comparable to one that took 40 seconds on an idle host, and a report that does not say which it was cannot support a regression claim against the harness itself.
+
 ```
 Submission
   Phase One
@@ -273,6 +295,30 @@ A task is `completed` only when all of the following hold:
 5. The Manager's inspection agrees.
 
 If inspection disagrees, the task becomes `rejected` regardless of the Worker's report. The Worker reporting success is a claim, not a verdict — the Manager holds the verdict.
+
+### A completed task is not automatically a verified one
+
+Completion and verification are different states, and a task earns them separately.
+
+A task whose criteria are all **tier 2** is verified **structurally**: the change exists, is wired in, and is well-formed, and nothing more. A task with at least one **tier 1** criterion is verified **behaviourally**: the behaviour it claims to produce was shown to fail before and pass after.
+
+Every task clears the mechanical floor — that is guaranteed by [validation rule 3](../specifications/task-spec.md#validation-rules), and a task whose criteria are all `review` is rejected outright. But the floor is a floor, not a ceiling, and it is met at different heights. The distinction is a **reporting** obligation, and it is not optional: a submission that reports a tier 2 pass and a tier 1 pass both as "passed" has reintroduced exactly the false pass that [ADR-0007](../adr/0007-test-verdict-contract.md) exists to prevent.
+
+So the final report to the Human distinguishes them — a task verified structurally says so, and names what it established. A whole submission built on tier 2 is a real, useful result and is not a fully tested one. See [Criterion Tiers](../specifications/task-spec.md#criterion-tiers) and [ADR-0011](../adr/0011-tiered-success-criteria.md).
+
+## Failure Containment
+
+**A task's failure is contained to that task and to whatever depends on it.**
+
+A Worker that crashes, hangs, is killed, or exhausts memory fails **its** task. The failure is attributed, escalated through the Manager, and the submission continues. Three things must not happen, because each of them would let one bad task destroy work that already succeeded:
+
+| Must not | Why |
+|----------|-----|
+| Abort the submission | A runaway loop or an OOM in one Worker would be able to discard the whole run |
+| Fail unrelated tasks | Blast radius stops at the task, exactly as it does for a file |
+| Cancel siblings | A failure is evidence about one task, not about the plan |
+
+Independence is what makes this safe: a task depends only on what it declared, and an unrelated task has no reason to care. A Worker pool absorbs the loss by leasing a fresh Worker for the next task, so a crash costs latency rather than capacity.
 
 ## See Also
 

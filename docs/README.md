@@ -16,12 +16,14 @@ This directory contains the complete documentation for the Vajra AI Agent Harnes
 
 ## Architecture Roles
 
-| Role | Description |
-|------|-------------|
-| Human | The end user who interacts with the system. |
-| Developer | The only entity allowed to create tasks. |
-| Manager | Orchestrates and supervises workers. |
-| Worker | Executes one task at a time. |
+| Role | Description | Agent | Model |
+|------|-------------|:-----:|:-----:|
+| Human | The end user who interacts with the system. | No | — |
+| Developer | The only entity allowed to create tasks. | Yes | Independent |
+| Manager | Orchestrates and supervises workers. | Yes | Independent |
+| Worker | Executes one task at a time. | Yes | Independent |
+
+Developer, Manager and Worker are all **LLM-backed agents**, and each is configured with **its own model** — the three roles want different things from a model, and a run is not described by a single model id. The Human holds a role but is not an agent. A model grants no authority: it changes how well a role performs, never what it may do. See [Every Role Is an LLM Agent](specifications/agent-spec.md#every-role-is-an-llm-agent) and [ADR-0010](adr/0010-every-role-is-an-llm-agent.md).
 
 ## Documentation Map
 

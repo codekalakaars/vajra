@@ -96,7 +96,9 @@ Vajra reaches exactly one LLM provider, OpenCode Zen, over its OpenAI-compatible
 
 The decision, its costs, and the credential question it deliberately defers are in [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md). The surface as implemented — endpoints, model-id routing, credential resolution, the gate that holds the screen until a key exists, and the five places a second provider would have to be added — is in [llm-providers.md](llm-providers.md).
 
-**Assumption:** the harness does not need a provider abstraction of its own. The Developer, Manager and Workers all reach a model through the same client, so a provider decision is a single seam rather than per-role configuration. If a future role is allowed to use a different provider, this becomes an ADR rather than a config key.
+The provider is shared by all three agent roles, and each agent selects its own model within it — see [Every Role Is an LLM Agent](../specifications/agent-spec.md#every-role-is-an-llm-agent). What that means for this layer is narrow and specific: the provider is one seam reached by every agent, and the only thing that varies per agent is which model id goes over it. The client, the endpoint, the credential and the reachability gate are common to all three, because [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md) keeps the provider singular.
+
+A per-role *provider* remains undecided and would be a different decision: it would move the credential, the reachability check and the capability table per role, which is most of what ADR-0009 closed. If that is ever wanted, it becomes an ADR rather than a config key.
 
 TODO: The credential path is implemented and not tested end to end — see [Coverage Gaps](../testing/gaps.md).
 

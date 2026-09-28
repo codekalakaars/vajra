@@ -60,7 +60,7 @@ The `openai` SDK is used directly against the gateway's OpenAI-compatible endpoi
 ## Open Questions
 
 - **How are credentials stored once there are two providers?** `auth.json` is currently one provider-named string. With a second provider it needs either per-provider fields or a small record with a `provider` key. This is deliberately undecided: choosing now, for a provider that does not exist, would be guessing, and the choice is cheap to make later because only one file and one resolver are involved.
-- **Should the credential move to an OS keychain?** A `0600` file inside a `0700` directory is a defensible answer on every platform Vajra ships on. A keychain integration is a cross-platform dependency for one secret, and becomes more obviously worth it if the second provider lands first.
+- **Should the credential move to an OS keychain?** A `0600` file inside a `0700` directory is a defensible answer on every platform Vajra ships on — it is the only one. A keychain integration is a dependency for one secret, and becomes more obviously worth it if the second provider lands first.
 - **Is the `openai` SDK the right dependency, or should the wire types be ours?** Compatible-dialect portability is currently a side effect of someone else's client rather than a property we hold.
 
 ## See Also

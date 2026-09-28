@@ -7,6 +7,7 @@ This document gives formal definitions for each role — capabilities, restricti
 ## Table of Contents
 
 - [Common Interface](#common-interface)
+- [Every Role Is an LLM Agent](#every-role-is-an-llm-agent)
 - [Developer](#developer)
 - [Manager](#manager)
 - [Worker](#worker)
@@ -20,12 +21,34 @@ interface Agent {
   role: Role;
   /** The single task this agent is currently executing, if Worker. */
   currentTaskId?: string;
+  /** The model backing this agent. Configured independently per agent. */
+  model: string;
 }
 
 type Role = "human" | "developer" | "manager" | "worker";
 ```
 
 The interface is deliberately thin. A role's authority is defined by what it is permitted to send and to do — not by capability flags, which would let authority be granted at runtime. See [Permissions](../permissions/README.md).
+
+## Every Role Is an LLM Agent
+
+`developer`, `manager` and `worker` are the three agent roles. Each is an LLM-backed instance of one architectural role, and **each is configured with its own model**. The Human holds a role but is not an agent and has no model.
+
+| Role | Agent | Model | What the model is for |
+|------|:-----:|:-----:|------------------------|
+| Human | No | — | Decides. Infers nothing. |
+| Developer | Yes | Independent | Interpreting a requirement, reading the codebase, decomposing it into testable tasks |
+| Manager | Yes | Independent | Inspecting output against stated criteria and judging whether it is acceptable |
+| Worker | Yes | Independent | Deciding how to make a failing test pass within its task's scope |
+
+Two properties follow, and both are load-bearing:
+
+- **A model grants no authority.** Choosing a different model changes how well a role does its job, never what it is permitted to do. Every restriction below holds for every model, and a stronger model does not earn a Worker the right to write outside its task.
+- **A role is not defined by its implementation.** The Manager is an agent even where its reasoning is shallow. Treating it as a fixed traversal in one place and a model call in another is what made it hard to say what a Manager is.
+
+The three roles want different things from a model — strong reasoning for the Developer, sound judgement for the Manager, capability and speed for Workers, which run concurrently and multiply cost. Configuring one model for all three forces a single compromise; configuring each separately is the reason the model is a property of the agent rather than of the session.
+
+See [ADR-0010](../adr/0010-every-role-is-an-llm-agent.md) for the decision and its costs. **Scope:** this is model selection within the single provider fixed by [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md), not a per-role provider.
 
 ## Developer
 
@@ -171,6 +194,7 @@ These hold across all roles and are the properties the system is built to guaran
 5. **Scope is immutable during execution.** Only a new task can change what a Worker is permitted to do.
 6. **Every file has one writer at a time.** Enforced by file ownership, which is what makes parallel execution safe.
 7. **Parallel order is declared, not derived.** Grouping, dependencies, and priority all originate with the Developer. The Manager executes the plan and never revises it. See [ADR-0005](../adr/0005-predefined-parallel-order.md).
+8. **A model is configuration, not authority.** Each agent's model is chosen independently, and no choice changes what its role may do. See [Every Role Is an LLM Agent](#every-role-is-an-llm-agent).
 
 ## See Also
 

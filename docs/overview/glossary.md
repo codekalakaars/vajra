@@ -12,6 +12,7 @@ This document defines key terms used throughout the Vajra documentation. Terms a
 - [Developer](#developer)
 - [Manager](#manager)
 - [Worker](#worker)
+- [Model](#model)
 - [Task](#task)
 - [Phase](#phase)
 - [Phase One](#phase-one)
@@ -32,11 +33,11 @@ This document defines key terms used throughout the Vajra documentation. Terms a
 
 ## Agent
 
-An entity that assumes one of the architectural roles in order to participate in task creation, orchestration, or execution.
+An LLM-backed instance of one of the agent roles — Developer, Manager or Worker. Each agent is configured with its own model, and no model grants authority beyond what its role already permits. The Human is not an agent. See [Every Role Is an LLM Agent](../specifications/agent-spec.md#every-role-is-an-llm-agent).
 
 ## Role
 
-One of the four architectural positions in the system: Human, Developer, Manager, or Worker. A role carries a fixed set of responsibilities and prohibitions. See [System Roles](../system-roles/README.md).
+One of the four architectural positions in the system: Human, Developer, Manager, or Worker. A role carries a fixed set of responsibilities and prohibitions. Three of the four are held by agents; the Human is not one. See [System Roles](../system-roles/README.md).
 
 ## Human
 
@@ -53,6 +54,10 @@ The orchestrator. Receives tasks from the Developer, assigns them to Workers, su
 ## Worker
 
 The execution role. Receives exactly one task at a time from the Manager, completes it end to end within the permissions scoped to that task, and reports the outcome. Never creates tasks or self-schedules.
+
+## Model
+
+The LLM backing an agent. Each agent's model is configured independently, so a submission's cost and quality reflect three choices rather than one: a strong model on the Developer, a sound one on the Manager, and a capable fast one on Workers, whose cost is multiplied by concurrency. Selecting a model changes how well a role performs, never what it is permitted to do. The provider is not per role — see [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md) and [ADR-0010](../adr/0010-every-role-is-an-llm-agent.md).
 
 ## Task
 

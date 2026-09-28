@@ -15,6 +15,7 @@ This document is the plan for the testing system — the subsystem that lets Vaj
 - [Coverage Gaps](gaps.md)
 - [Requirements](#requirements)
 - [The Verdict Contract](#the-verdict-contract)
+- [Structural Proofs](#structural-proofs)
 - [Expectation Inversion](#expectation-inversion)
 - [Components](#components)
 - [Test Selection](#test-selection)
@@ -283,6 +284,38 @@ Two properties are deliberate:
 
 - **Flaky and timeout never satisfy a task**, even in Phase One. A Phase One test that is merely flaky has not demonstrated that the behaviour is missing.
 - **A `failed_environment` never satisfies anything.** It means the test is broken, not that the behaviour is absent.
+
+## Structural Proofs
+
+A verdict answers "did this command go green", not "was the command the right one". Those come apart, and the space between them is where a false pass lives.
+
+Success criteria therefore sit on **tiers**, and the tier is recorded rather than inferred. See [Criterion Tiers](../specifications/task-spec.md#criterion-tiers) and [ADR-0011](../adr/0011-tiered-success-criteria.md).
+
+| Tier | Establishes | Example | Verdict means |
+|------|-------------|---------|---------------|
+| 1 — Behavioural | The behaviour is right | `npm test -- login` | The claimed behaviour was shown to fail before and pass after |
+| 2 — Structural | The change is real, wired in, well-formed | `tsc --noEmit` | The change compiles and is reachable — and nothing about behaviour |
+
+**The same verdict value carries a different claim at each tier.** A green `tsc --noEmit` is `passed` at tier 2 and says nothing at tier 1. This is why the tier travels with the criterion into the verdict and out into the report: a system that reports both as "passed" has thrown away the only information that distinguished them.
+
+### Why the structural tier exists
+
+Not every piece of work has a behavioural test available, and refusing the plan because of it produces a worse outcome than accepting a weaker proof. A new endpoint, a new screen, a new module: the honest first proof is that it compiles and is wired in. That is a genuine before/after transition — the import did not resolve before, the route was not registered before — it simply does not claim more than it can.
+
+The floor is unchanged: **every task carries at least one tier 1 or tier 2 criterion**, and a task whose criteria are all `review` is rejected at submission. Nothing became unverifiable. Only the height of the floor moved, and a task that clears neither is still refused.
+
+### What a structural pass does not prove
+
+Worth stating plainly, because the failure mode is quiet:
+
+- **It does not prove behaviour.** Code that compiles can be wrong in every way a user notices. This is the entire gap between the tiers and it does not narrow with effort.
+- **It is gameable in a way behavioural proofs are not.** A `tsc` that passes on a file exporting nothing useful is a clean pass over an empty deliverable. Tier 2 needs a stated lower bound on what it must assert — a declared export, a reachable route, a registered handler — and where that bound sits is an open question in [ADR-0011](../adr/0011-tiered-success-criteria.md).
+- **It is expensive.** The best structural evidence is a build or a type-check, which routinely costs more wall-clock than the edit being verified. On a large repository, verification can cost more than the work.
+- **It is not cacheable yet.** Compilation results are content-addressed and would pay off enormously on a wide refactor, but [Caching and Cost](#caching-and-cost) already flags a stale pass as the more dangerous direction, and that trade is unresolved.
+
+### What a structural pass is good for
+
+It is a real gate, and it catches the majority of what goes wrong in practice: a missing import, a route never registered, a signature that does not line up, a module that does not build. Those are not rare failures and they are not subtle. Tier 2 is a genuine improvement over no proof at all — it is only a weaker improvement than tier 1.
 
 ## Expectation Inversion
 
