@@ -4,16 +4,15 @@
  * Pure so the parsing contract is testable without a renderer. The palette and
  * `/help` are both generated from SLASH_COMMANDS, so a command cannot exist in
  * one and be missing from the other.
+ *
+ * There is one command for settings, not four. `/config` used to be joined by
+ * `/model`, `/dir` and `/defaults`, and the three answered three different
+ * halves of one question: `/dir` and `/config` both chose a directory, and
+ * `/defaults` and `/config` both persisted. Two ways to do the same thing is
+ * one too many; a user who found `/dir` never learned there was a screen with
+ * the other three settings on it.
  */
-export type SlashCommand =
-  | 'config'
-  | 'model'
-  | 'reasoning'
-  | 'dir'
-  | 'defaults'
-  | 'sessions'
-  | 'help'
-  | 'quit'
+export type SlashCommand = 'config' | 'model' | 'reasoning' | 'sessions' | 'help' | 'quit'
 
 export interface SlashCommandSpec {
   /** Canonical name, typed after the slash. */
@@ -40,15 +39,6 @@ export const SLASH_COMMANDS: readonly SlashCommandSpec[] = [
     name: 'reasoning',
     summary: 'Choose how hard the model thinks — the levels this model accepts',
     aliases: ['think', 'effort'],
-  },
-  {
-    name: 'dir',
-    summary: 'Change directory — ends this conversation, starts a new one there',
-    aliases: ['directory'],
-  },
-  {
-    name: 'defaults',
-    summary: 'Save model and directory as persistent defaults',
   },
   {
     name: 'sessions',

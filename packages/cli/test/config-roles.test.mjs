@@ -94,22 +94,58 @@ test('a model id that could never run is dropped, not carried', () => {
   assert.equal(resolveRoleModel('worker'), 'zen/gpt-5.4')
 })
 
-test('the one screen lists the four settings in the order work flows', () => {
+test('the one screen lists every setting, the default first', () => {
   const options = configOptions({
     defaultModel: 'zen/gpt-5.4',
     roleOverrides: {},
     projectDir: '/home/me/vajra',
   })
+  // The default is first because the other three are measured against it, and
+  // because the command it replaced (/defaults) made it persist — a setting that
+  // used to be saved and is now only shown looks like it works until a restart.
   assert.deepEqual(
     options.map(o => o.value),
-    ['developerModel', 'managerModel', 'workerModel', 'projectDir'],
+    ['model', 'developerModel', 'managerModel', 'workerModel', 'projectDir'],
   )
   assert.deepEqual([...CONFIG_ITEMS], options.map(o => o.value))
 })
 
+test('the default row says who follows it', () => {
+  const allInheriting = configOptions({
+    defaultModel: 'zen/gpt-5.4',
+    roleOverrides: {},
+    projectDir: '/tmp',
+  })[0]
+  assert.match(allInheriting.label, /zen\/gpt-5\.4/)
+  assert.match(allInheriting.label, /developer, manager, worker follow/)
+
+  // With every role on a model of its own, the default changes nothing today.
+  const noneInheriting = configOptions({
+    defaultModel: 'zen/gpt-5.4',
+    roleOverrides: { developer: 'zen/a', manager: 'zen/b', worker: 'zen/c' },
+    projectDir: '/tmp',
+  })[0]
+  assert.match(noneInheriting.label, /nothing follows it/)
+  // And with only one role pinned, that role is named and the others are not.
+  const oneInheriting = configOptions({
+    defaultModel: 'zen/gpt-5.4',
+    roleOverrides: { worker: 'zen/c' },
+    projectDir: '/tmp',
+  })[0]
+  assert.match(oneInheriting.label, /developer, manager follow/)
+  assert.doesNotMatch(oneInheriting.label, /worker follow/)
+})
+
+test('the default is not a role, and a directory is not a model', () => {
+  assert.equal(itemRole('model'), null)
+  assert.equal(itemRole('projectDir'), null)
+  assert.equal(itemRole('workerModel'), 'worker')
+})
+
 test('a role following the default says so, and shows the model it will run', () => {
   const state = { defaultModel: 'zen/gpt-5.4', roleOverrides: {}, projectDir: '/tmp' }
-  const [developer] = configOptions(state)
+  // Row one is the default now, so the developer is the second row.
+  const developer = configOptions(state)[1]
   // The value in play, not the absence of one: "nothing" reads as broken.
   assert.match(developer.label, /zen\/gpt-5\.4/)
   assert.match(developer.label, /default/)
@@ -131,11 +167,11 @@ test('a role with its own model stops claiming the default is in play', () => {
 })
 
 test('the directory row shows the directory', () => {
-  const [, , , dir] = configOptions({
+  const dir = configOptions({
     defaultModel: 'zen/x',
     roleOverrides: {},
     projectDir: '/home/me/project',
-  })
+  }).at(-1)
   assert.equal(dir.value, 'projectDir')
   assert.match(dir.label, /\/home\/me\/project$/)
   assert.equal(itemRole(dir.value), null)

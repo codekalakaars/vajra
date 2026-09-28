@@ -29,9 +29,6 @@ test('every menu option is reachable as a slash command', () => {
   assert.equal(known('/settings'), 'config')
   assert.equal(known('/setup'), 'config')
   assert.equal(known('/model'), 'model')
-  assert.equal(known('/dir'), 'dir')
-  assert.equal(known('/directory'), 'dir')
-  assert.equal(known('/defaults'), 'defaults')
   assert.equal(known('/sessions'), 'sessions')
   assert.equal(known('/help'), 'help')
   assert.equal(known('/quit'), 'quit')
@@ -43,6 +40,18 @@ test('commands are case-insensitive and tolerate surrounding space', () => {
   assert.equal(known('/Model'), 'model')
   assert.equal(known('/SESSIONS'), 'sessions')
   assert.equal(known('  /quit  '), 'quit')
+})
+
+test('the commands /config replaced are gone, aliases and all', () => {
+  // /dir and /defaults answered halves of the same question /config answers, and
+  // a user who found one of them never learned the other three settings were on
+  // a screen. They are unknown now, and said to be — quietly doing nothing would
+  // be worse than either version.
+  for (const gone of ['/dir', '/directory', '/defaults']) {
+    const parsed = parseSlashCommand(gone)
+    assert.ok(parsed, `${gone} should still parse as a command-shaped token`)
+    assert.equal(parsed.known, false, `${gone} must no longer be a command`)
+  }
 })
 
 test('only a lone command-shaped token is a command', () => {
@@ -63,7 +72,7 @@ test('an unknown command token is reported, not sent', () => {
 
 test('help lists every command plus the way to start', () => {
   const text = HELP_LINES.join('\n')
-  for (const cmd of ['/config', '/model', '/dir', '/defaults', '/sessions', '/help', '/quit']) {
+  for (const cmd of ['/config', '/model', '/reasoning', '/sessions', '/help', '/quit']) {
     assert.ok(text.includes(cmd), `help should mention ${cmd}`)
   }
   assert.ok(text.includes('Type a task'))
@@ -78,8 +87,11 @@ test('the palette offers every command for an empty query, in order', () => {
 
 test('the palette filters by prefix and by alias', () => {
   assert.deepEqual(matchSlashCommands('mod').map(c => c.name), ['model'])
-  assert.deepEqual(matchSlashCommands('dir').map(c => c.name), ['dir'])
+  assert.deepEqual(matchSlashCommands('conf').map(c => c.name), ['config'])
   assert.deepEqual(matchSlashCommands('ses').map(c => c.name), ['sessions'])
+  // Nothing is offered for the commands /config absorbed.
+  assert.deepEqual(matchSlashCommands('dir'), [])
+  assert.deepEqual(matchSlashCommands('def'), [])
   // An alias prefix finds the command it belongs to.
   assert.deepEqual(matchSlashCommands('session').map(c => c.name), ['sessions'])
   assert.deepEqual(matchSlashCommands('model').map(c => c.name), ['model'])
@@ -92,7 +104,8 @@ test('the palette filters by prefix and by alias', () => {
 test('aliases resolve to the canonical command', () => {
   assert.equal(findSlashCommand('exit')?.name, 'quit')
   assert.equal(findSlashCommand('q')?.name, 'quit')
-  assert.equal(findSlashCommand('directory')?.name, 'dir')
+  assert.equal(findSlashCommand('settings')?.name, 'config')
+  assert.equal(findSlashCommand('directory'), undefined)
   assert.equal(findSlashCommand('Model')?.name, 'model', 'lookup is case-insensitive')
   assert.equal(findSlashCommand('nope'), undefined)
 })

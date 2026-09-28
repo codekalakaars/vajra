@@ -21,6 +21,7 @@ import {
 } from '../../models/catalog.js'
 import {
   clearConfig,
+  ROLE_NAMES,
   ROLE_PURPOSE,
   readConfig,
   writeConfig,
@@ -478,9 +479,58 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
         continue
       }
       const role = itemRole(picked.value as ConfigItem)
+      if (picked.value === 'model') {
+        await pickDefaultModel(state)
+        continue
+      }
       if (role === null) continue
       await pickRoleModel(role, state)
     }
+  }
+
+  /**
+   * `/config` → the default model's row → the live catalog, and to disk.
+   *
+   * This row is what `/defaults` used to be for the model half, so choosing here
+   * is choosing *the persistent one*: it survives a restart. `/model` remains
+   * session-only, which is what it has always been, and the row says which is
+   * which rather than leaving it to be discovered.
+   */
+  const pickDefaultModel = async (state: ConfigState): Promise<void> => {
+    await primeModels()
+    const models = listModels()
+    if (models.length === 0) {
+      store.addEntry({
+        kind: 'warning',
+        text: `No model catalog available (${hasCatalog() ? 'empty' : 'not fetched'}); the default stays ${state.defaultModel}.`,
+      })
+      return
+    }
+    const answer = await ask(
+      'Default model — what every role runs on unless it has one of its own',
+      modelPickerOptions(
+        models.map(info => ({ id: info.id, label: describeModel(info) })),
+        state.defaultModel,
+      ),
+      Math.max(0, models.findIndex(info => info.id === state.defaultModel)),
+    )
+    if (answer.action !== 'pick' || answer.value === null) return
+    if (answer.value === state.defaultModel) {
+      store.addEntry({ kind: 'info', text: `The default model is already ${state.defaultModel}.` })
+      return
+    }
+    model = answer.value
+    apiKey = explicitKey ?? resolveApiKeyForModel(model)
+    writeConfig({ model })
+    applyRoleModels()
+    const inheriting = ROLE_NAMES.filter(name => !roleModels[name])
+    store.addEntry({
+      kind: 'success',
+      text:
+        inheriting.length === 0
+          ? `Default model saved as ${model}. Every role has one of its own, so nothing follows it yet.`
+          : `Default model saved as ${model}. ${inheriting.join(', ')} follow it.`,
+    })
   }
 
   /** The models a role has been given, without the ones it has inherited. */
@@ -675,19 +725,6 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
           kind: 'info',
           text: `Default model is now ${model}. The developer still runs ${roleModels.developer} — /config changes that.`,
         })
-      }
-      return
-    }
-    if (command === 'dir') {
-      const picked = await ask('Which directory?', [
-        { value: projectDir, label: `${projectDir}  (current)` },
-        { value: process.cwd(), label: process.cwd() },
-      ])
-      if (picked.action === 'pick' && picked.value !== null && picked.value !== projectDir) {
-        projectDir = picked.value
-        store.setSettings({ projectDir })
-        nextRun = 'ask'
-        endRunForNext()
       }
       return
     }

@@ -139,11 +139,6 @@ export function resolveDefaultDir(env: NodeJS.ProcessEnv = process.env): string 
   return readConfig(env).projectDir ?? process.cwd()
 }
 
-/** True when the value comes from config.json rather than a fallback. */
-export function isPersistedDefault(key: ConfigKey, env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(readConfig(env)[key])
-}
-
 /**
  * Persist defaults so they survive a restart (config.json) and return its
  * path, so the UI can show where they went.

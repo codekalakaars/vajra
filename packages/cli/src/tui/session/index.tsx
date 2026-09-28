@@ -67,8 +67,6 @@ const MAX_TASK_ROWS = 8
 interface ShellActions {
   /** Apply a new model — the running conversation picks it up next task. */
   setModel: (model: string) => void
-  /** Apply a new directory — the shell restarts the conversation there. */
-  setDir: (dir: string) => void
   /** Resume a persisted session — the shell restarts with resumeFrom. */
   resume: (choice: ResumeChoice) => void
   /** Leave the TUI, whatever state the session is in. */
@@ -204,18 +202,6 @@ function SessionApp({
     })
   }
 
-  const handleDirSaved = (dir: string) => {
-    actions.setDir(dir)
-    setPicker(null)
-    store.addEntry({
-      kind: 'success',
-      text: `Directory → ${dir} — ending this conversation, starting a new one there`,
-    })
-    // /dir changes what the *next* run sees; exit the current one so the
-    // shell can restart with the new directory.
-    store.submitPrompt('exit')
-  }
-
   const handleResumed = (choice: ResumeChoice) => {
     actions.resume(choice)
     setPicker(null)
@@ -264,7 +250,7 @@ function SessionApp({
       for (const option of options) store.addEntry({ kind: 'info', text: `  ${option.label}` })
       store.addEntry({
         kind: 'info',
-        text: 'Change them with `vajra config -s developerModel=zen/…`, or in the default TUI, which has the menu.',
+        text: 'Change them with `vajra config -s workerModel=zen/…` (or model, projectDir), or in the default TUI, which has the menu.',
       })
       return
     }
@@ -452,7 +438,16 @@ function SessionApp({
       }
       if (key.return || input === '\r' || input === '\n') {
         const chosen = paletteMatches[paletteIdx]
-        if (chosen) runSlash(chosen.name)
+        if (chosen) {
+          runSlash(chosen.name)
+          return
+        }
+        // Nothing matched, so the palette is covering a token that is not a
+        // command. Falling through to the editor lets `submit` say so —
+        // otherwise a retired command like /dir or a typo sits in the input
+        // line under an empty palette and Enter does nothing at all, which
+        // reads as a hung terminal rather than as a name that no longer exists.
+        if (paletteMatches.length === 0 && paletteQuery !== null) return submit()
         return
       }
       if (key.escape) {
@@ -539,7 +534,6 @@ function SessionApp({
         model={state.model}
         projectDir={state.projectDir}
         onModelSaved={handleModelSaved}
-        onDirSaved={handleDirSaved}
         onResumed={handleResumed}
         onClosed={closePicker}
       />
@@ -677,11 +671,6 @@ export async function startSession(options: TuiSessionOptions): Promise<number> 
       model = next
       apiKey = explicitKey ?? resolveApiKeyForModel(next)
       store.setSettings({ model: next })
-    },
-    setDir(next) {
-      projectDir = next
-      store.setSettings({ projectDir: next })
-      pendingRun = 'ask'
     },
     resume(choice) {
       pendingRun = {

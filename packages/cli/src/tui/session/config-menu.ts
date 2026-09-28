@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ROLE_PURPOSE, type RoleName } from '../../config.js'
+import { ROLE_NAMES, ROLE_PURPOSE, type RoleName } from '../../config.js'
 
 /**
  * The one screen `/config` is: every setting that decides how a session runs, in
@@ -13,24 +13,34 @@ import { ROLE_PURPOSE, type RoleName } from '../../config.js'
  */
 
 /** The rows of the screen. The value is the machine key a pick comes back as. */
-export type ConfigItem = 'developerModel' | 'managerModel' | 'workerModel' | 'projectDir'
+export type ConfigItem = 'model' | 'developerModel' | 'managerModel' | 'workerModel' | 'projectDir'
 
 /** Every item, in the order the screen shows them. */
 export const CONFIG_ITEMS: readonly ConfigItem[] = [
+  'model',
   'developerModel',
   'managerModel',
   'workerModel',
   'projectDir',
 ]
 
-/** True for the three keys that name a model, as opposed to a directory. */
+/**
+ * True for the four keys that name a model, as opposed to a directory.
+ *
+ * `model` is included deliberately: it is the default every role falls back to,
+ * and it is a model, so it opens a list of models like the other three do.
+ */
 export function isRoleItem(item: ConfigItem): item is ConfigItem & `${RoleName}Model` {
   return item !== 'projectDir'
 }
 
-/** The role whose model an item names, or null for the directory. */
+/**
+ * The role whose model an item names, or null for the directory and for the
+ * default — the default is not a role, it is what roles without one get.
+ */
 export function itemRole(item: ConfigItem): RoleName | null {
-  return isRoleItem(item) ? (item.replace(/Model$/, '') as RoleName) : null
+  if (item === 'model' || item === 'projectDir') return null
+  return item.replace(/Model$/, '') as RoleName
 }
 
 export interface ConfigState {
@@ -95,17 +105,30 @@ export function isWorkingDirectory(path: string): boolean {
 const LABEL_CELLS = 16
 
 /**
- * The four rows.
+ * The rows.
  *
  * A row states the value in play and, when a role is following the default,
  * says so — because "the manager is on gpt-5.4" and "the manager is on gpt-5.4
  * because I never touched it" are different facts, and only one of them
  * survives a restart.
+ *
+ * The default is the first row rather than a footnote because it is what the
+ * other three are measured against, and because the command it replaces
+ * (`/defaults`) made it persist. A setting that used to be saved and is now
+ * only shown is a setting that looks like it works until you restart.
  */
 export function configOptions(state: ConfigState): ConfigOption[] {
   return CONFIG_ITEMS.map(item => {
     if (item === 'projectDir') {
       return { value: item, label: `${'directory'.padEnd(LABEL_CELLS)}${state.projectDir}` }
+    }
+    if (item === 'model') {
+      const inheriting = ROLE_NAMES.filter(role => !hasOverride(state, role))
+      const note = inheriting.length === 0 ? 'nothing follows it' : `${inheriting.join(', ')} follow`
+      return {
+        value: item,
+        label: `${'default model'.padEnd(LABEL_CELLS)}${state.defaultModel}  · ${note}`,
+      }
     }
     const role = itemRole(item) as RoleName
     const name = `${role} model`

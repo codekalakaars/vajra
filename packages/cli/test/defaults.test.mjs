@@ -12,7 +12,6 @@ const repoRoot = join(import.meta.dirname, '..', '..', '..')
 const {
   DEFAULT_DIR_KEY,
   DEFAULT_MODEL_KEY,
-  isPersistedDefault,
   readConfig,
   resolveDefaultDir,
   resolveDefaultModel,
@@ -57,25 +56,6 @@ describe('TUI defaults', () => {
       saveDefaults({ model: 'zen/big-pickle' }, env)
       assert.throws(() => saveDefaults({ model: 'not a model' }, env), /Invalid model id/)
       assert.equal(resolveDefaultModel(env), 'zen/big-pickle')
-    })
-  })
-
-  test('isPersistedDefault distinguishes a saved value from the built-in fallback', () => {
-    inHome((_home, env) => {
-      // Config keys, not env var names. The function takes the key the value is
-      // stored under; the old spelling only worked because both happened to
-      // reach the same branch.
-      assert.equal(isPersistedDefault('model', env), false)
-      assert.equal(isPersistedDefault('workerModel', env), false)
-
-      saveDefaults({ model: 'zen/space-bunny-free' }, env)
-      assert.equal(isPersistedDefault('model', env), true)
-      assert.equal(isPersistedDefault('projectDir', env), false)
-
-      // A role's model is persisted like any other key.
-      saveDefaults({ workerModel: 'zen/gpt-5.4-mini' }, env)
-      assert.equal(isPersistedDefault('workerModel', env), true)
-      assert.equal(isPersistedDefault('model', env), true, 'a partial save leaves the rest alone')
     })
   })
 
