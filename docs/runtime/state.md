@@ -210,7 +210,6 @@ Every environment variable the CLI reads:
 | `VAJRA_WORKER_MODEL` | The model the Worker role runs on, below `config.json` |
 | `VAJRA_PROJECT_DIR` | Default project directory, below `config.json` |
 | `OPENCODE_API_KEY` | The API key. See [llm-providers.md](llm-providers.md). |
-| `VAJRA_TUI` | `ink` selects the fallback front-end over OpenTUI |
 | `VAJRA_TUI_ENTRY` | Path to the front-end entry point |
 | `VAJRA_BUN` | Path to the `bun` binary that runs the front-end |
 

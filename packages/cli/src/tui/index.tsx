@@ -1,5 +1,4 @@
 import { resolveDefaultDir, resolveDefaultModel } from '../config.js'
-import { startSession } from './session/index.js'
 import { startOpenTuiSession } from './opentui/host.js'
 
 export interface TuiOptions {
@@ -24,18 +23,19 @@ export interface TuiOptions {
  * Launch the full-screen TUI. There is no menu screen: the session is the
  * app, and its options are slash commands at the prompt. Settings seed from
  * the CLI flags, falling back to the saved defaults
- * (~/.vajra/config.json), then stay session-scoped until saved again with
- * /defaults.
+ * (~/.vajra/config.json), then stay session-scoped until /config saves them.
+ *
+ * There was a second front-end here — an Ink session, reached with
+ * VAJRA_TUI=ink, kept because it needed nothing but node. It is gone: one
+ * front-end means one thing to keep working, and the OpenTUI host is the only
+ * one that is started.
  */
 export async function startTUI(options: TuiOptions): Promise<number> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     console.log('Vajra CLI - Run with --help for usage')
     return 0
   }
-  // OpenTUI is the front-end; the Ink session is kept as a fallback because it
-  // needs nothing but node. VAJRA_TUI=ink is the escape hatch.
-  const driver = process.env.VAJRA_TUI === 'ink' ? startSession : startOpenTuiSession
-  return driver({
+  return startOpenTuiSession({
     version: options.version,
     model: options.model ?? resolveDefaultModel(),
     projectDir: options.projectDir ?? resolveDefaultDir(),

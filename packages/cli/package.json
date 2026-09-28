@@ -38,11 +38,9 @@
     "@codekalakaars/vajra-protocol": "workspace:*",
     "@codekalakaars/vajra-sandbox": "workspace:*",
     "commander": "^12.0.0",
-    "ink": "^7.1.1",
     "marked": "^18.0.11",
     "marked-terminal": "^7.3.0",
-    "openai": "^7.8.0",
-    "react": "^19.2.8"
+    "openai": "^7.8.0"
   },
   "devDependencies": {
     "@types/node": "^22.5.4",

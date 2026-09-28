@@ -44,9 +44,9 @@ import {
 import { runSession, type SessionResult } from '../../session/service.js'
 import { SessionStore } from '../session/store.js'
 import { askForTask } from '../session/idle-prompt.js'
-import { InkSessionUI } from '../session/ink-ui.js'
+import { SessionUIForStore } from '../session/session-ui.js'
 import { HELP_LINES, SLASH_COMMANDS, findSlashCommand, parseSlashCommand } from '../session/commands.js'
-import type { TuiSessionOptions } from '../session/index.js'
+import type { TuiSessionOptions } from '../session/options.js'
 import type { ClientMessage, ServerMessage, UiState } from './protocol.js'
 
 /**
@@ -204,7 +204,7 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
   const explicitKey = options.apiKey ?? null
   let apiKey = explicitKey ?? resolveApiKeyForModel(model)
   const store = new SessionStore({ model, projectDir })
-  const ui = new InkSessionUI(store, options.version)
+  const ui = new SessionUIForStore(store, options.version)
 
   // The model catalog, then the gateway's own listing. Both are best-effort and
   // neither is awaited before the first paint: a screen that waits on a network

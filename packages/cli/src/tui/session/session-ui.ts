@@ -3,11 +3,14 @@ import type { AgentEvent, SessionUI, TaskEvent } from '../../session/ui.js'
 import { SessionStore, type PromptKind } from './store.js'
 
 /**
- * SessionUI backed by the Ink session store. Prompt methods park a resolver
- * in the store until ChatInput submits; output methods append transcript
- * entries. No direct stdin/stdout access.
+ * The `SessionUI` the OpenTUI host drives.
+ *
+ * Named for what it is rather than for the front-end it used to also serve:
+ * prompt methods park a resolver in the store until the screen submits a line,
+ * output methods append transcript entries, and it never touches
+ * stdin/stdout itself. The host renders whatever comes out of here.
  */
-export class InkSessionUI implements SessionUI {
+export class SessionUIForStore implements SessionUI {
   constructor(
     private readonly store: SessionStore,
     private readonly version: string,
