@@ -16,6 +16,7 @@ export type { SummaryEntry }
 export {
   shouldSkipFile,
   formatSummaryIndexHierarchical,
+  renderSummaryIndex,
   searchSummary,
   SKIP_DIRS,
   SKIP_EXTENSIONS,

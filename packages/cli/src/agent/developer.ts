@@ -21,7 +21,7 @@ import { getDeveloperToolSpecs, parseToolCall } from './tools.js'
 import { tokenizeCommand } from '../tools/handle.js'
 import { scanProject } from '../native.js'
 import { buildNestedTree } from './tree.js'
-import { buildSummaryIndex, formatSummaryIndexHierarchical, searchSummary, type SummaryEntry } from './summary.js'
+import { buildSummaryIndex, formatSummaryIndexHierarchical, renderSummaryIndex, searchSummary, type SummaryEntry } from './summary.js'
 import {
   startHeartbeat,
   summarizePlanTaskCount,
@@ -715,6 +715,16 @@ export interface InitialPromptContext {
   tree: string
   summaryText: string
   summaryBudget: number
+  /**
+   * How much of the staged index actually reached the prompt.
+   *
+   * `summaryIndex` can be larger than the budget can render — a repository that
+   * outgrows the cap is trimmed silently, and the Developer then reasons about a
+   * project it cannot see. These make that condition observable instead.
+   */
+  summaryShown: number
+  summaryTotal: number
+  summaryTruncated: boolean
 }
 
 /**
@@ -746,7 +756,8 @@ export function buildInitialPromptContext(
     }
   }
 
-  const summaryText = formatSummaryIndexHierarchical(summaryIndex, summaryBudget)
+  const render = renderSummaryIndex(summaryIndex, summaryBudget)
+  const summaryText = render.text
 
   // Names-only context must never cost more than the indexed symbols,
   // exports and previews it accompanies.
@@ -760,7 +771,14 @@ export function buildInitialPromptContext(
     tree = buildNestedTree(entries, depth)
   }
 
-  return { tree, summaryText, summaryBudget }
+  return {
+    tree,
+    summaryText,
+    summaryBudget,
+    summaryShown: render.shown,
+    summaryTotal: render.total,
+    summaryTruncated: render.truncated,
+  }
 }
 
 /**

@@ -123,11 +123,39 @@ export function deriveIndexBudget(contextWindowTokens: number): number {
  * `budgetChars` is a character budget, not a token count — callers should
  * pass `deriveIndexBudget(getModelLimit(model))`.
  */
-export function formatSummaryIndexHierarchical(
+/**
+ * What the index renderer actually managed to show.
+ *
+ * The formatter used to return a bare string, which meant a caller could not
+ * tell a complete index from one the budget had quietly trimmed — and on a
+ * repository large enough to hit the budget, the Developer's system prompt was
+ * silently missing files with nothing anywhere saying so. Growth in the tree
+ * was indistinguishable from loss.
+ */
+export interface SummaryIndexRender {
+  /** The rendered index, as it goes into the prompt. */
+  text: string
+  /** Entries the caller supplied. */
+  total: number
+  /** Entries that reached `text`. */
+  shown: number
+  /** True when the budget dropped at least one entry. */
+  truncated: boolean
+}
+
+/**
+ * Format the summary index and report what it cost.
+ *
+ * This is the real implementation; {@link formatSummaryIndexHierarchical} is the
+ * string-only wrapper kept for the callers that only want the text.
+ */
+export function renderSummaryIndex(
   summary: SummaryEntry[],
   budgetChars: number = DEFAULT_INDEX_BUDGET_CHARS,
-): string {
-  if (summary.length === 0) return '(no files indexed)'
+): SummaryIndexRender {
+  if (summary.length === 0) {
+    return { text: '(no files indexed)', total: 0, shown: 0, truncated: false }
+  }
 
   const maxChars = Number.isFinite(budgetChars) && budgetChars > 0
     ? Math.floor(budgetChars)
@@ -144,6 +172,7 @@ export function formatSummaryIndexHierarchical(
 
   const result: string[] = []
   let currentSize = 0
+  let shown = 0
 
   const sortedDirs = [...dirMap.entries()].sort((a, b) => b[1].length - a[1].length)
 
@@ -152,7 +181,10 @@ export function formatSummaryIndexHierarchical(
 
     const dirHeader = `\n${dir}/ (${entries.length} files)`
     result.push(dirHeader)
-    currentSize += dirHeader.length
+    // Every element but the first is preceded by the newline that join() adds,
+    // and the line below pushed after it. Charging both keeps the rendered
+    // index inside the budget instead of past it.
+    currentSize += dirHeader.length + 1
 
     const sortedEntries = entries.sort((a, b) => {
       if (a.exportCount !== b.exportCount) return b.exportCount - a.exportCount
@@ -161,8 +193,6 @@ export function formatSummaryIndexHierarchical(
     })
 
     for (const entry of sortedEntries) {
-      if (currentSize >= maxChars) break
-
       const fileName = entry.path.split('/').pop() || entry.path
       const symbols = entry.symbols.length > 0 ? entry.symbols.slice(0, 5).join(', ') : ''
 
@@ -175,12 +205,40 @@ export function formatSummaryIndexHierarchical(
         line = `  ${fileName} (${entry.lineCount}L)`
       }
 
+      // Stop before the line that would cross the budget, not after it: the
+      // old check tested the size accumulated by the *previous* line, so the
+      // final entry always overshot.
+      if (currentSize + line.length + 1 > maxChars) break
+
       result.push(line)
-      currentSize += line.length
+      currentSize += line.length + 1
+      shown += 1
     }
   }
 
-  return result.join('\n')
+  return {
+    text: result.join('\n'),
+    total: summary.length,
+    shown,
+    truncated: shown < summary.length,
+  }
+}
+
+/**
+ * Format summary index with hierarchical compression.
+ * Groups files by directory and provides different levels of detail.
+ *
+ * `budgetChars` is a character budget, not a token count — callers should
+ * pass `deriveIndexBudget(getModelLimit(model))`.
+ *
+ * Prefer {@link renderSummaryIndex} when you need to know whether the budget
+ * dropped anything; this wrapper throws that information away.
+ */
+export function formatSummaryIndexHierarchical(
+  summary: SummaryEntry[],
+  budgetChars: number = DEFAULT_INDEX_BUDGET_CHARS,
+): string {
+  return renderSummaryIndex(summary, budgetChars).text
 }
 
 export function searchSummary(summary: SummaryEntry[], query: string): string {

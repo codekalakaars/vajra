@@ -22,6 +22,8 @@ export {
   getPreview,
   shouldSkipFile,
   formatSummaryIndexHierarchical,
+  renderSummaryIndex,
+  type SummaryIndexRender,
   searchSummary,
 } from './summary.js'
 

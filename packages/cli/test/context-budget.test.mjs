@@ -14,7 +14,7 @@ const repoRoot = join(import.meta.dirname, '..', '..', '..')
 // internals are published as explicit subpaths instead.
 const { buildInitialPromptContext } = await import('@codekalakaars/vajra-cli/agent/developer')
 const { scanProject } = await import('@codekalakaars/vajra-cli/native')
-const { buildNestedTree, deriveIndexBudget, MIN_INDEX_BUDGET_CHARS, MAX_INDEX_BUDGET_CHARS } =
+const { buildNestedTree, deriveIndexBudget, renderSummaryIndex, MIN_INDEX_BUDGET_CHARS, MAX_INDEX_BUDGET_CHARS } =
   await import('@codekalakaars/vajra-agent-core')
 
 // One measurement shared by every test below — indexing the repo is the
@@ -95,27 +95,95 @@ test('when the tree cannot fit it shallows out instead of starving the index', (
   )
 })
 
-test('every model at or above 128k gets the same budget, and on this repo it costs nothing', () => {
+test('every model at or above 128k gets the same budget', () => {
   // deriveIndexBudget saturates: 128k, 200k and 256k windows all clamp to
-  // MAX_INDEX_BUDGET_CHARS, so a larger window buys no more index. That is only
-  // defensible while the cap is not the binding constraint — measured here
-  // rather than assumed. The repo lost the experimental packages (454 files),
-  // so the whole index now renders in roughly a third of the cap.
+  // MAX_INDEX_BUDGET_CHARS, so a larger window buys no more index. This is a
+  // deliberate design choice, independent of the size of this repository.
   const saturated = [128000, 200000, 256000].map(deriveIndexBudget)
   assert.deepEqual([...new Set(saturated)], [MAX_INDEX_BUDGET_CHARS])
+})
 
+test('this repo is not truncated by the cap — the index is the whole tree', () => {
+  // The cap binding is a *loss* condition: the budget trimmed entries and the
+  // Developer's prompt is missing files it should have seen. Measured that way,
+  // rather than by the old proxy (rendered * 2 < cap), which fired on the repo
+  // simply growing past half the cap while every file was still rendered.
   const full = []
   const fullCtx = buildInitialPromptContext(repoRoot, full, 'zen/space-bunny-free')
   const rendered = fullCtx.summaryText.length
 
   assert.ok(
-    rendered * 2 < MAX_INDEX_BUDGET_CHARS,
-    `the cap is now binding: the full index renders ${rendered} chars against a ` +
-      `${MAX_INDEX_BUDGET_CHARS} budget, so raising it would buy real coverage ` +
-      'and the saturation decision needs revisiting',
+    full.length > 0,
+    'the index must not be empty, or "nothing dropped" proves nothing',
+  )
+  assert.equal(
+    fullCtx.summaryTruncated,
+    false,
+    `the cap dropped ${fullCtx.summaryTotal - fullCtx.summaryShown} of ` +
+      `${fullCtx.summaryTotal} entries (rendered ${rendered} chars against a ` +
+      `${fullCtx.summaryBudget} budget); the Developer cannot see them`,
+  )
+  assert.equal(
+    fullCtx.summaryShown,
+    fullCtx.summaryTotal,
+    'every indexed file must reach the prompt',
   )
   assert.ok(
-    full.length > 0 && full.length <= files.length,
+    rendered < fullCtx.summaryBudget,
+    `rendered ${rendered} must stay under the ${fullCtx.summaryBudget} budget`,
+  )
+
+  // The indexed entries are real files from the scan, not phantom rows.
+  const scannedPaths = new Set(files.map((f) => f.path))
+  const unknown = full.filter((e) => !scannedPaths.has(e.path))
+  assert.deepEqual(
+    unknown.map((e) => e.path),
+    [],
+    'index entries must come from the scanned project',
+  )
+  assert.ok(
+    full.length <= files.length,
     `indexed ${full.length} entries from ${files.length} scanned files`,
+  )
+})
+
+test('a repository that outgrows the cap reports the loss', () => {
+  // The tripwire above is only worth keeping if truncation is detectable, and
+  // for a long time nothing could observe it: the renderer returned a bare
+  // string, so a trimmed index was indistinguishable from a complete one.
+  const entries = []
+  for (let d = 0; d < 12; d++) {
+    for (let i = 0; i < 40; i++) {
+      entries.push({
+        path: `pkg${d}/module${i}.ts`,
+        symbols: ['alpha', 'beta', 'gamma', 'delta', 'epsilon'],
+        preview: 'x',
+        lineCount: 120,
+        importCount: 4,
+        exportCount: 6,
+      })
+    }
+  }
+
+  const render = renderSummaryIndex(entries, MAX_INDEX_BUDGET_CHARS)
+
+  assert.equal(render.total, entries.length)
+  assert.ok(
+    render.truncated,
+    '480 entries cannot fit in 32,000 chars, so the render must admit the loss',
+  )
+  assert.ok(render.shown > 0, 'the budget must still show what it can')
+  assert.ok(
+    render.shown < render.total,
+    `shown ${render.shown} must be below total ${render.total}`,
+  )
+  assert.ok(
+    render.text.length <= MAX_INDEX_BUDGET_CHARS,
+    `a truncated render must still respect the budget, got ${render.text.length}`,
+  )
+  assert.equal(
+    renderSummaryIndex(entries, MAX_INDEX_BUDGET_CHARS).shown,
+    render.shown,
+    'rendering must be deterministic — the prompt is rebuilt on every turn',
   )
 })
