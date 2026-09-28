@@ -21,7 +21,6 @@ import {
 } from '../../models/catalog.js'
 import {
   clearConfig,
-  ROLE_NAMES,
   ROLE_PURPOSE,
   readConfig,
   writeConfig,
@@ -463,6 +462,13 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
    * session that gets killed from another terminal should not take the settings
    * with it, and a menu that has to be saved is a menu that gets closed
    * without being saved.
+   *
+   * Nothing is said in the transcript when a setting changes. The row you just
+   * edited is on screen, showing the new value, one row below the cursor that
+   * chose it — narrating it into the scrollback is a second copy of a fact the
+   * user is looking at, and it pushes the conversation they came to the screen
+   * to have further up. Only the two things that can go wrong are said: no
+   * catalog to choose from, and a role model the gateway would reject.
    */
   const runConfig = async (): Promise<void> => {
     // The menu remembers the row you were on. Coming back from a sub-picker
@@ -515,22 +521,11 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
       Math.max(0, models.findIndex(info => info.id === state.defaultModel)),
     )
     if (answer.action !== 'pick' || answer.value === null) return
-    if (answer.value === state.defaultModel) {
-      store.addEntry({ kind: 'info', text: `The default model is already ${state.defaultModel}.` })
-      return
-    }
+    if (answer.value === state.defaultModel) return
     model = answer.value
     apiKey = explicitKey ?? resolveApiKeyForModel(model)
     writeConfig({ model })
     applyRoleModels()
-    const inheriting = ROLE_NAMES.filter(name => !roleModels[name])
-    store.addEntry({
-      kind: 'success',
-      text:
-        inheriting.length === 0
-          ? `Default model saved as ${model}. Every role has one of its own, so nothing follows it yet.`
-          : `Default model saved as ${model}. ${inheriting.join(', ')} follow it.`,
-    })
   }
 
   /** The models a role has been given, without the ones it has inherited. */
@@ -582,10 +577,6 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
       writeConfig({ [`${role}Model`]: answer.value } as Partial<VajraConfig>)
     }
     applyRoleModels()
-    store.addEntry({
-      kind: 'success',
-      text: `The ${role} runs on ${configState().roleOverrides[role] ?? model}.`,
-    })
   }
 
   /** The directory, from real places rather than a path you have to remember. */
@@ -603,7 +594,6 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     nextRun = 'ask'
     endRunForNext()
     writeConfig({ projectDir })
-    store.addEntry({ kind: 'success', text: `Working in ${projectDir}. Next task starts there.` })
   }
 
   const runCommand = async (name: string): Promise<void> => {

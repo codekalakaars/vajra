@@ -1014,34 +1014,44 @@ function App(props: { renderer: CliRenderer }) {
               <box
                 style={{ flexDirection: 'row', flexShrink: 0, paddingTop: 1, gap: 1, justifyContent: 'space-between' }}
               >
-                {/* What you are talking to, and nothing else: the model and the
-                    gateway that serves it. There is no agent name here because
-                    there is no choice of agent — one agent, always the same, so
-                    naming it on every prompt is a label for something the user
-                    cannot change.
+                {/* What you are talking to, and nothing else: the role running
+                    it, the model, and the gateway that serves it. The role used
+                    to be absent on the grounds that there was no choice of
+                    agent — one agent, always the same, so naming it on every
+                    prompt was a label for something the user could not change.
+                    There are three roles now and each can be on its own model
+                    (/config), so a bare model id is ambiguous: it is the
+                    developer's, and the one that the context meter and the
+                    reasoning dial above are describing.
 
                     Always shown, run or not. The sidebar no longer repeats the
                     model id, so this row is the only place it appears, and a
                     meta row that empties itself while the agent works leaves the
                     reasoning chip on the right addressing nobody. */}
                 <box style={{ flexDirection: 'row', gap: 1 }}>
+                  {/* The same cyan as the list cursor: it is the one thing in
+                      the row that is a name rather than a fact about a model. */}
+                  <text content="developer" fg={theme.listSelected} style={{ flexShrink: 0 }} />
                   <text content={bareModel(state().model)} fg={theme.text} style={{ flexShrink: 0 }} />
                   <text content={providerOf(state().model)} fg={theme.textMuted} />
                 </box>
-                {/* The variant chip, in the slot OpenCode puts it in: the right
-                    end of the meta row, a muted separator and the value in bold.
-                    It is a mode rather than part of the model's name, so it does
-                    not belong in the middle of "gpt-5.4 zen" — and a model that
-                    cannot reason shows nothing here rather than an "off" the
-                    user did not ask for. */}
-                <Show when={state().reasoning !== 'off'}>
-                  <box style={{ flexDirection: 'row', gap: 1, alignItems: 'center', flexShrink: 0 }}>
-                    <text content="·" fg={theme.textMuted} />
-                    <text>
-                      <strong>{state().reasoning}</strong>
-                    </text>
-                  </box>
-                </Show>
+                {/* How hard it is thinking, in the slot OpenCode puts a variant
+                    in: the right end of the meta row, a muted separator and the
+                    level beside it. Cyan to match the role, so the two things on
+                    this row that are *chosen* read as chosen and the model id
+                    does not.
+
+                    `off` is shown rather than hidden. The old reason to hide it
+                    was that nobody asked for an "off"; but a dial the user just
+                    turned and cannot see the result of is a dial they will turn
+                    again, and for a model that cannot reason at all, "off" is
+                    the answer rather than the absence of one. */}
+                <box style={{ flexDirection: 'row', gap: 1, alignItems: 'center', flexShrink: 0 }}>
+                  <text content="·" fg={theme.textMuted} />
+                  <text fg={theme.listSelected} style={{ flexShrink: 0 }}>
+                    <strong>{state().reasoning}</strong>
+                  </text>
+                </box>
               </box>
             </box>
           </box>
