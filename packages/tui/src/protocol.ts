@@ -118,8 +118,19 @@ export type ServerMessage =
    * `initial` is where the cursor starts — the model picker's list runs to
    * dozens of rows in catalog order, and opening on row 0 of a list the user
    * did not ask for is a list they have to scroll to find themselves in.
+   *
+   * `deletable` is permission, not presentation: it says the host will act on a
+   * delete for this list, and the UI decides how to say so. A list whose rows
+   * are ids has to be filterable, and `d` is a character in half of them, so the
+   * chord for delete is the UI's business too.
    */
-  | { t: 'pick'; title: string; options: { value: string; label: string }[]; initial?: number }
+  | {
+      t: 'pick'
+      title: string
+      options: { value: string; label: string }[]
+      initial?: number
+      deletable?: boolean
+    }
   | { t: 'clear' }
   | { t: 'exit'; code: number }
 
@@ -130,11 +141,14 @@ export type ClientMessage =
   /** A command chosen from the palette, or a hotkey. `arg` is the argument. */
   | { t: 'slash'; name: string; arg?: string }
   /**
-   * A row was chosen, or the picker was dismissed. `null` is the escape: the
-   * host is waiting on this promise, and a picker the user closed has to answer
-   * it or the command that opened it never finishes.
+   * A row was chosen, deleted, or the picker was dismissed.
+   *
+   * `null` is the escape: the host is waiting on this promise, and a picker the
+   * user closed has to answer it or the command that opened it never finishes.
+   * `action` distinguishes "I want this" from "this should not exist" — the same
+   * row, two intents, and only the host knows what the second one means.
    */
-  | { t: 'pick'; value: string | null }
+  | { t: 'pick'; value: string | null; action?: 'delete' }
   /**
    * Ctrl-C. The first press interrupts the run; a second, while the first is
    * still being acted on, means "stop asking" — the same gesture with a

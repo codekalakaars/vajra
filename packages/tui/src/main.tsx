@@ -123,6 +123,16 @@ const PICKER_CHROME_ROWS = 5
 /** The transcript keeps this many rows even with a picker open over it. */
 const MIN_TRANSCRIPT_ROWS = 6
 
+/**
+ * The row a picker spends on naming its own keys.
+ *
+ * Counted in the chrome, not taken out of the list: a list of one is a list of
+ * one, and the row that says which key deletes it has to fit beside it or not at
+ * all. A picker that drops its only row to make room for its own help is a
+ * picker that looks broken.
+ */
+const PICKER_HINT_ROWS = 1
+
 /** The air on each side of the left column, so nothing touches the edge. */
 const COLUMN_MARGIN = 1
 
@@ -268,7 +278,11 @@ function App(props: { renderer: CliRenderer }) {
    */
   const [paletteIdx, setPaletteIdx] = createSignal(0)
   const [pickerIdx, setPickerIdx] = createSignal(0)
-  const [picker, setPicker] = createSignal<{ title: string; options: { value: string; label: string }[] } | null>(null)
+  const [picker, setPicker] = createSignal<{
+    title: string
+    options: { value: string; label: string }[]
+    deletable: boolean
+  } | null>(null)
   /**
    * The picker's filter, which is the text on the input line.
    *
@@ -370,17 +384,36 @@ function App(props: { renderer: CliRenderer }) {
   const paletteOpen = createMemo(() => matches().length > 0)
 
   /**
-   * The picker's title: what it is, how much of it is left, and — while the
-   * input line is the filter — that this is what the line is for.
+   * The picker's title: what it is, how much of it is left, what the input line
+   * is for, and — when the list can be deleted from — the chord that does it.
+   * The keys are named in the panel rather than left to be remembered, because
+   * the alternative is a destructive shortcut nobody was told about.
    */
+  /**
+   * What the keys in the open list do, in the order you reach for them.
+   *
+   * The palette and a picker are the same panel over different rows, so they get
+   * the same footer — and the footer grows a chord only when the list in front
+   * of you can actually be deleted from.
+   */
+  const pickerHint = createMemo(() => {
+    // Enter is not named: it is the key every list in every program answers to,
+    // and the row that fits on the line is the one naming the destructive chord.
+    const parts = ['↑↓ move', 'type to filter']
+    if (picker()?.deletable) parts.push('ctrl+d delete')
+    parts.push('esc back')
+    return parts.join('  ·  ')
+  })
+
   const pickerTitle = createMemo(() => {
     const open = picker()
     if (!open) return ''
     const total = open.options.length
     const shown = pickerMatches().length
     const count = shown === total ? `(${total})` : `(${shown} of ${total})`
-    const hint = pickerQuery().trim() === '' ? 'type to filter' : `“${pickerQuery().trim()}”`
-    return `${open.title}  ${count}  ·  ${hint}`
+    const typed = pickerQuery().trim()
+    const filter = typed === '' ? 'type to filter' : `“${typed}”`
+    return `${open.title}  ${count}  ·  ${filter}`
   })
 
   /**
@@ -463,7 +496,11 @@ function App(props: { renderer: CliRenderer }) {
       if (message.t === 'state') setState(message.state)
       else if (message.t === 'commands') setCommands(message.commands)
       else if (message.t === 'pick') {
-        setPicker({ title: message.title, options: message.options })
+        setPicker({
+          title: message.title,
+          options: message.options,
+          deletable: message.deletable === true,
+        })
         // The host may say where the cursor belongs; a list sorted by price and
         // name is not somewhere a user expects to land on row 0.
         setPickerIdx(Math.min(Math.max(0, message.initial ?? 0), Math.max(0, message.options.length - 1)))
@@ -556,6 +593,16 @@ function App(props: { renderer: CliRenderer }) {
       }
       if (key.name === 'up' || key.name === 'down' || key.name === 'return') {
         key.preventDefault()
+      }
+      // Ctrl-D, not `d`: the input line is this list's filter, and a session id
+      // is hex, so a bare `d` would delete a row while the user was typing the
+      // id of the row they meant. A destructive action behind a chord can be
+      // typed near without being triggered.
+      if (key.name === 'd' && key.ctrl) {
+        key.preventDefault()
+        const chosen = pickerMatches()[pickerIdx()]
+        if (chosen && open.deletable) send({ t: 'pick', value: chosen.value, action: 'delete' })
+        return
       }
       if (key.name === 'up' || key.name === 'down') {
         const count = pickerMatches().length
@@ -711,8 +758,9 @@ function App(props: { renderer: CliRenderer }) {
      */
     const panelRows = (count: number): number => {
       if (count === 0) return 0
+      const chrome = PICKER_CHROME_ROWS + PICKER_HINT_ROWS
       const spare = Math.max(0, dimensions().height - promptHeight() - MIN_TRANSCRIPT_ROWS)
-      return Math.min(count, Math.max(3, spare - PICKER_CHROME_ROWS)) + PICKER_CHROME_ROWS
+      return Math.min(count, Math.max(3, spare - chrome)) + chrome
     }
     const pickerRows = createMemo(() => panelRows(pickerMatches().length))
     const paletteRows = createMemo(() => panelRows(matches().length))
@@ -861,10 +909,21 @@ function App(props: { renderer: CliRenderer }) {
                     <PickerList
                       options={pickerMatches()}
                       selected={pickerIdx()}
-                      height={pickerRows() - PICKER_CHROME_ROWS}
+                      height={pickerRows() - PICKER_CHROME_ROWS - PICKER_HINT_ROWS}
                       cells={panelCells()}
                     />
                   </Show>
+                  {/*
+                    The keys on their own row, muted. They were in the title,
+                    and a title long enough to name them wraps — which turns one
+                    line of instructions into two, and puts half of them under
+                    the sidebar.
+                  */}
+                  <text
+                    content={ellipsis(pickerHint(), panelCells() - 4)}
+                    fg={theme.listOption}
+                    style={{ flexShrink: 0, width: '100%' }}
+                  />
                 </Panel>
               )}
             </Show>
@@ -883,8 +942,13 @@ function App(props: { renderer: CliRenderer }) {
                     label: `/${command.name}  ${command.summary}`,
                   }))}
                   selected={paletteIdx()}
-                  height={paletteRows() - PICKER_CHROME_ROWS}
+                  height={paletteRows() - PICKER_CHROME_ROWS - PICKER_HINT_ROWS}
                   cells={panelCells()}
+                />
+                <text
+                  content={ellipsis(pickerHint(), panelCells() - 4)}
+                  fg={theme.listOption}
+                  style={{ flexShrink: 0, width: '100%' }}
                 />
               </Panel>
             </Show>

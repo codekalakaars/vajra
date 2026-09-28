@@ -5,7 +5,11 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Writable } from 'node:stream'
 import { resolveApiKeyForModel } from '../../env.js'
-import { listSessions as listPersistedSessions, type SessionSummary } from '../../persist/index.js'
+import {
+  deleteSession,
+  listSessions as listPersistedSessions,
+  type SessionSummary,
+} from '../../persist/index.js'
 import { bareModel } from '../../models/catalog.js'
 import type { ReasoningEffort } from '../../agent/chat.js'
 import {
@@ -22,6 +26,18 @@ import { InkSessionUI } from '../session/ink-ui.js'
 import { HELP_LINES, SLASH_COMMANDS, findSlashCommand, parseSlashCommand } from '../session/commands.js'
 import type { TuiSessionOptions } from '../session/index.js'
 import type { ClientMessage, ServerMessage, UiState } from './protocol.js'
+
+/**
+ * What a picker answered: a value, and what the user wanted done with it.
+ *
+ * `pick` is "resume this" or "change to this"; `delete` is the same row with a
+ * different intent. Keeping them in one answer is what lets a deletion be
+ * answered by the loop below instead of a second conversation with the host.
+ */
+interface PickAnswer {
+  value: string | null
+  action: 'pick' | 'delete'
+}
 
 /**
  * The Node half of the split runtime: it owns the agent, the sandbox and the
@@ -224,7 +240,11 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     else if (message.t === 'pick') {
       const waiting = pendingPick
       pendingPick = null
-      waiting?.resolve(message.value)
+      waiting?.resolve(
+        message.action === 'delete'
+          ? { value: message.value ?? '', action: 'delete' }
+          : { value: message.value, action: 'pick' },
+      )
     }
     // 'ready' only reports the geometry, which the screen already knows.
   })
@@ -243,17 +263,30 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
   /** The live sandbox, so a forced quit can tear it down instead of leaking. */
   let closeSandbox: (() => void) | null = null
   let quitRequested = false
-  /** A picker the UI is showing; the answer comes back as { t: 'pick' }. */
-  let pendingPick: { resolve: (value: string | null) => void } | null = null
+  /**
+   * A picker the UI is showing; the answer comes back as `{ t: 'pick' }`.
+   *
+   * The answer is a value *and* an intent, because the same row can be the one
+   * you want and the one that should not exist, and only the host knows what
+   * the second one means.
+   */
+  let pendingPick: { resolve: (answer: PickAnswer) => void } | null = null
 
   const ask = (
     title: string,
     options: { value: string; label: string }[],
     initial?: number,
-  ): Promise<string | null> =>
+    deletable?: boolean,
+  ): Promise<PickAnswer> =>
     new Promise(resolve => {
       pendingPick = { resolve }
-      send({ t: 'pick', title, options, ...(initial !== undefined ? { initial } : {}) })
+      send({
+        t: 'pick',
+        title,
+        options,
+        ...(initial !== undefined ? { initial } : {}),
+        ...(deletable === true ? { deletable: true } : {}),
+      })
     })
 
   const interrupt = (): void => {
@@ -316,6 +349,27 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
     if (store.getSnapshot().prompt) store.endPromptQuietly()
   }
 
+/**
+ * Delete a session and say so in the transcript.
+ *
+ * The outcome is a line rather than a beep, because the row disappearing from a
+ * list the user is looking at is not an answer: a session id is eight hex
+ * characters and "the one I meant" is not among them. A refusal is said as a
+ * refusal too — a list that silently does not change looks like a key that did
+ * not work, and the user tries it again.
+ */
+  const removeSession = (sessionId: string): boolean => {
+    if (!sessionId || sessionId === NEW_SESSION) return false
+    const removed = deleteSession(sessionId)
+    store.addEntry({
+      kind: removed ? 'success' : 'warning',
+      text: removed
+        ? `Deleted session ${sessionId.slice(0, 8)} and its conversation.`
+        : `Could not delete session ${sessionId.slice(0, 8)}.`,
+    })
+    return removed
+  }
+
   /** A line submitted at the prompt: a slash command, or a task. */
   const submit = (value: string): void => {
     const trimmed = value.trim()
@@ -371,8 +425,10 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
         })),
         Math.max(0, levels.indexOf(state.reasoning)),
       )
-      if (picked === null) return
-      store.setSettings({ reasoning: picked as ReasoningEffort })
+      // A level list is never deletable, so `action` can only be 'pick' here —
+      // but the answer is a union, and saying so beats a cast that lies.
+      if (picked.action !== 'pick' || picked.value === null) return
+      store.setSettings({ reasoning: picked.value as ReasoningEffort })
       return
     }
     if (command === 'sessions') {
@@ -381,15 +437,30 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
       // picker offered "new session" and nothing else, and the ids it would have
       // offered were not the ones `loadSession` looks up. Every run is recorded
       // in `~/.vajra/vajra.db`, and that is where the list comes from.
-      const picked = await ask('Resume which session?', [
-        { value: '__none__', label: 'new session' },
+      const options = (): { value: string; label: string }[] => [
+        { value: NEW_SESSION, label: 'new session' },
         ...listPersistedSessions(projectDir).map(sessionRow),
-      ])
-      if (picked !== null && picked !== '__none__') {
-        nextRun = { resumeFrom: picked }
-        endRunForNext()
+      ]
+      // A loop, because deleting is not leaving: one deletion is an answer to
+      // the same question the user is still asking, and making them reopen the
+      // list to delete a second one would be a decision made for them.
+      for (;;) {
+        const answer = await ask('Resume which session?', options(), 0, true)
+        if (answer.value === null) return
+        if (answer.action === 'delete') {
+          removeSession(answer.value)
+          // Nothing left but "new session": there is no longer a list to choose
+          // from, so the picker goes back to the prompt rather than sitting
+          // there with one unselectable row.
+          if (options().length <= 1) return
+          continue
+        }
+        if (answer.value !== NEW_SESSION) {
+          nextRun = { resumeFrom: answer.value }
+          endRunForNext()
+        }
+        return
       }
-      return
     }
     if (command === 'model') {
       // The list is the live catalog, not a hardcoded array: a model retired
@@ -423,8 +494,8 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
           options.findIndex(info => info.id === model),
         ),
       )
-      if (picked === null) return
-      model = picked
+      if (picked.action !== 'pick' || picked.value === null) return
+      model = picked.value
       apiKey = explicitKey ?? resolveApiKeyForModel(model)
       store.setSettings({ model })
       return
@@ -434,8 +505,8 @@ export async function startOpenTuiSession(options: TuiSessionOptions): Promise<n
         { value: projectDir, label: `${projectDir}  (current)` },
         { value: process.cwd(), label: process.cwd() },
       ])
-      if (picked !== null && picked !== projectDir) {
-        projectDir = picked
+      if (picked.action === 'pick' && picked.value !== null && picked.value !== projectDir) {
+        projectDir = picked.value
         store.setSettings({ projectDir })
         nextRun = 'ask'
         endRunForNext()
@@ -613,6 +684,9 @@ function sessionAge(ms: number): string {
   if (hours < 24) return `${hours}h`
   return `${Math.floor(hours / 24)}d`
 }
+
+/** The picker's "start fresh instead" row, which is not a session. */
+const NEW_SESSION = '__none__'
 
 /**
  * One session as a picker row: the columns the Ink picker shows, so the two

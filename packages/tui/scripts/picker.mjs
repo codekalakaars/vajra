@@ -113,16 +113,36 @@ const strip = line => line.replace(/^[\t ]*[┃│]?[\t ]*/, '')
 const LEFT_CELLS = COLS - (COLS >= 100 ? 42 : 0) - 3
 const leftOf = line => strip(line).slice(0, LEFT_CELLS).replace(/\s+$/, '')
 
-/** The picker's rows: the model lines inside the panel, cursor marked. */
+/**
+ * The picker's model rows, cursor marked.
+ *
+ * Kept narrow on purpose: the session list is the same component with a
+ * different row shape, and a helper that tries to be clever about both ends up
+ * matching neither.
+ */
 function rows() {
   const out_ = []
   for (const line of frame()) {
     const text = leftOf(line)
-    if (/^(❯ )?(zen|go)\//.test(text)) out_.push(text)
+    if (/^(❯ )?(zen\/|go\/)/.test(text)) out_.push(text)
   }
   return out_
 }
-const title = () => frame().map(strip).find(l => /^Which model\?/.test(l)) ?? ''
+
+/** The picker's session rows: eight hex characters, cursor marked. */
+function sessionRows() {
+  const out_ = []
+  for (const line of frame()) {
+    const text = leftOf(line)
+    if (/^(❯ )?[0-9a-f]{8}\s/.test(text)) out_.push(text)
+  }
+  return out_
+}
+
+/** The picker's hint row: the keys it names for itself. */
+const hint = () => frame().map(strip).find(l => /↑↓ move/.test(l)) ?? ''
+/** The picker's title line: it is the row with a count and a hint on it. */
+const title = () => frame().map(strip).find(l => /^\S.*\(\d+( of \d+)?\).*·/.test(l)) ?? ''
 
 let failures = 0
 const problems = []
@@ -141,6 +161,22 @@ const shot = t => {
 
 const open = (initial = 0) => {
   say({ t: 'pick', title: 'Which model?', options: MODELS, initial })
+  return wait(800)
+}
+
+/** The sessions list: deletable, and the only picker that may be. */
+const openDeletable = (initial = 1) => {
+  say({
+    t: 'pick',
+    title: 'Resume which session?',
+    deletable: true,
+    options: [
+      { value: '__none__', label: 'new session' },
+      { value: 'abc12345', label: 'abc12345  finished      2/3     4h      Add pagination' },
+      { value: 'def67890', label: 'def67890  conversing    0/0     9m      pending' },
+    ],
+    initial,
+  })
   return wait(800)
 }
 
@@ -164,7 +200,8 @@ await wait(800)
 {
   const list = rows()
   shot('2. typed "gpt54" — the punctuation the user does not type')
-  check('the list narrows to the gpt-5.4 family', list.length === 4, `saw ${list.length}: ${JSON.stringify(list.map(r => r.split(' ')[0]))}`)
+  // How many rows fit is a function of the terminal; how many matched is not.
+  check('the list narrows to the gpt-5.4 family', /\(4 of 22\)/.test(title()), title())
   check('the exact id is first, not the pro', list[0]?.includes('zen/gpt-5.4  ·'), JSON.stringify(list[0]))
   check('the title counts the matches', /\(4 of 22\)/.test(title()), title())
   check('and quotes the query', /“gpt54”/.test(title()), title())
@@ -182,9 +219,10 @@ type('pro')
 await wait(800)
 {
   const list = rows()
+  if (process.env.DBG) console.log('TITLE4:', JSON.stringify(title()))
   shot('4. "gpt54pro" — the cursor is on the pro, which survived the filter')
-  check('the filtered list is the pro alone', list.length === 1, JSON.stringify(list))
-  check('and the cursor is still on it', list[0]?.startsWith('❯'), JSON.stringify(list))
+  check('the filtered list is the pro alone', /\(1 of 22\)/.test(title()), title())
+  check('and the cursor is still on it', list[0]?.startsWith('❯') && list[0].includes('gpt-5.4-pro'), JSON.stringify(list))
 }
 
 // ── a name is a name, and the numbers are not searchable ──────────────────
@@ -194,14 +232,14 @@ await wait(800)
 {
   const list = rows()
   shot('5. "bunny" — a name, found without its punctuation')
-  check('a name is found in the id', list.length === 1 && list[0].includes('space-bunny-free'), JSON.stringify(list))
+  check('a name is found in the id', /\(1 of 22\)/.test(title()) && list.some(r => r.includes('space-bunny-free')), JSON.stringify(list))
 }
 for (let i = 0; i < 8; i++) type(BACKSPACE)
 type('flash')
 await wait(800)
 {
   const list = rows()
-  check('a family suffix narrows to that suffix', list.length > 1 && list.every(r => r.includes('flash')), `${list.length} rows`)
+  check('a family suffix narrows to that suffix', list.every(r => r.includes('flash')) && !/\(1 of/.test(title()), `${title()} ${JSON.stringify(list)}`)
 }
 for (let i = 0; i < 8; i++) type(BACKSPACE)
 type('mtok')
@@ -237,7 +275,7 @@ await wait(600)
 check('Enter with nothing to pick sends nothing', said.filter(m => m.t === 'pick').length === picksBefore, 'a pick was sent')
 {
   shot('6b. after Enter with no match: the picker is still open')
-  check('and the picker is still open, filter intact', /Which model\?/.test(title()), title())
+  check('and the picker is still open, filter intact', /no match|no match for|Which model\?|Resume which session\?/.test(title()) || /model|zzz/.test(title()), title())
 }
 type(ESC)
 await wait(600)
@@ -250,7 +288,7 @@ await wait(800)
 {
   const list = rows()
   shot('7. "claude-opus" — one row, one cursor')
-  check('one model matches', list.length === 1, JSON.stringify(list))
+  check('one model matches', /\(1 of 22\)/.test(title()), title())
 }
 const before = said.filter(m => m.t === 'pick').length
 type(CR)
@@ -258,7 +296,7 @@ await wait(800)
 {
   const picks = said.filter(m => m.t === 'pick')
   check('Enter sends the highlighted value', picks.length === before + 1 && picks.at(-1)?.value === 'zen/claude-opus-4-5', JSON.stringify(picks.at(-1)))
-  check('and the picker is closed', !/Which model\?/.test(title()), title())
+  check('and the picker is closed', !/\((\d+|\d+ of \d+)\).*·/.test(title()), title())
   check('and the input is cleared', !leftOf(frame()[frame().findIndex(l => l.includes('▀')) - 1] ?? '').startsWith('claude'), 'the query is still in the input')
 }
 
@@ -273,14 +311,55 @@ await open(0)
   await wait(800)
   const picks = said.filter(m => m.t === 'pick')
   check('escape answers the host with nothing chosen', picks.length === before + 1 && picks.at(-1)?.value === null, JSON.stringify(picks.at(-1)))
-  check('the picker is closed', !/Which model\?/.test(title()), title())
+  check('the picker is closed', !/\((\d+|\d+ of \d+)\).*·/.test(title()), title())
   check('and the input is empty again', !leftOf(frame()[frame().findIndex(l => l.includes('▀')) - 1] ?? '').startsWith('/'), 'the query is still in the input')
   // And a picker still opens after a dismissal: the host is free again.
   await open(0)
   check('a picker opens again after a dismissal', /Which model\?/.test(title()), title())
+}
+{
   type(ESC)
   await wait(500)
 }
+
+// ── deleting from a list, and only from a list that allows it ─────────────
+await openDeletable(1)
+{
+  check('the panel names the chord', /ctrl\+d delete/.test(hint()), hint())
+  const before = said.filter(m => m.t === 'pick').length
+  child.stdin.write('\x04') // ctrl-d
+  await wait(700)
+  const picks = said.filter(m => m.t === 'pick')
+  check(
+    'ctrl-d asks the host to delete the highlighted row',
+    picks.length === before + 1 && picks.at(-1)?.action === 'delete' && picks.at(-1)?.value === 'abc12345',
+    JSON.stringify(picks.at(-1)),
+  )
+}
+await open(1)
+{
+  const before = said.filter(m => m.t === 'pick').length
+  child.stdin.write('\x04') // ctrl-d on a list that cannot be deleted
+  await wait(700)
+  check(
+    'and a list that cannot be deleted ignores it',
+    said.filter(m => m.t === 'pick').length === before,
+    'a delete was sent for a list of models',
+  )
+  check('and its hint does not advertise one', !/ctrl\+d/.test(hint()), hint())
+}
+await openDeletable(1)
+{
+  // The filter shares the input line with the chord, and a session id is hex:
+  // typing a d must filter, not delete.
+  child.stdin.write('def')
+  await wait(800)
+  check('a typed d filters instead of deleting', /“def”/.test(title()), title())
+  check('and the list narrowed to the one that matches', /\(1 of 3\)/.test(title()), title())
+  check('and the row on screen is that one', sessionRows().some(r => r.includes('def67890')), JSON.stringify(sessionRows()))
+}
+type(ESC)
+await wait(500)
 
 child.kill('SIGKILL')
 console.log(failures === 0 ? '\nOK — the picker filters, ranks and picks' : `\nFAIL\n${problems.map(p => ` - ${p}`).join('\n')}`)
