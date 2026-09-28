@@ -13,7 +13,7 @@ const repoRoot = join(import.meta.dirname, '..', '..', '..')
 // side-effecting executable — importing it would run the CLI — so these two
 // internals are published as explicit subpaths instead.
 const { buildInitialPromptContext } = await import('@codekalakaars/vajra-cli/agent/developer')
-const { scanProject } = await import('@codekalakaars/vajra-cli/native')
+const { scanProject } = await import('@codekalakaars/vajra-agent-process')
 const { buildNestedTree, deriveIndexBudget, renderSummaryIndex, MIN_INDEX_BUDGET_CHARS, MAX_INDEX_BUDGET_CHARS } =
   await import('@codekalakaars/vajra-agent-core')
 

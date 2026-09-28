@@ -10,6 +10,16 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./platform-guard": {
+      "types": "./dist/platform-guard.d.ts",
+      "default": "./dist/platform-guard.js"
+    }
+  },
   "files": [
     "dist"
   ],

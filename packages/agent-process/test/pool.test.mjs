@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { launchSandboxSessionPool } from '../dist/sandbox/launch.js'
+import { spawnAgentPool } from '../dist/index.js'
 
 /**
  * The pool-backed session must be indistinguishable from a single session to
@@ -21,7 +21,7 @@ before(async () => {
   projectDir = mkdtempSync(join(tmpdir(), 'vajra-pool-'))
   writeFileSync(join(projectDir, 'a.txt'), 'alpha\n')
   writeFileSync(join(projectDir, 'b.txt'), 'beta\n')
-  session = await launchSandboxSessionPool(projectDir, 'pool-session', {
+  session = await spawnAgentPool(projectDir, 'pool-session', {
     allowUnenforced: true,
   })
 })

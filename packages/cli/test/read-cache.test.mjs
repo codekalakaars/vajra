@@ -2,13 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-
-const cliDir = dirname(dirname(fileURLToPath(import.meta.url)))
-const { createToolHandle } = await import(
-  pathToFileURL(join(cliDir, 'dist', 'tools', 'handle.js')).href
-)
+import { join } from 'node:path'
+import { createToolHandle } from '@codekalakaars/vajra-agent-process'
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'vajra-readcache-'))

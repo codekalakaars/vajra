@@ -1,6 +1,5 @@
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { existsSync, readdirSync, statSync } from 'node:fs'
-import type { LaunchHandle } from '../agent/developer.js'
 import type { PermissionsConfig } from '@codekalakaars/vajra-protocol'
 import {
   readFile,
@@ -16,10 +15,22 @@ import {
   loadEnvFile,
   redact,
   type EnvVar,
-} from '../native.js'
-import { buildSummaryIndex, searchSummary, shouldSkipFile, type SummaryEntry } from '../agent/summary.js'
-import { scanProject } from '../native.js'
-import { normalizeProjectPath, type TaskFilePermissions } from '../tasks/permissions.js'
+} from './native.js'
+import { buildSummaryIndex, searchSummary, shouldSkipFile, type SummaryEntry } from './summary.js'
+import { scanProject } from './native.js'
+import { normalizeProjectPath, type TaskFilePermissions } from './task-permissions.js'
+
+/**
+ * A confined agent, as its caller sees it: one method, tool calls in and
+ * results out.
+ *
+ * Declared here rather than imported because this package defines what a
+ * confined agent *is* — the caller consumes the interface, so it belongs with
+ * the implementation that satisfies it.
+ */
+export interface LaunchHandle {
+  callTool(tool: string, args: unknown): Promise<unknown>
+}
 
 export interface ToolCache {
   read: Map<string, { mtimeMs: number; value: string }>

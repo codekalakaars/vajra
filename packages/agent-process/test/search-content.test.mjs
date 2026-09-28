@@ -3,15 +3,9 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { pathToFileURL } from 'node:url'
 
-const handleUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'tools', 'handle.js')).href
-const { createToolHandle } = await import(handleUrl)
-
-const protocolUrl = pathToFileURL(
-  join(import.meta.dirname, '..', '..', 'protocol', 'dist', 'index.js'),
-).href
-const { roleTools } = await import(protocolUrl)
+import { createToolHandle } from '../dist/index.js'
+import { roleTools } from '@codekalakaars/vajra-protocol'
 
 /**
  * Fixture: a project whose .env must stay unreachable through search_content,

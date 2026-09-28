@@ -3,13 +3,9 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { pathToFileURL } from 'node:url'
 
-const summaryUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'agent', 'summary.js')).href
-const nativeUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'native.js')).href
 
-const { buildSummaryIndex, searchSummary } = await import(summaryUrl)
-const { isMaskedName } = await import(nativeUrl)
+import { buildSummaryIndex, searchSummary, isMaskedName } from '../dist/index.js'
 
 test('isMaskedName matches permissions.rs rule', () => {
   assert.equal(isMaskedName('.env'), true)

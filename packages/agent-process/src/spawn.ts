@@ -1,13 +1,19 @@
-// Parent side of the CLI sandboxed worker (Group Q).
+// Spawning and driving a kernel-confined agent process.
 //
-// Forks dist/sandbox/worker.js, sends a buildLaunchJob() payload, waits for
-// the sandbox-report, and exposes tool calls as a LaunchHandle over IPC.
-// The parent never calls applySandbox itself.
+// One call, `spawnAgent`, forks a worker that applies Landlock to itself
+// before touching anything, then answers tool calls over IPC. Everything the
+// caller used to assemble by hand — the fork, the env allowlist, callId
+// bookkeeping, the report/ready race, the restart budget, stderr capture,
+// per-task scoping, the worker pool — lives here.
+//
+// The caller supplies policy (from @codekalakaars/vajra-sandbox) and nothing
+// else. The tools a worker can call are the ones this package ships, so there
+// is one implementation of "what a confined agent may do" rather than one per
+// call site.
 
 import { fork, type ChildProcess } from 'node:child_process'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { LaunchHandle } from '../agent/developer.js'
 import {
   buildLaunchJob,
   createSandboxConfig,
@@ -15,13 +21,9 @@ import {
   type LaunchJob,
   type SandboxConfig,
 } from '@codekalakaars/vajra-sandbox'
-import { normalizeProjectPath, type TaskFilePermissions } from '../tasks/permissions.js'
-import {
-  resolveConcurrencyConfig,
-  WorkerPool,
-  type PoolWorker,
-  type WorkerLease,
-} from '@codekalakaars/vajra-sandbox'
+import { resolveConcurrencyConfig, WorkerPool, type PoolWorker, type WorkerLease } from '@codekalakaars/vajra-sandbox'
+import type { LaunchHandle } from './tools.js'
+import { normalizeProjectPath, type TaskFilePermissions } from './task-permissions.js'
 
 export interface SandboxReport {
   enforced: boolean
@@ -32,7 +34,8 @@ export interface SandboxReport {
 /** How much of a worker's own output is worth keeping. */
 const WORKER_NOISE_LINES = 20
 
-export interface SandboxSession {
+/** A running confined agent, and the handles that scope calls to it. */
+export interface Agent {
   handle: LaunchHandle
   report: SandboxReport
   /** Swap app-level task file permissions for the session handle. */
@@ -53,10 +56,10 @@ export interface SandboxSession {
   close: () => void
 }
 
-export interface LaunchSandboxOptions {
-  /** Prefer an existing .vajra-sandbox.json when present. */
+export interface SpawnAgentOptions {
+  /** Proceed on a Linux kernel with no Landlock (pre-5.13). */
   allowUnenforced?: boolean
-  /** Fail instead of returning a session when the platform cannot enforce. */
+  /** Fail instead of returning an agent when the platform cannot enforce. */
   requireEnforced?: boolean
   timeoutMs?: number
   /**
@@ -177,14 +180,19 @@ function assertToolPermission(
 }
 
 /**
- * Fork the sandboxed worker and return a LaunchHandle that proxies tool calls
- * over IPC. Throws if the worker refuses to start or applySandbox fails.
+ * Spawn one kernel-confined agent and wait for it to report whether the
+ * sandbox took. Throws if the worker refuses to start, if `applySandbox` fails,
+ * or if `requireEnforced` is set and confinement is only partial.
+ *
+ * Resolves once the worker has applied Landlock to itself — never before. A
+ * returned `Agent` is therefore already confined; a tool call on it cannot
+ * escape the policy regardless of what the tool does.
  */
-export async function launchSandboxSession(
+export async function spawnAgent(
   projectDir: string,
   sessionId: string,
-  options: LaunchSandboxOptions = {},
-): Promise<SandboxSession> {
+  options: SpawnAgentOptions = {},
+): Promise<Agent> {
   const allowUnenforced = options.allowUnenforced ?? false
   const requireEnforced = options.requireEnforced ?? !allowUnenforced
   const timeoutMs = options.timeoutMs ?? 15_000
@@ -474,14 +482,13 @@ export async function launchSandboxSession(
   }
 }
 
-/** A pooled worker that remembers the session it drives. */
-interface SessionWorker extends PoolWorker {
-  session: SandboxSession
+/** A pooled worker that remembers the agent it drives. */
+interface AgentWorker extends PoolWorker {
+  agent: Agent
 }
 
 /**
- * A `SandboxSession` backed by a pool of real sessions — one per in-flight
- * task.
+ * A pool of confined agents, one per in-flight task.
  *
  * The point is blast radius. With one shared worker, a single OOM or native
  * fault fails every in-flight task at once: the worker respawns, but the calls
@@ -489,48 +496,48 @@ interface SessionWorker extends PoolWorker {
  * were waiting on them. Giving each task its own worker means a crash costs one
  * task.
  *
- * `service.ts` needs no change for any of this — the pool implements the same
- * `SandboxSession` surface, so admission, permission scoping and reporting work
- * exactly as before. Per-task scoping is not weakened either: each task still
- * gets `handleForTask` on its own session, so a worker is never shared with
- * another task while either of them is running.
+ * The pool implements the same `Agent` surface as `spawnAgent`, so admission,
+ * permission scoping and reporting work exactly as before with one of the two.
+ * Per-task scoping is not weakened either: each task still gets `handleForTask`
+ * on its own agent, so a worker is never shared with another task while either
+ * of them is running.
  *
  * Workers are created lazily, so a single-task run forks exactly one worker as
- * before. `handleForTask` is synchronous by contract, so a reservation can be a
- * session that is still starting; the handle it returns awaits that session on
+ * before. `handleForTask` is synchronous by contract, so a reservation can be
+ * an agent that is still starting; the handle it returns awaits that agent on
  * first use.
  */
-export async function launchSandboxSessionPool(
+export async function spawnAgentPool(
   projectDir: string,
   sessionId: string,
-  options: LaunchSandboxOptions = {},
-): Promise<SandboxSession> {
+  options: SpawnAgentOptions = {},
+): Promise<Agent> {
   // The primary session backs the session-scope handle (planning, rollback) and
   // the first task, so nothing is forked that would not have been before.
-  const primary = await launchSandboxSession(projectDir, sessionId, options)
+  const primary = await spawnAgent(projectDir, sessionId, options)
   // At least one: the primary covers the first task, but a pool of zero would
   // queue forever if a second task ever arrived.
   const maxWorkers = Math.max(1, resolveConcurrencyConfig().maxConcurrentWorkers - 1)
 
-  const pool = new WorkerPool<SessionWorker>({
+  const pool = new WorkerPool<AgentWorker>({
     maxWorkers,
     // A worker is held for a task's whole run; keep one warm for the next task
     // and no more.
     maxIdle: maxWorkers > 0 ? 1 : 0,
     launch: async () => {
-      const session = await launchSandboxSession(projectDir, sessionId, options)
+      const agent = await spawnAgent(projectDir, sessionId, options)
       return {
-        session,
-        callTool: (tool, args) => session.handle.callTool(tool, args),
-        close: () => session.close(),
+        agent,
+        callTool: (tool, args) => agent.handle.callTool(tool, args),
+        close: () => agent.close(),
       }
     },
   })
 
   interface Reservation {
-    session: Promise<SandboxSession>
-    /** The lease behind a pooled session; absent for the primary. */
-    lease?: WorkerLease<SessionWorker>
+    agent: Promise<Agent>
+    /** The lease behind a pooled agent; absent for the primary. */
+    lease?: WorkerLease<AgentWorker>
     released: boolean
   }
 
@@ -540,12 +547,12 @@ export async function launchSandboxSessionPool(
   const reserve = (): Reservation => {
     if (!primaryInUse) {
       primaryInUse = true
-      return { session: Promise.resolve(primary), released: false }
+      return { agent: Promise.resolve(primary), released: false }
     }
-    const reservation: Reservation = { session: null as never, released: false }
-    reservation.session = pool.acquire().then(lease => {
+    const reservation: Reservation = { agent: null as never, released: false }
+    reservation.agent = pool.acquire().then(lease => {
       reservation.lease = lease
-      return lease.worker.session
+      return lease.worker.agent
     })
     return reservation
   }
@@ -553,16 +560,16 @@ export async function launchSandboxSessionPool(
   const release = (reservation: Reservation, taskId: string): void => {
     if (reservation.released) return
     reservation.released = true
-    void reservation.session.then(
-      session => {
+    void reservation.agent.then(
+      agent => {
         // Drop the task's scoped permissions before anyone else can use this
         // worker — otherwise the next task inherits them.
-        session.releaseTask(taskId)
+        agent.releaseTask(taskId)
         if (reservation.lease) reservation.lease.release()
         else primaryInUse = false
       },
       () => {
-        if (reservation.lease) reservation.lease.markDead('session failed to start')
+        if (reservation.lease) reservation.lease.markDead('agent failed to start')
         else primaryInUse = false
       },
     )
@@ -589,8 +596,8 @@ export async function launchSandboxSessionPool(
             throw new Error(`Sandbox worker for task ${taskId} is no longer available`)
           }
           if (!scoped) {
-            const ready = await reservation.session
-            // The release may have landed while the session was starting.
+            const ready = await reservation.agent
+            // The release may have landed while the agent was starting.
             if (reservation.released) {
               throw new Error(`Sandbox worker for task ${taskId} is no longer available`)
             }

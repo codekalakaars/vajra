@@ -1,7 +1,6 @@
 import { access } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { runCommandAsync } from '../native.js'
-import { tokenizeCommand } from '../tools/handle.js'
+import { runCommandAsync, tokenizeCommand } from '@codekalakaars/vajra-agent-process'
 
 export interface SkipEvaluation {
   shouldSkip: boolean

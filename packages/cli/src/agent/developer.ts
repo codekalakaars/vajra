@@ -18,10 +18,17 @@ import { deriveIndexBudget } from '@codekalakaars/vajra-agent-core'
 import { streamChatCompletion, type ChatMessage, type ReasoningEffort, type ToolCall } from './chat.js'
 import { getModelLimit } from './context-window.js'
 import { getDeveloperToolSpecs, parseToolCall } from './tools.js'
-import { tokenizeCommand } from '../tools/handle.js'
-import { scanProject } from '../native.js'
+import {
+  tokenizeCommand,
+  scanProject,
+  buildSummaryIndex,
+  formatSummaryIndexHierarchical,
+  renderSummaryIndex,
+  searchSummary,
+  type LaunchHandle,
+  type SummaryEntry,
+} from '@codekalakaars/vajra-agent-process'
 import { buildNestedTree } from './tree.js'
-import { buildSummaryIndex, formatSummaryIndexHierarchical, renderSummaryIndex, searchSummary, type SummaryEntry } from './summary.js'
 import {
   startHeartbeat,
   summarizePlanTaskCount,
@@ -39,9 +46,14 @@ const FREE_TOOLS = new Set(['search_files'])
  */
 const READ_ONLY_TOOLS = new Set(['read_file', 'list_files', 'search_files', 'search_content'])
 
-export interface LaunchHandle {
-  callTool(tool: string, args: unknown): Promise<unknown>
-}
+/**
+ * A confined agent, as the Developer consumes it.
+ *
+ * Declared by @codekalakaars/vajra-agent-process — that package owns what a
+ * confined agent is and spawns them. Re-exported here so the Developer's own
+ * consumers need not know which package does the forking.
+ */
+export type { LaunchHandle } from '@codekalakaars/vajra-agent-process'
 
 // Approximate tokens per character (conservative estimate)
 const CHARS_PER_TOKEN = 4

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-// Must stay the first import — see the file for why.
-import './platform-guard.js'
+// Must stay the first import: it runs before the native addon is loaded, so an
+// unsupported platform gets the real reason rather than a loader error.
+import '@codekalakaars/vajra-sandbox/platform-guard'
 
 import { Command } from 'commander'
 import { resolve, dirname } from 'node:path'

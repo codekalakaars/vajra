@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { launchSandboxSession } from '../dist/sandbox/launch.js'
+import { spawnAgent } from '../dist/index.js'
 
 let projectDir
 let session
@@ -12,7 +12,7 @@ before(async () => {
   projectDir = mkdtempSync(join(tmpdir(), 'vajra-sandbox-'))
   writeFileSync(join(projectDir, 'hello.txt'), 'hello world\n', 'utf-8')
   process.env.VAJRA_TEST_WORKER_LEAK = 'super-secret-worker-value'
-  session = await launchSandboxSession(projectDir, 'test-session', {
+  session = await spawnAgent(projectDir, 'test-session', {
     allowUnenforced: true,
     timeoutMs: 15_000,
   })

@@ -9,7 +9,7 @@ import {
   type SessionPhase,
 } from '../persist/index.js'
 import { resolve } from 'node:path'
-import { normalizeProjectPath } from '../tasks/permissions.js'
+import { normalizeProjectPath } from '@codekalakaars/vajra-agent-process'
 
 /**
  * What a resume must decide before it replays anything.

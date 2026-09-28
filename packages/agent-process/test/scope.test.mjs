@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { launchSandboxSession } from '../dist/sandbox/launch.js'
+import { spawnAgent } from '../dist/index.js'
 
 const DENY = { read: false, write: false, edit: false, delete: false }
 const ALLOW = { read: true, write: true, edit: true, delete: false }
@@ -19,7 +19,7 @@ before(async () => {
   secretPath = join(projectDir, 'secret.txt')
   writeFileSync(helloPath, 'hello world\n', 'utf-8')
   writeFileSync(secretPath, 'top secret\n', 'utf-8')
-  session = await launchSandboxSession(projectDir, 'scope-session', {
+  session = await spawnAgent(projectDir, 'scope-session', {
     allowUnenforced: true,
     timeoutMs: 15_000,
   })

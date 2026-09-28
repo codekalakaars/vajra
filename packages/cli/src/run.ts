@@ -98,7 +98,7 @@ export async function runCommand(options: RunOptions): Promise<void> {
   const abortController = new AbortController()
   let sigintCount = 0
   // Assigned via onSandboxClose so a second Ctrl-C can close the worker even
-  // if launchSandboxSession is still in flight.
+  // if spawnAgentPool is still in flight.
   let forceCloseSandbox: (() => void) | null = null
   const onSigInt = () => {
     sigintCount++

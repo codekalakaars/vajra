@@ -16,10 +16,6 @@
     "./agent/developer": {
       "types": "./dist/agent/developer.d.ts",
       "default": "./dist/agent/developer.js"
-    },
-    "./native": {
-      "types": "./dist/native.d.ts",
-      "default": "./dist/native.js"
     }
   },
   "files": [
@@ -34,6 +30,7 @@
   },
   "dependencies": {
     "@codekalakaars/vajra-agent-core": "workspace:*",
+    "@codekalakaars/vajra-agent-process": "workspace:*",
     "@codekalakaars/vajra-core": "workspace:*",
     "@codekalakaars/vajra-protocol": "workspace:*",
     "@codekalakaars/vajra-sandbox": "workspace:*",

@@ -1,17 +1,20 @@
-// Sandboxed tool-execution worker for the CLI (Group Q).
+// Sandboxed tool-execution worker.
 //
-// Forked by launch.ts. Applies the native sandbox (applySandbox) before
+// Forked by spawn.ts. Applies the native sandbox (applySandbox) before
 // touching any project data, reports the result over IPC, then serves
 // {callId, tool, args} → {callId, ok, result|error} dispatch.
 //
 // Never sees the API key or conversation — only individual tool invocations.
 
-// First import: must run before the addon require below. See platform-guard.ts.
-import '../platform-guard.js'
+// First import: must run before the addon require below, so an unsupported
+// platform gets the real reason instead of a bare "Unsupported OS" from the
+// napi loader. Imported from vajra-sandbox rather than the CLI's copy so there
+// is one gate, not one per entry point.
+import '@codekalakaars/vajra-sandbox/platform-guard'
 
 import { createRequire } from 'node:module'
 import { checkToolPermission, type LaunchJob } from '@codekalakaars/vajra-sandbox'
-import { createToolHandle } from '../tools/handle.js'
+import { createToolHandle } from './tools.js'
 
 type FilePermissions = LaunchJob['defaultFilePermissions']
 

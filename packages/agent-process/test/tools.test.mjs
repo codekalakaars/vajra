@@ -3,10 +3,8 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { pathToFileURL } from 'node:url'
 
-const handleUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'tools', 'handle.js')).href
-const { tokenizeCommand, createToolHandle } = await import(handleUrl)
+import { tokenizeCommand, createToolHandle } from '../dist/index.js'
 
 test('tokenizeCommand rejects shell metacharacters', () => {
   const result = tokenizeCommand('echo a && rm -rf /')

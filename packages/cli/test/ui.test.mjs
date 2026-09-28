@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 
 const uiUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'session', 'ui.js')).href
-const handleUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'tools', 'handle.js')).href
 const {
   agentKey,
   agentDisplay,
@@ -16,7 +15,7 @@ const {
   summarizeToolCall,
   summarizeToolResult,
 } = await import(uiUrl)
-const { createToolHandle } = await import(handleUrl)
+const { createToolHandle } = await import('@codekalakaars/vajra-agent-process')
 
 const DEV = { role: 'developer' }
 const WORKER = { role: 'worker', taskId: 'task-1', title: 'auth-mw' }

@@ -12,21 +12,27 @@ import {
   createEvidenceLedger,
   developerConversationTurn,
   resetEvidenceLedger,
-  type LaunchHandle,
   type DeveloperTurnResult,
 } from '../agent/developer.js'
 import { AgentRegistry, type AgentState } from '../agent/registry.js'
 import { TaskQueue, type TaskState } from '../agent/taskqueue.js'
 import { streamChatCompletion, type ChatMessage, type ReasoningEffort } from '../agent/chat.js'
 import { evaluateSkipIfDetailed } from '../tasks/skip.js'
-import { computeTaskPermissions, normalizeProjectPath } from '../tasks/permissions.js'
+import {
+  createToolHandle,
+  tokenizeCommand,
+  computeTaskPermissions,
+  normalizeProjectPath,
+  spawnAgentPool,
+  type Agent,
+  type LaunchHandle,
+  type ToolCache,
+} from '@codekalakaars/vajra-agent-process'
 import { executeTask } from '../tasks/execute.js'
 import { needsServer } from '../tasks/server.js'
-import { createToolHandle, tokenizeCommand, type ToolCache } from '../tools/handle.js'
 import { finalReport } from '../tasks/report.js'
 import { isSupportedModel } from '../env.js'
 import { planRoleModels, roleReasoningEffort } from '../roles.js'
-import { launchSandboxSessionPool, type SandboxSession } from '../sandbox/launch.js'
 import {
   SESSION_SCHEMA_VERSION,
   DIRECTORY_FILE_HASH,
@@ -346,8 +352,8 @@ export async function runSession(
   let exited = false
 
   // Declared early so a host force-quit can close the worker even before
-  // launchSandboxSession resolves.
-  let sandbox: SandboxSession | null = null
+  // spawnAgentPool resolves.
+  let sandbox: Agent | null = null
   options.onSandboxClose?.(null)
   const notifySandboxClose = () => options.onSandboxClose?.(() => sandbox?.close())
 
@@ -436,9 +442,9 @@ export async function runSession(
   const allowUnenforced = options.allowUnenforced ?? false
   try {
     // Pool-backed: one worker per in-flight task, so a crash costs one task
-    // rather than every task. Same SandboxSession surface, so nothing below
+    // rather than every task. Same Agent surface, so nothing below
     // this line changes.
-    sandbox = await launchSandboxSessionPool(projectDir, sessionId, {
+    sandbox = await spawnAgentPool(projectDir, sessionId, {
       allowUnenforced,
       requireEnforced: !allowUnenforced,
       // A worker that writes to its own stdout or stderr gets it said in the
