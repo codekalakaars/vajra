@@ -11,8 +11,6 @@ export interface PoolWorker {
   close(): void | Promise<void>
 }
 
-export type PoolWorkerFactory = () => Promise<PoolWorker>
-
 export interface WorkerPoolOptions<T extends PoolWorker = PoolWorker> {
   /** Hard cap on live workers. Defaults to `maxConcurrentWorkers` (4). */
   maxWorkers?: number

@@ -49,11 +49,6 @@ export function matchesPattern(filePath: string, pattern: string): boolean {
   return final
 }
 
-/** Clear the memoization cache. Call after config changes. */
-export function clearMatchCache(): void {
-  _matchCache.clear()
-}
-
 function matchGlob(path: string, pattern: string): boolean {
   // Split both into segments for comparison
   const pathSegments = path.split('/')
