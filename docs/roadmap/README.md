@@ -21,8 +21,9 @@ The conceptual model is documented and internally consistent. Every role, the ta
 |------|-------|
 | Role model | Settled — see [System Roles](../system-roles/README.md) |
 | Task model | Settled — see [Tasks](../tasks/README.md) |
-| Phase One gate | Settled — see [ADR-0006](../adr/0006-phase-one-is-mandatory.md) |
-| Verdict contract | Settled — see [ADR-0007](../adr/0007-test-verdict-contract.md) |
+| Phase One gate | Removed — superseded by [ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md) |
+| Verification ladder | Settled — see [ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md); **not implemented** |
+| Verdict contract | Settled — see [ADR-0007](../adr/0007-test-verdict-contract.md), amended by [ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md) |
 | Testing system | Core built — verdicts, JUnit/TAP ingestion, selection, cache, flakes, attribution |
 | Language agnosticism | Core built — standard-format ingestion and target-agnostic identity |
 | API invocation | Core built — declarative targets, lifecycle, probes, oracles, auth chains |
@@ -37,11 +38,13 @@ The conceptual model is documented and internally consistent. Every role, the ta
 | Contract-driven test generation | OpenAPI derivation built; AsyncAPI, protobuf, GraphQL, JSON Schema not |
 | Permission model | Settled conceptually; enforcement mechanism open |
 | Message protocol | Types settled; transport and versioning open |
-| Agent identity & per-role models | Settled — see [ADR-0010](../adr/0010-every-role-is-an-llm-agent.md); **not implemented** — one `--model` per session, and the LLM Manager path is unreachable |
+| Agent identity & per-role models | Settled — see [ADR-0010](../adr/0010-every-role-is-an-llm-agent.md). **Partly built:** `developerModel`, `managerModel` and `workerModel` are config keys editable in `/config`, each reaching its own provider call with its own reasoning level, and all three persisted per session. **Not built:** no CLI flag (an embedder's `useMasterLlm` is the only way to set the opt-in), no attribution — `AgentState` records no model, so a result cannot be traced to the one that produced it — and an unset role model falls back to the session default rather than refusing, which is ADR-0010's open question. The LLM Manager path is reachable: setting a `managerModel` enables it |
 | Criterion tiers | Settled — see [ADR-0011](../adr/0011-tiered-success-criteria.md); **not implemented** — the validator still requires a `proves-change` command on every task |
-| Parallelism ceiling | Fixed constant only. `adaptiveConcurrency`, `maxCpuUsage`, `maxMemoryUsage` and `minConcurrentWorkers` are declared in config and **read by nothing** |
+| Parallelism ceiling | Fixed constant only. `adaptiveConcurrency`, `maxCpuUsage`, `maxMemoryUsage` and `minConcurrentWorkers` are declared in `packages/sandbox/src/resources.ts` and **read by nothing** |
 | Worker crash containment | Built — per-task Worker pool, locks released in `finally`; documented in [ADR-0011](../adr/0011-tiered-success-criteria.md) |
-| Manager inspection | **Not implemented** — the Manager receives a boolean from validation exit codes; no `rejected` state exists |
+| Manager inspection | Settled — see [ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md) (mechanical ladder, LLM verdict, bounded review rounds, Worker killed at verdict); **not implemented** — the Manager receives a boolean from validation exit codes; no `rejected` state exists |
+| Peer awareness | Settled — see [ADR-0014](../adr/0014-peer-aware-workers-and-access-requests.md); **not implemented** |
+| Access requests | Settled — see [ADR-0014](../adr/0014-peer-aware-workers-and-access-requests.md); **not implemented** |
 | Runtime | Not started |
 | LLM provider (shipped CLI) | Settled — OpenCode Zen only, see [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md); a second provider is planned |
 | API key configuration (shipped CLI) | Implemented; **not tested end to end** — see [Before a Release](#before-a-release) |
@@ -57,10 +60,15 @@ Decisions are recorded once, as ADRs, and are not restated here.
 | [ADR-0003](../adr/0003-task-scoped-permissions.md) | Worker permissions are scoped to the assigned task |
 | [ADR-0004](../adr/0004-manager-inspects-never-repairs.md) | The Manager inspects and escalates, never repairs |
 | [ADR-0005](../adr/0005-predefined-parallel-order.md) | Parallel order is predefined by the Developer, not derived at runtime |
-| [ADR-0006](../adr/0006-phase-one-is-mandatory.md) | Every submission opens with a mandatory Phase One of stubs and failing tests |
+| [ADR-0006](../adr/0006-phase-one-is-mandatory.md) | Every submission opens with a mandatory Phase One of stubs and failing tests (superseded by ADR-0012) |
 | [ADR-0007](../adr/0007-test-verdict-contract.md) | Mechanical verdicts with expectation inversion, not a boolean |
 | [ADR-0008](../adr/0008-mutation-as-criterion.md) | Mutation scoring is a first-class criterion |
 | [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md) | OpenCode Zen is the only LLM provider; one `OPENCODE_API_KEY` at `0600` |
+| [ADR-0010](../adr/0010-every-role-is-an-llm-agent.md) | Developer, Manager and Worker are all LLM agents, each with its own model |
+| [ADR-0011](../adr/0011-tiered-success-criteria.md) | Success criteria are tiered — behavioural, structural, review — and the mechanical floor is never dropped |
+| [ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md) | A verification ladder replaces Phase One |
+| [ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md) | The Manager verifies, reviews with bounded rounds, and kills every Worker at its verdict |
+| [ADR-0014](../adr/0014-peer-aware-workers-and-access-requests.md) | Workers are peer-aware through the Manager and may request more access |
 
 ## Open Questions
 
@@ -88,7 +96,6 @@ Grouped by where they are documented:
 
 - Worker provisioning: on demand or pooled.
 - What context a Worker loads.
-- Worker reuse across tasks.
 - Failure and timeout handling.
 - Are Developer and Manager singletons?
 
@@ -97,8 +104,6 @@ Grouped by where they are documented:
 - Whether the parallelism limit is per submission or a deployment-level cap. Currently assumed per submission.
 - Whether priority is a total order or only pairwise between colliding tasks. Currently assumed pairwise.
 - Whether the Manager should report a poorly grouped plan back to the Developer as a suggestion.
-- Whether Phase One should be exemptible for trivial work. Currently assumed mandatory with no exemption. The [testing system](../testing/README.md) is what would produce the data to set a threshold.
-- Whether the Manager should surface a suspiciously passing Phase One test to the Developer.
 - Diagrams for blocked-task handling.
 
 **Testing** — [Testing open questions](../testing/README.md#open-questions)
@@ -146,7 +151,7 @@ Owed by the shipped `vajra` CLI, independent of the harness work above.
 Not committed. Recorded so the reasoning is not lost.
 
 - **Task bundling** — if per-task Worker provisioning proves too slow to be practical, allowing a Worker to hold a short queue of tasks would trade away the clean single-task attribution in exchange for throughput. Would need an ADR.
-- **Worker peer review** — a Worker inspecting another Worker's output would strengthen the independence argument, but reintroduces lateral communication, which the hub topology currently forbids.
+- **Worker peer review** — a Worker inspecting another Worker's output would strengthen the independence argument. Workers are now peer-aware through the Manager ([ADR-0014](../adr/0014-peer-aware-workers-and-access-requests.md)): they can read other tasks' status, owned files and handoffs. Review would still need lateral messaging between Workers, which the hub topology still forbids.
 - **Human-in-the-loop gating** — requiring Human approval before a Worker writes anything, at least for high-risk paths. The model already routes all Human interaction through the Developer, so this is a policy question rather than an architectural one.
 - **Reusing inspection findings** — if the same failure recurs across tasks, feeding prior inspection results back to the Developer could improve task definition. Depends on audit log retention.
 
