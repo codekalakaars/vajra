@@ -74,17 +74,19 @@ tests, and its own commit.**
 | R9 | Make `service.ts` a host that composes the runtime | R | L6 |
 | R10 | Delete `agent-core`, `agent-process` after re-export shims | R | L7 |
 | **C1** | **Enforce the role allowlist at dispatch** (`allowedTools` is `undefined` today) | **C** | L3, after a decision |
-| **C2** | **Read leases for declared inputs** (every acquisition is `'write'` today, so two tasks reading one file are serialised) | **C** | L4 |
+| **C2** | **Read leases for declared inputs** (every acquisition is `'write'` today, so two tasks reading one file are serialised) | **C** | deferred |
 | **C3** | **Give the Worker the same argument validation as the Developer** (`parseToolCall`; the Worker forwards raw model JSON to the tool executor) | **C** | L1 |
 | **C4** | **Remove `useMasterLlm` / `masterDecide`** (the plan says remove; `managerModel` is a user-reachable config key, so removing it is a behaviour change) | **C** | L4, after a decision |
 | **C5** | **Drop `run_command` from the Manager's catalog** | **C** | L2, after a decision |
 | **C6** | **Manager inspection profile** — the plan calls this "new behaviour"; it is the whole of ADR-0004 and Tier 3 of ADR-0011, and it does not exist today | **C** | L2, behind a flag |
-| **C7** | **Project-level session lock** (boundary 4; refuses a second session on one checkout) | **C** | L4 |
+| **C7** | **Project-level session lock** (boundary 4; refuses a second session on one checkout) | **C** | deferred |
 | **C8** | `AgentInstance` records role + model (ADR-0010 requires attribution; `AgentState` has no `model` field) | **C** (additive) | L6 |
 
 The R items are what make the migration safe to parallelize: each is provable by
 the replay harness from S1. The C items are where a wrong guess is expensive, so
 each is fenced behind §8.
+
+**C2 and C7 are deferred** (2026-09-29): both are correctness and concurrency improvements rather than capability, and both were the only risky work in their lane. The read path they would switch on already exists and is tested with zero production callers, so the deferral costs nothing that is currently broken.
 
 **C1 deserves its own emphasis.** The plan's completion criterion "role tools are
 allowlists, not permissions" and boundary 2 are security properties, and today
@@ -231,23 +233,37 @@ changes here, stop and report rather than adjusting the fixture.
 
 ## 5. The parallel lanes
 
-After S4, six lanes run concurrently. They are disjoint by construction (§6).
+After S4, lanes run concurrently. They are disjoint by construction (§6).
 Each is one branch, one PR, and each is green on its own.
+
+> **Revised 2026-09-29 after ADRs 0012–0014 landed.** The lane list below is the
+> first cut. Two changes matter: the **verification ladder is a new, unassigned
+> dependency** — ADR-0013's Manager review consumes ladder verdicts, and the
+> ladder is not implemented — and L4's read leases and session lock are
+> **deferred**, because they are quality rather than capability and were that
+> lane's only risky work. The wave organisation, the ladder lanes and the
+> deferrals are in [AGENT_RUNTIME_MIGRATION_PROMPTS.md](AGENT_RUNTIME_MIGRATION_PROMPTS.md),
+> which supersedes §5 and §7 of this document. This section is kept for the R/C
+> classification, which still holds.
 
 | Lane | Goal | Blocked by | Class |
 |---|---|---|---|
 | **L1** | Worker → profile. `roles/worker/`, `execute.ts`, `tasks/server.ts`, `tasks/skip.ts`, the default `Verifier`. Plus **C3** (Worker argument validation). | S4 | R (+C3) |
-| **L2** | Manager inspection profile: **C6** behind a flag, judging Tier 3 criteria per ADR-0011. Plus **C5** if approved. | S4 | C |
+| **L2** | Manager inspection profile: **C6** behind a flag, judging Tier 3 criteria per ADR-0011. Plus **C5** if approved. | S4, **ladder** | C |
 | **L3** | Tools consolidation: move `roleTools` to `agent/tools` (R4); one dispatch chokepoint; remove the dead role lookup from `sandbox/tool-rules.ts` keeping its role-independent checks. Plus **C1** if approved. | S3 | R (+C1) |
-| **L4** | Coordination: move `masterLoop`, `decideFailure`, `TaskQueue`, `FileLockManager`, `ChangeHistory` (R2, R3). Then **C2** read leases and **C7** the session lock. Plus **C4** if approved. | S3 | R (+C2, C4, C7) |
+| **L4** | Coordination: move `masterLoop`, `decideFailure`, `TaskQueue`, `FileLockManager`, `ChangeHistory` (R2, R3). | S3 | R |
 | **L5** | Isolation relocation: `git mv packages/agent-process/src/*` → `packages/agent/src/isolation/`, shim, delete the package (R1, R10-part). | S2 | R |
 | **L6** | CLI becomes a host: rewrite `service.ts` to compose the runtime, supply per-role models, credentials, storage and event sinks. Add **C8** attribution. | L1–L5 | R (+C8) |
+| **LADDER-A** | The verification ladder's types, sequential executor and verdict contract, in new files, wired to nothing. **New.** | — | R |
+| **LADDER-B** | Wire the ladder into the `propose_plan` schema, the Worker's `Verifier` and `TaskQueue`, behind a flag. **New.** | LADDER-A, L1, L3, L4 | C |
+| **L7** | Delete what is now empty (`agent-core`, `agent-process`), update the docs, and make the package map true. | L1–L6 | R |
 
-Then, after L6 merges: **L7 — delete what is now empty** (`agent-core`,
-`agent-process`, the moved code in `sandbox` and `protocol`, the two
-`cli/src/agent/*.ts` re-export shims), update the root README and the
-architecture docs, and re-check the plan's completion criteria. L7 is serial and
-last by definition.
+**Why the ladder is two lanes.** Its four integration points belong to other
+lanes: the `propose_plan` schema is L3's, the validation runner is L1's,
+`TaskQueue` is L4's, and `packages/tester` has no owner until D5 is decided. A
+builds the seam; B integrates it. Without the split, four agents would be editing
+four files they do not own.
+
 
 **One file, one owner, ever.** `master.ts` is the interesting case: L2 (the
 inspection agent) and L4 (the scheduler move) both want it. Resolution: **A8 owns
@@ -292,6 +308,8 @@ not edit. This is the whole conflict-avoidance mechanism.
 | `packages/agent/src/coordination/**`, `packages/sandbox/src/{file-locks,change-history}.ts`, `packages/cli/src/agent/{master,taskqueue}.ts`, `packages/cli/src/agent/registry.ts` | A8 (L4) | `master.ts` sole ownership |
 | `packages/agent/src/isolation/**`, `packages/agent-process/**` | A9 (L5) | relocation; A9 also deletes `agent-process` |
 | `packages/cli/src/session/service.ts`, `src/persist/**`, `src/config.ts` | A10 (L6) | the integration point; **nobody else, ever, after S4** |
+| `packages/agent/src/coordination/ladder.ts` + the ladder's contract | A12 (LADDER-A) | new files only; integration is LADDER-B's |
+| `packages/protocol/src/tools.ts` (after L3 merges), `packages/cli/src/agent/taskqueue.ts` (after L4 merges) | A13 (LADDER-B) | inherits those files from L3 and L4 |
 | `packages/agent-core/**` (deletion), `docs/**`, root `README.md` | A11 (L7) | last |
 
 `packages/cli/src/tui/**` and `packages/tui/**` are nobody's: this migration must
@@ -302,9 +320,16 @@ not touch presentation, per boundary 9.
 ## 7. The merge protocol
 
 1. One branch per lane: `refactor/agent-s0-gate`, `refactor/agent-l3-tools`, …
-2. Merged in dependency order, not completion order:
-   **S0 → S1 → S2 → S3 → S4 → {L3, L5} → {L2, L4} → L1 → L6 → L7.**
-   L5 is pure relocation and can go early. L6 is last because it integrates.
+2. Merged in dependency order, not completion order. The spine is fixed;
+   the lane order is maintained in
+   [AGENT_RUNTIME_MIGRATION_PROMPTS.md](AGENT_RUNTIME_MIGRATION_PROMPTS.md), which
+   supersedes the list below after the 2026-09-29 revision that added the ladder
+   lanes and deferred C2 and C7:
+
+   **S0 → S1 → S2 → S3 → S4 → {L3, L5, L4-move} → {L1, LADDER-A} → {LADDER-B, L2} → L6 → L7.**
+
+   L5 is pure relocation and can go early. L6 is last because it integrates, and
+   because it is the only lane that touches `service.ts`.
 3. Each PR must state, in the description: the class (R or C) of every item it
    contains, the gate command output, and — for C items — the decision that
    authorised it.
@@ -330,6 +355,7 @@ the answer is in the PR description.
 | D5 | What happens to `packages/tester`? | L7 | 36 source files, 222 passing tests, zero dependents. Delete, absorb into the Worker's `Verifier`, or leave orphaned. |
 | D6 | Cross-session leases, or refuse the second session? | L4 | Boundary 4 refuses a second session on one checkout. Cross-session is explicitly deferred. Confirm the refusal is the first version. |
 | D7 | An unset role model: refuse to start the role, or fall back? | L6 | ADR-0010 leaves it open; the plan says refuse. The host owns the defaults, so this is a host decision. |
+| **D8** | **Remove `write_stub` and `delete_stub`?** | L3, L7 | ADR-0012 removes Phase One, so the Developer no longer authors stubs — but they are still in `code`, in `roleTools`, in the Developer's evidence ledger, and in four of the developer tests. Removing them is a **capability change a user can see**, not a catalog edit. L3 is explicitly told not to do it. |
 
 ---
 
