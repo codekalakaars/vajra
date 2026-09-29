@@ -5,15 +5,9 @@ import { streamChatCompletion, type ChatMessage, type ToolCall } from '../agent/
 import { getWorkerToolSpecs } from '../agent/tools.js'
 import type { ChangeHistory, FileLockManager } from '@codekalakaars/vajra-sandbox'
 import type { AgentEvent, AgentLabel, SessionStreamer } from '../session/ui.js'
+import { dispatchToolCall, loopHooks, READ_ONLY_TOOLS } from '../agent/runtime-host.js'
 import { startHeartbeat, summarizeToolCall, summarizeToolResult } from '../session/ui.js'
 import { allocateServerPort, findServerEntry, needsServer, probeServerPort, substituteServerPort } from './server.js'
-
-/**
- * Tools that only observe. These may run concurrently within one assistant
- * message; anything that writes keeps the model's original order, because a
- * later mutation may depend on an earlier one.
- */
-const READ_ONLY_TOOLS = new Set(['read_file', 'list_files', 'search_files', 'search_content'])
 
 export interface ExecuteTaskInput {  agentId: string
   task: {
@@ -235,50 +229,20 @@ export async function executeTask(
       /**
        * Run one tool call end to end: announce, execute, announce the result.
        * The caller decides whether calls like this one may overlap.
+       *
+       * The sequence is the engine's, because the Developer's was the same
+       * code with the same comment; what stays here is the part that is the
+       * Worker's alone — which calls may overlap, and the budget charged
+       * before one is announced.
        */
       const runToolCall = async (toolCall: ToolCall): Promise<string> => {
-        const callStarted = Date.now()
-        const toolName = toolCall.function.name
-        let args: unknown = undefined
-        try {
-          args = JSON.parse(toolCall.function.arguments)
-        } catch {
-          args = undefined
-        }
-        emit({
-          type: 'tool-start',
+        const dispatched = await dispatchToolCall({
           agent,
-          callId: toolCall.id,
-          tool: toolName,
-          summary: summarizeToolCall(toolName, args, projectDir),
+          call: toolCall,
+          executor: { callTool: (tool: string, args: unknown) => handle.callTool(tool, args) },
+          ...loopHooks(projectDir, emit),
         })
-
-        let resultContent: string
-        let rawResult: unknown
-        // A tool call can block for minutes; keep the row moving meanwhile.
-        const stopHeartbeat = startHeartbeat(emit, agent)
-        try {
-          const result = await handle.callTool(toolName, args)
-          resultContent = typeof result === 'string' ? result : JSON.stringify(result)
-          rawResult = result
-        } catch (e) {
-          resultContent = `Error: ${e instanceof Error ? e.message : String(e)}`
-          rawResult = resultContent
-        } finally {
-          stopHeartbeat()
-        }
-
-        const outcome = summarizeToolResult(toolName, args, rawResult, Date.now() - callStarted)
-        emit({
-          type: 'tool-end',
-          agent,
-          callId: toolCall.id,
-          tool: toolName,
-          ok: outcome.ok,
-          ms: Date.now() - callStarted,
-          detail: outcome.detail,
-        })
-        return resultContent
+        return dispatched.content
       }
 
       const toolCalls = result.message.tool_calls

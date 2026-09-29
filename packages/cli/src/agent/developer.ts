@@ -36,15 +36,16 @@ import {
   summarizeToolResult,
   type AgentEvent,
 } from '../session/ui.js'
+import { dispatchToolCall, loopHooks, READ_ONLY_TOOLS } from './runtime-host.js'
+import { createDeveloperProfile } from '@codekalakaars/vajra-agent/roles/developer'
 
-const FREE_TOOLS = new Set(['search_files'])
 
 /**
  * Tools that only observe. These may run concurrently within one assistant
  * message; anything that writes keeps the model's original order, because a
  * later mutation can depend on an earlier one.
  */
-const READ_ONLY_TOOLS = new Set(['read_file', 'list_files', 'search_files', 'search_content'])
+
 
 /**
  * A confined agent, as the Developer consumes it.
@@ -958,79 +959,85 @@ export async function developerConversationTurn(
    * append as its result. Read-only calls arrive pre-computed from
    * `runReadOnlyCalls` and never reach here.
    */
+  /**
+   * What a tool call proves.
+   *
+   * The Developer's plan is only as good as what it actually looked at, so a
+   * read, a stub it wrote, a stub it deleted, and a baseline it measured all
+   * update the ledger the plan validator checks against. This used to be inlined
+   * in the tool executor; it lives here so the engine can own the dispatch
+   * sequence without owning the role's evidence rules.
+   */
+  const recordEvidence = (tool: string, args: unknown, result: unknown): void => {
+    if (tool === 'read_file' && typeof result === 'string') {
+      const readArgs = args as { path?: unknown }
+      if (typeof readArgs.path === 'string') filesRead.set(readArgs.path, result)
+    } else if (tool === 'write_stub') {
+      // A stub the Developer just wrote is evidence, not just a side effect.
+      // Without this the plan could not `modify` its own stub — it would be told
+      // it never read the file — even though the Developer authored every byte of
+      // it. It also means `op: 'create'` on that path is correctly refused,
+      // because the file now genuinely exists.
+      const stubArgs = args as { path?: unknown; content?: unknown }
+      if (typeof stubArgs.path === 'string' && typeof stubArgs.content === 'string') {
+        filesRead.set(stubArgs.path, stubArgs.content)
+      }
+    } else if (tool === 'delete_stub') {
+      // The stub is gone, so it must stop counting as available: a plan that
+      // still cited it would be validated against a file that no longer exists.
+      const stubArgs = args as { path?: unknown }
+      if (typeof stubArgs.path === 'string') filesRead.delete(stubArgs.path)
+    } else if (tool === 'run_baseline' && typeof result === 'string') {
+      recordBaseline(result, args)
+    }
+  }
+
   const runToolCall = async (toolCall: ToolCall, callStarted: number): Promise<string> => {
     const toolName = toolCall.function.name
     const parsed = parseToolCall(toolCall)
-    let resultContent: string
-    let rawResult: unknown = undefined
-
     if (!parsed.ok) {
-      resultContent = `Error: ${parsed.error}`
       emitToolEnd(toolCall.id, toolName, false, callStarted, 'bad arguments')
-      return resultContent
+      return `Error: ${parsed.error}`
     }
 
     if (parsed.call.tool === ('search_files' as ToolName)) {
+      // Answered from the staged index rather than the handle: only the
+      // Developer holds one, and re-reading files the summary already describes
+      // would spend a tool call to learn the same thing.
       const args = parsed.call.args as { query: string }
-      resultContent = searchSummary(summaryIndex, args.query)
-      rawResult = resultContent
-    } else {
-      // A tool call can block for minutes (run_command has a 30s+ timeout).
-      // chat.ts heartbeats provider round-trips; this covers the tool itself,
-      // otherwise the screen is still for exactly as long as the call.
-      const stopHeartbeat = startHeartbeat(emit, agent)
-      try {
-        const result = await handle.callTool(parsed.call.tool, parsed.call.args)
-        resultContent = typeof result === 'string' ? result : JSON.stringify(result)
-        rawResult = result
-        if (parsed.call.tool === 'read_file' && typeof result === 'string') {
-          const readArgs = parsed.call.args as { path?: unknown }
-          if (typeof readArgs.path === 'string') {
-            filesRead.set(readArgs.path, result)
-          }
-        } else if (parsed.call.tool === 'write_stub') {
-          // A stub the Developer just wrote is evidence, not just a side effect.
-          // Without this the plan could not `modify` its own stub — it would be
-          // told it never read the file — even though the Developer authored
-          // every byte of it. It also means `op: 'create'` on that path is
-          // correctly refused, because the file now genuinely exists.
-          const stubArgs = parsed.call.args as { path?: unknown; content?: unknown }
-          if (typeof stubArgs.path === 'string' && typeof stubArgs.content === 'string') {
-            filesRead.set(stubArgs.path, stubArgs.content)
-          }
-        } else if (parsed.call.tool === 'delete_stub') {
-          // The stub is gone, so it must stop counting as available: a plan that
-          // still cited it would be validated against a file that no longer
-          // exists.
-          const stubArgs = parsed.call.args as { path?: unknown }
-          if (typeof stubArgs.path === 'string') filesRead.delete(stubArgs.path)
-        } else if (parsed.call.tool === 'run_baseline' && typeof result === 'string') {
-          recordBaseline(result, parsed.call.args)
-        }
-      } catch (e) {
-        resultContent = `Error: ${e instanceof Error ? e.message : String(e)}`
-        rawResult = resultContent
-      } finally {
-        stopHeartbeat()
-      }
+      const content = searchSummary(summaryIndex, args.query)
+      const outcome = summarizeToolResult('search_files', parsed.call.args, content, Date.now() - callStarted)
+      emit({
+        type: 'tool-end',
+        agent,
+        callId: toolCall.id,
+        tool: 'search_files',
+        ok: outcome.ok,
+        ms: Date.now() - callStarted,
+        detail: outcome.detail,
+      })
+      return content
     }
 
-    const outcome = summarizeToolResult(
-      parsed.call.tool,
-      parsed.call.args,
-      rawResult,
-      Date.now() - callStarted,
-    )
-    emit({
-      type: 'tool-end',
+    // The engine owns the sequence from here: heartbeat, call, coerce, report.
+    // `announceStart: false` because the caller announced this call already,
+    // before the budget check — so a call the budget refuses is still reported.
+    const dispatched = await dispatchToolCall({
       agent,
-      callId: toolCall.id,
-      tool: parsed.call.tool,
-      ok: outcome.ok,
-      ms: Date.now() - callStarted,
-      detail: outcome.detail,
+      call: toolCall,
+      announceStart: false,
+      // The evidence side effects ride on the executor rather than wrapping the
+      // engine, so a call the engine reports is the same call the ledger saw.
+      executor: {
+        callTool: async (tool: string, args: unknown) => {
+          const result = await handle.callTool(parsed.call.tool, parsed.call.args)
+          recordEvidence(parsed.call.tool, args, result)
+          return result
+        },
+      },
+      ...loopHooks(projectDir, emit),
     })
-    return resultContent
+    return dispatched.content
   }
 
   // Evidence ledger (§4): harness-collected observations for planning. The
@@ -1067,24 +1074,39 @@ export async function developerConversationTurn(
     }
   }
 
+  // The context the profile's `buildContext` hands back. Built only for a first
+  // turn: a continuing conversation already carries the system message and must
+  // not re-scan the project.
+  let builtContext: ReturnType<typeof buildInitialPromptContext> | undefined
+
   if (messages.length === 0) {
     emit({ type: 'phase', agent, phase: 'indexing' })
-    const { tree, summaryText } = buildInitialPromptContext(projectDir, summaryIndex, model)
+    builtContext = buildInitialPromptContext(projectDir, summaryIndex, model)
     messages.push({
       role: 'system',
-      content: buildDeveloperConversationPrompt(projectDir, tree, summaryText),
+      content: buildDeveloperConversationPrompt(projectDir, builtContext.tree, builtContext.summaryText),
     })
   }
 
   messages.push({ role: 'user', content: userMessage })
 
+  // The profile owns what this role may call and what a run may cost. The
+  // numbers were literals here, and the tool catalog came from a helper three
+  // packages away; a role whose policy is stated once is a role whose policy
+  // can be read.
+  const profile = createDeveloperProfile({
+    buildContext: async () => builtContext ?? buildInitialPromptContext(projectDir, summaryIndex, model),
+    systemPrompt: context => buildDeveloperConversationPrompt(projectDir, context.tree, context.summaryText),
+    searchSummary: (index, query) => searchSummary(index as never, query),
+  })
   const toolSpecs = getDeveloperToolSpecs()
   let toolCallCount = 0
-  const MAX_TOOL_CALLS = 30
+  const MAX_TOOL_CALLS = profile.budget?.maxToolCalls ?? 30
   // E4: wall-clock + total iteration bounds. Free tools count toward total
   // iterations (they can still run forever) but not toward the tool budget.
-  const MAX_WALL_MS = 5 * 60 * 1000
-  const MAX_TOTAL_ITERATIONS = 60
+  const MAX_WALL_MS = profile.budget?.maxWallMs ?? 5 * 60 * 1000
+  const MAX_TOTAL_ITERATIONS = profile.budget?.maxIterations ?? 60
+  const freeTools = new Set(profile.budget?.freeTools ?? ['search_files'])
   const startedAt = Date.now()
   let totalIterations = 0
   emit({ type: 'phase', agent, phase: 'planning' })
@@ -1296,7 +1318,7 @@ export async function developerConversationTurn(
         continue
       }
 
-      const isFree = FREE_TOOLS.has(toolCall.function.name)
+      const isFree = freeTools.has(toolCall.function.name)
       if (!isFree) {
         toolCallCount++
       }

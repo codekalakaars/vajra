@@ -29,6 +29,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@codekalakaars/vajra-agent": "workspace:*",
     "@codekalakaars/vajra-agent-core": "workspace:*",
     "@codekalakaars/vajra-agent-process": "workspace:*",
     "@codekalakaars/vajra-core": "workspace:*",

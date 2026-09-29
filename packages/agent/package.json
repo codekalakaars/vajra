@@ -1,0 +1,73 @@
+{
+  "name": "@codekalakaars/vajra-agent",
+  "version": "0.0.1",
+  "description": "One runtime for every Vajra agent role: the shared model/tool loop, role profiles, tool policy, coordination and isolation",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/codekalakaars/vajra.git"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "default": "./dist/contracts/index.js"
+    },
+    "./engine": {
+      "types": "./dist/engine/index.d.ts",
+      "default": "./dist/engine/index.js"
+    },
+    "./providers": {
+      "types": "./dist/providers/index.d.ts",
+      "default": "./dist/providers/index.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "default": "./dist/tools/index.js"
+    },
+    "./coordination": {
+      "types": "./dist/coordination/index.d.ts",
+      "default": "./dist/coordination/index.js"
+    },
+    "./isolation": {
+      "types": "./dist/isolation/index.d.ts",
+      "default": "./dist/isolation/index.js"
+    },
+    "./roles/developer": {
+      "types": "./dist/roles/developer/index.d.ts",
+      "default": "./dist/roles/developer/index.js"
+    },
+    "./roles/manager": {
+      "types": "./dist/roles/manager/index.d.ts",
+      "default": "./dist/roles/manager/index.js"
+    },
+    "./roles/worker": {
+      "types": "./dist/roles/worker/index.d.ts",
+      "default": "./dist/roles/worker/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"test/**/*.test.mjs\""
+  },
+  "dependencies": {
+    "@codekalakaars/vajra-protocol": "workspace:*",
+    "@codekalakaars/vajra-sandbox": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.4",
+    "typescript": "^5.3.0"
+  }
+}
