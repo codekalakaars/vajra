@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 
+import { scriptedProvider, noopStreamer } from './_provider.mjs'
+
 const executeUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'tasks', 'execute.js')).href
 const developerUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'agent', 'developer.js')).href
 const { executeTask } = await import(executeUrl)
@@ -18,70 +20,6 @@ function tempProject(prefix) {
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms))
-}
-
-/** A provider stub that returns a scripted list of tool-call messages. */
-function scriptedProvider(script) {
-  const realFetch = globalThis.fetch
-  const state = { turn: 0 }
-  const encoder = new TextEncoder()
-  globalThis.fetch = async () => {
-    const calls = script[Math.min(state.turn, script.length - 1)]
-    state.turn++
-    const body = new ReadableStream({
-      start(controller) {
-        // Distinct `index` per call: the SDK assembles streamed tool calls by
-        // index, so reusing 0 would merge them into one.
-        calls.forEach((call, i) => {
-          const chunk = {
-            id: 's',
-            object: 'chat.completion.chunk',
-            created: 0,
-            model: 'm',
-            choices: [
-              {
-                index: 0,
-                delta: {
-                  role: 'assistant',
-                  content: null,
-                  tool_calls: [
-                    {
-                      index: i,
-                      id: call.id,
-                      type: 'function',
-                      function: { name: call.name, arguments: JSON.stringify(call.args ?? {}) },
-                    },
-                  ],
-                },
-                finish_reason: null,
-              },
-            ],
-          }
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`))
-        })
-        controller.enqueue(encoder.encode('data: [DONE]\n\n'))
-        controller.close()
-      },
-    })
-    return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
-  }
-  return {
-    restore: () => {
-      globalThis.fetch = realFetch
-    },
-  }
-}
-
-const noopStreamer = {
-  onTextDelta() {},
-  onThinkingDelta() {},
-  finishLine() {},
-  discardBuffer() {},
-  info() {},
-  success() {},
-  error() {},
-  warning() {},
-  newline() {},
 }
 
 const TASK = {
@@ -124,8 +62,8 @@ test('the worker runs one message of read_file calls concurrently', async t => {
 
   const log = { calls: [], active: 0, maxActive: 0 }
   const provider = scriptedProvider([
-    TASK.readFile.map((path, i) => ({ id: `r${i}`, name: 'read_file', args: { path } })),
-    [],
+    { toolCalls: TASK.readFile.map((path, i) => ({ id: `r${i}`, name: 'read_file', args: { path } })) },
+  {},
   ])
   t.after(() => provider.restore())
 
@@ -136,7 +74,7 @@ test('the worker runs one message of read_file calls concurrently', async t => {
     slowHandle(TASK.readFile, log),
     'sk-test',
     'zen/test-model',
-    noopStreamer,
+    noopStreamer(),
     null,
     null,
     null,
@@ -160,14 +98,14 @@ test('tool results are appended in the model order, not completion order', async
 
   const log = { calls: [], active: 0, maxActive: 0 }
   const provider = scriptedProvider([
-    TASK.readFile.map((path, i) => ({ id: `r${i}`, name: 'read_file', args: { path } })),
-    [],
+    { toolCalls: TASK.readFile.map((path, i) => ({ id: `r${i}`, name: 'read_file', args: { path } })) },
+  {},
   ])
   t.after(() => provider.restore())
 
   // Capture the messages the worker assembles.
   const seen = []
-  const streamer = { ...noopStreamer }
+  const streamer = noopStreamer()
   const handle = slowHandle(TASK.readFile, log)
   const originalCall = handle.callTool.bind(handle)
   handle.callTool = async (name, args) => {
@@ -202,12 +140,12 @@ test('mutating tools keep their original order', async t => {
   const order = []
   const log = { calls: [], active: 0, maxActive: 0 }
   const provider = scriptedProvider([
-    [
+    { toolCalls: [
       { id: 'w1', name: 'write_file', args: { path: 'one.txt', content: '1' } },
       { id: 'w2', name: 'write_file', args: { path: 'two.txt', content: '2' } },
       { id: 'w3', name: 'write_file', args: { path: 'three.txt', content: '3' } },
-    ],
-    [],
+] },
+    {},
   ])
   t.after(() => provider.restore())
 
@@ -225,7 +163,7 @@ test('mutating tools keep their original order', async t => {
     handle,
     'sk-test',
     'zen/test-model',
-    noopStreamer,
+    noopStreamer(),
     null,
     null,
     null,
@@ -242,12 +180,12 @@ test('a mutating call is not overlapped with a read in the same message', async 
 
   const log = { calls: [], active: 0, maxActive: 0 }
   const provider = scriptedProvider([
-    [
+    { toolCalls: [
       { id: 'r1', name: 'read_file', args: { path: 'a.txt' } },
       { id: 'r2', name: 'read_file', args: { path: 'b.txt' } },
       { id: 'w1', name: 'write_file', args: { path: 'c.txt', content: 'x' } },
-    ],
-    [],
+] },
+    {},
   ])
   t.after(() => provider.restore())
 
@@ -258,7 +196,7 @@ test('a mutating call is not overlapped with a read in the same message', async 
     handle,
     'sk-test',
     'zen/test-model',
-    noopStreamer,
+    noopStreamer(),
     null,
     null,
     null,
@@ -278,12 +216,12 @@ test('the developer runs a message of reads concurrently too', async t => {
 
   const log = { calls: [], active: 0, maxActive: 0 }
   const provider = scriptedProvider([
-    [
+    { toolCalls: [
       { id: 'd1', name: 'read_file', args: { path: 'a.ts' } },
       { id: 'd2', name: 'read_file', args: { path: 'b.ts' } },
       { id: 'd3', name: 'read_file', args: { path: 'c.ts' } },
-    ],
-    [],
+] },
+    {},
   ])
   t.after(() => provider.restore())
 

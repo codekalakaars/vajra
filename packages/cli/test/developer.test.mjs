@@ -5,6 +5,10 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 
+// Static imports are hoisted, so this module — and the global fetch trampoline
+// it installs — is evaluated before the dynamic import of the code under test.
+import { stubProvider, useProvider, sseResponse, toolFinish, textChunk, stopChunk } from './_provider.mjs'
+
 /**
  * A turn spent entirely on tool calls used to print nothing at all. These drive
  * developerConversationTurn against a stubbed provider and assert the progress
@@ -17,64 +21,9 @@ const developerUrl = pathToFileURL(
 ).href
 
 // The OpenAI SDK resolves the global fetch when it loads, so the stub has to be
-// in place before developer.js is imported. `handler` is what a test swaps in.
-let handler = null
-globalThis.fetch = (...args) => handler(...args)
-
+// in place before developer.js is imported. _provider.mjs installs the
+// trampoline at its own load time, which happens first.
 const { developerConversationTurn, createEvidenceLedger, resetEvidenceLedger } = await import(developerUrl)
-
-/**
- * One SSE event per chunk. Handing the SDK the whole body as a single string
- * makes its event decoder see one malformed frame — a fake that only works by
- * luck is worse than no fake.
- */
-function sseResponse(payloads) {
-  const encoder = new TextEncoder()
-  const body = new ReadableStream({
-    async start(controller) {
-      for (const payload of payloads) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`))
-        await new Promise(resolve => setTimeout(resolve, 1))
-      }
-      controller.enqueue(encoder.encode('data: [DONE]\n\n'))
-      controller.close()
-    },
-  })
-  return new Response(body, {
-    status: 200,
-    headers: { 'content-type': 'text/event-stream' },
-  })
-}
-
-const TOOL_CALL_CHUNK = name => ({
-  choices: [
-    {
-      delta: {
-        tool_calls: [
-          {
-            index: 0,
-            id: 'call_1',
-            type: 'function',
-            function: { name, arguments: '{"path":"README.md"}' },
-          },
-        ],
-      },
-      finish_reason: null,
-    },
-  ],
-})
-const TOOL_FINISH = { choices: [{ delta: {}, finish_reason: 'tool_calls' }] }
-const TEXT_CHUNK = { choices: [{ delta: { content: 'done' }, finish_reason: null }] }
-const STOP = { choices: [{ delta: {}, finish_reason: 'stop' }] }
-
-/** Round 1 asks for a tool and says nothing; round 2 answers in prose. */
-function stubProvider(toolName = 'read_file') {
-  let round = 0
-  handler = async () =>
-    ++round === 1
-      ? sseResponse([TOOL_CALL_CHUNK(toolName), TOOL_FINISH])
-      : sseResponse([TEXT_CHUNK, STOP])
-}
 
 function makeProject() {
   const dir = mkdtempSync(join(tmpdir(), 'vajra-developer-'))
@@ -221,7 +170,7 @@ function stubPlanProposal(tasks, prelude = []) {
   const requests = []
   let round = 0
   const steps = [...prelude, { name: 'propose_plan', args: { summary: 's', tasks } }]
-  handler = async (_url, init) => {
+  useProvider(async (_url, init) => {
     requests.push(JSON.parse(init.body))
     const step = steps[round++]
     if (step) {
@@ -238,10 +187,10 @@ function stubPlanProposal(tasks, prelude = []) {
           finish_reason: null,
         }],
       }
-      return sseResponse([chunk, TOOL_FINISH])
+      return sseResponse([chunk, toolFinish])
     }
-    return sseResponse([TEXT_CHUNK, STOP])
-  }
+    return sseResponse([textChunk('done'), stopChunk])
+  })
   return requests
 }
 
@@ -330,7 +279,7 @@ test('rejections escalate: the third one tells the model to change approach', as
   // time, which is exactly the loop a stuck model falls into.
   const requests = []
   let round = 0
-  handler = async (_url, init) => {
+  useProvider(async (_url, init) => {
     requests.push(JSON.parse(init.body))
     if (++round <= 3) {
       const chunk = {
@@ -360,10 +309,10 @@ test('rejections escalate: the third one tells the model to change approach', as
           finish_reason: null,
         }],
       }
-      return sseResponse([chunk, TOOL_FINISH])
+      return sseResponse([chunk, toolFinish])
     }
-    return sseResponse([TEXT_CHUNK, STOP])
-  }
+    return sseResponse([textChunk('done'), stopChunk])
+  })
 
   await runTurn()
   const feedback = feedbackSeenBy(requests)

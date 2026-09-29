@@ -1,0 +1,54 @@
+{
+  "name": "developer-basic",
+  "note": "A representative Developer turn: read two files in one message (the read-only batch path), measure a baseline, then answer in prose. Ordered to exercise the three dispatch shapes the loop has — batch, single, and the terminal no-tool-call exit.",
+  "provenance": "authored to represent the shape of a recorded run; no provider key was available when it was written. Re-record with `node --test test/replay-developer.test.mjs --record` and an OPENCODE_API_KEY, then diff `expect` — any difference is a behaviour change, not a fixture update.",
+  "project": {
+    "files": {
+      "README.md": "# demo\n",
+      "src/app.ts": "export const answer = 42\n"
+    }
+  },
+  "rounds": [
+    {
+      "toolCalls": [
+        { "name": "read_file", "args": { "path": "README.md" } },
+        { "name": "read_file", "args": { "path": "src/app.ts" } }
+      ]
+    },
+    {
+      "toolCalls": [{ "name": "run_baseline", "args": { "command": "node", "args": ["--test"] } }]
+    },
+    { "text": "The suite does not exist yet, so I will write it first." }
+  ],
+  "answers": {
+    "read_file": "# demo\n",
+    "run_baseline": "{\"exitCode\":1,\"signal\":null,\"stdout\":\"\",\"stderr\":\"\"}"
+  },
+  "expect": {
+    "calls": [
+      { "tool": "read_file", "args": { "path": "README.md" } },
+      { "tool": "read_file", "args": { "path": "src/app.ts" } },
+      { "tool": "run_baseline", "args": { "command": "node", "args": ["--test"] } }
+    ],
+    "resultType": "response",
+    "response": "The suite does not exist yet, so I will write it first.",
+    "eventTypes": [
+      "phase",
+      "phase",
+      "llm-start",
+      "llm-end",
+      "tool-start",
+      "tool-start",
+      "tool-end",
+      "tool-end",
+      "llm-start",
+      "llm-end",
+      "tool-start",
+      "tool-end",
+      "llm-start",
+      "llm-end"
+    ],
+    "eventOrderNote": "llm-end closes the provider round the moment the stream finishes, so it precedes the tool events of that round. The batched read-only round reports both starts before both ends, because the calls are pre-computed together and replayed in the model's order afterwards.",
+    "lastAssistantContent": "The suite does not exist yet, so I will write it first."
+  }
+}

@@ -53,3 +53,16 @@ jobs:
 
       - name: Node smoke tests
         run: pnpm test
+
+      # Everything above this line is the Rust/napi gate. The TypeScript
+      # packages have their own suites and none of them ran here, which meant a
+      # refactor of the agent runtime could merge with every test red.
+      #
+      # build:all must precede test:all: turbo does not make a package's own
+      # `build` a prerequisite of its own `test`, and every test in this repo
+      # imports dist/ rather than src/, so a stale dist/ is a false green.
+      - name: Build TypeScript packages
+        run: pnpm build:all
+
+      - name: TypeScript tests
+        run: pnpm test:all
