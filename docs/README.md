@@ -18,12 +18,14 @@ This directory contains the complete documentation for the Vajra AI Agent Harnes
 
 | Role | Description | Agent | Model |
 |------|-------------|:-----:|:-----:|
-| Human | The end user who interacts with the system. | No | — |
-| Developer | The only entity allowed to create tasks. | Yes | Independent |
-| Manager | Orchestrates and supervises workers. | Yes | Independent |
-| Worker | Executes one task at a time. | Yes | Independent |
+| Human | The end user. Talks only to the Developer and approves every plan and final result. | No | — |
+| Developer | The only entity allowed to create tasks. Acts on the Human's conversation and approval. | Yes | Independent |
+| Manager | Schedules and supervises Workers, runs the verification ladder, reviews results, and kills each Worker at its verdict. | Yes | Independent |
+| Worker | Executes one task at a time. Sees its peers through the Manager and may request more access. | Yes | Independent |
 
 Developer, Manager and Worker are all **LLM-backed agents**, and each is configured with **its own model** — the three roles want different things from a model, and a run is not described by a single model id. The Human holds a role but is not an agent. A model grants no authority: it changes how well a role performs, never what it may do. See [Every Role Is an LLM Agent](specifications/agent-spec.md#every-role-is-an-llm-agent) and [ADR-0010](adr/0010-every-role-is-an-llm-agent.md).
+
+The Manager has a mechanical part (deterministic code: scheduling, permissions, file ownership, the verification ladder) and an LLM part (the Manager agent: verdicts and access requests). See [ADR-0012](adr/0012-verification-ladder-replaces-phase-one.md), [ADR-0013](adr/0013-manager-verifies-reviews-and-retires-workers.md) and [ADR-0014](adr/0014-peer-aware-workers-and-access-requests.md).
 
 ## Documentation Map
 

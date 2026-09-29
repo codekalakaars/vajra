@@ -92,7 +92,7 @@ declarative spec ─▶ generate a test file using the project's own test framew
 
 **The critical consequence: a new framework does not need a new runner.** It needs a generator that emits the test file, because the framework's own harness already knows how to render, query and assert. Driving `@testing-library/react` from outside would mean reimplementing a renderer, which is absurd when the package is already a dependency.
 
-Both mechanisms end at the same place — `RawTestOutcome[]` — so verdicts, Phase One inversion, attribution, caching and flake detection are identical for all fourteen surfaces.
+Both mechanisms end at the same place — `RawTestOutcome[]` — so verdicts, expectation inversion, attribution, caching and flake detection are identical for all fourteen surfaces, on whichever rung of the [verification ladder](README.md#the-verification-ladder) runs them.
 
 ### What does not reduce
 

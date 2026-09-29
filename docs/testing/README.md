@@ -7,7 +7,7 @@ This document is the plan for the testing system — the subsystem that lets Vaj
 ## Table of Contents
 
 - [The Problem](#the-problem)
-- [What Phase One Does to Testing](#what-phase-one-does-to-testing)
+- [The Verification Ladder](#the-verification-ladder)
 - [Language Agnosticism](#language-agnosticism)
 - [Testing APIs Directly](#testing-apis-directly)
 - [Language Support](#language-support)
@@ -30,38 +30,57 @@ This document is the plan for the testing system — the subsystem that lets Vaj
 
 ## The Problem
 
-Vajra's task model is deliberately fine-grained. [ADR-0006](../adr/0006-phase-one-is-mandatory.md) means every submission manufactures stub files and failing tests before any implementation is written. A modest piece of work might create eight tasks; a large one, hundreds.
+Vajra's task model is deliberately fine-grained, and every task is verified mechanically by a [verification ladder](#the-verification-ladder) before the Manager agent gives its verdict ([ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md), [ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md)). A modest piece of work might create a handful of tasks; a large one, hundreds.
 
 That produces a testing system with an unusual shape:
 
 | Naive assumption | What Vajra actually does |
 |---|---|
-| Tests pass or fail | Tests are *manufactured* in a failing state, on purpose |
+| Tests pass or fail | A check can pass, fail on an assertion, or fail to run at all — and only one of those is success |
+| Every task has tests | Many tasks have none; rungs 1–4 of the ladder verify work without a test suite |
 | The suite runs in reasonable time | The suite grows monotonically and never shrinks |
-| One task = one test failure | One submission = many tests created in one phase |
-| A failing test is a defect | A failing test in Phase One **is the goal** |
+| One task = one test failure | One submission = many tasks verified concurrently, sharing ports, fixtures and services |
+| A failing test is a defect | It is — except in a task explicitly declared as writing a test for missing behaviour |
 | Running the suite verifies the work | Running the suite may not reach the relevant tests in time |
 
 The last row is the operational crux. At micro-task volume, a full-suite run per task does not scale — and the work that most needs verification is exactly the newest, smallest, least-covered change.
 
-## What Phase One Does to Testing
+## The Verification Ladder
 
-Three consequences shape the entire design.
+Every task is verified by a ladder of five rungs, declared by the Developer in the task and run by the Manager's mechanical part after the Worker reports completion ([ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md)). The rungs are climbed in order, and the ladder stops at the first rung that fails. Phase One, with its stub and failing-test tasks, was removed by ADR-0012; tests are now ordinary, optional tasks.
 
-**1. Failure is the expected state during Phase One.** A Phase One test task succeeds when its test *fails on an assertion*. The system must therefore distinguish this from a test that fails for an unusable reason.
+| Rung | Question | How the testing system runs it | Tier |
+|------|----------|-------------------------------|------|
+| 1. **Compiles** | Does the changed code build or type-check? | [Command runner](#language-agnosticism), Mechanism A in [Development Surfaces](surfaces.md): spawn the declared command, exit code first | 2 |
+| 2. **Runs** | Does it start without crashing? | Command runner: spawn the entry point; a clean exit, or an optional readiness check, passes | 2 |
+| 3. **Dependencies** | Does it work against the services it needs? | Each declared service is stubbed or health-checked before rungs 4 and 5 run | 2, unless its checks assert behaviour |
+| 4. **Serves** | If it is a server, does it start and answer correctly? | [Testing APIs Directly](#testing-apis-directly): build, serve on a free port, probe readiness, assert probes | 1 when probes assert behaviour |
+| 5. **Tests** | Do the project's relevant tests pass? | Command runner with [test selection](#test-selection); results ingested as JUnit XML or TAP | 1 when tests assert behaviour |
 
-**2. "Fails" is not one thing.** A test can be in several distinct states, and only one of them is the desired one:
+A rung that does not apply is declared not applicable with a reason — a pure library has no rung 4, a script with no tests has no rung 5. At least one rung must apply. The schema is in [Task Specification](../specifications/task-spec.md#verification-ladder-schema).
 
-| State | Meaning | Valid in Phase One? |
+**Rungs 1, 2 and 5 are commands.** They reuse the command runner unchanged: Vajra runs what the task declares and reads the exit code and, for rung 5, the report. A build failure, a missing binary or a timeout is `failed_environment`, never a pass.
+
+**Rung 3 is stubbed or checked, never assumed.** For each declared `ServiceDependency`, the verifier either starts the stub the task names (an in-process fake, a container, a recorded fixture) or runs the task's health check against the real service. A service that is neither stubbed nor healthy fails the rung as `failed_environment`. The stubs stay up for rungs 4 and 5.
+
+**Assumption:** the Manager's mechanical verifier provisions the stubs and runs the health checks for rung 3. Workers do not write service stubs unless the Developer planned that as a task.
+
+**Rung 4 is the API testing described below**, applied per task: the task declares the build and serve commands, the readiness check and the probes.
+
+**Every rung produces verdicts from the same contract.** Each rung yields a `TestVerdict` and evidence, and the ladder as a whole yields a `LadderResult` that names the highest rung that passed. The report to the Human names that rung, so a task that only compiled is never reported as tested.
+
+**"Fails" is not one thing.** On every rung, a check can be in several distinct states, and only one of them is success:
+
+| State | Verdict | Meaning on a rung |
 |---|---|---|
-| Fails on an assertion | Behaviour is missing — the test works | **Yes, this is success** |
-| Errors on import / syntax | The test cannot run at all | No — the test is broken |
-| Passes | Behaviour already exists, or the test asserts nothing | Suspicious — worth surfacing |
-| Not collected | Runner never picked the file up | No — wiring is broken |
+| Passes | `passed` | The rung holds; climb to the next |
+| Fails on an assertion | `failed_assertion` | The code runs and does the wrong thing — a defect |
+| Errors on import / syntax, cannot start, service missing | `failed_environment` | The check could not run at all — not a statement about behaviour |
+| Not collected | `not_collected` | The runner never picked the test up — wiring is broken |
 
-Collapsing these into pass/fail is the single most likely way to build this wrong. A test that errors on import looks exactly like a failing test to a naive runner, and accepting it would let a broken Phase One pass the gate.
+Collapsing these into pass/fail is the single most likely way to build this wrong. A test that errors on import looks exactly like a failing test to a naive runner, and the Manager agent's findings would then point at the wrong layer.
 
-**3. The codebase is temporarily non-functional.** During Phase One the stubs exist but do nothing. Tests running against them fail in ways that are expected, and the runtime must not treat that as breakage.
+**The ladder feeds a review, not an automatic verdict.** The Manager agent reviews the `LadderResult`, the diff, the Worker's report and the success criteria, and gives `accepted`, `changes_requested` or `rejected`. It may reject a ladder pass; it may never accept a ladder fail ([ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md)).
 
 ## Language Agnosticism
 
@@ -115,18 +134,18 @@ Swapping TypeScript for Python changes two command arrays. Nothing else.
 
 **2. Probed, not slept on.** Readiness is a poll — HTTP, TCP, or a log pattern — with a deadline. A slow start costs latency rather than a fixed guess, and a fast start is not penalised by a timeout sized for the slowest language. A process that dies while being waited on fails immediately with its output, instead of polling a dead port until the timeout.
 
-**3. The verdict line that makes Phase One work.** A failed probe maps to a verdict by asking one question — *did the server answer at all?*
+**3. The verdict line on rung 4.** A failed probe maps to a verdict by asking one question — *did the server answer at all?*
 
-| Probe outcome | Verdict | Phase One meaning |
+| Probe outcome | Verdict | Ladder meaning |
 |---|---|---|
-| No response: build failed, nothing listening, connection refused, timeout | `failed_environment` | The gate is meaningless — scaffolding is broken |
-| A response that is not the expected one: 404, 500, wrong body | `failed_assertion` | **The gate is succeeding** — the behaviour is absent |
+| No response: build failed, nothing listening, connection refused, timeout | `failed_environment` | Rung 4 did not run — the server never came up, or a rung 3 dependency it needs is missing |
+| A response that is not the expected one: 404, 500, wrong body | `failed_assertion` | Rung 4 ran and failed — the server works, the behaviour is wrong or absent |
 
-A stub endpoint returning 404 satisfies a Phase One probe task. A server that never started does not, under any phase. Without this line the gate could be passed by a broken harness.
+A 404 from a running server is a defect the Worker can be told about. A server that never started is a different problem with a different fix, and it never satisfies a probe. Without this line a broken harness would look like a wrong implementation. For a task declared `writesFailingTest`, the second row is the expected outcome; the first never is.
 
 **Contract-derived probes.** A contract already states methods, paths, required parameters and response schemas — the four things a hand-written probe must supply. `deriveProbesFromOpenApi` generates a probe per operation, filling required parameters with type-correct samples and **skipping** any parameter it cannot derive rather than guessing. Generated probes assert response *shape*, never semantics: nobody can derive "a valid password is 8+ characters" from a schema, and pretending otherwise would produce a gate that passes unconditionally.
 
-A worked example covering all three languages, the Phase One case, the dead-server case and contract derivation is at `packages/tester/examples/rest-api.mjs`.
+A worked example covering all three languages, the missing-behaviour case, the dead-server case and contract derivation is at `packages/tester/examples/rest-api.mjs`.
 
 ## Language Support
 
@@ -164,7 +183,7 @@ Three rules make the number mean something:
 
 | Rule | Why |
 |------|-----|
-| **A green baseline is required** | On an already-failing suite, "a test failed on the mutant" cannot be attributed to the mutant. Phase One is reported *not applicable* rather than guessed at |
+| **A green baseline is required** | On an already-failing suite, "a test failed on the mutant" cannot be attributed to the mutant. A task declared `writesFailingTest` is reported *not applicable* rather than guessed at; any other task has a green baseline once rung 5 passes |
 | **Compile errors and timeouts are excluded** | A mutant that does not compile is not a defect a test could have caught; charging it punishes the toolchain, not the tests |
 | **No coverage is reported apart from survived** | An untested line and a wrong assertion need different fixes; a single blended figure hides the distinction that tells you what to do next |
 
@@ -189,7 +208,7 @@ Testing an HTTP API, a React component and a Python script look like three syste
 | Static analysis / types | subprocess | wrap a command | partial |
 | Queue, gRPC, data, migration, infra, AI eval | — | — | need real infrastructure |
 
-**Mechanism A — spawn and assert.** Build, run, assert on stdout, stderr, exit code, and files produced. The exit code is checked *first*: a command that printed exactly the right thing and exited non-zero has still failed. A build failure, a missing binary, or a timeout is an environment failure on every probe — never a pass, and never a satisfying Phase One gate.
+**Mechanism A — spawn and assert.** Build, run, assert on stdout, stderr, exit code, and files produced. The exit code is checked *first*: a command that printed exactly the right thing and exited non-zero has still failed. A build failure, a missing binary, or a timeout is an environment failure on every probe — never a pass, on any rung.
 
 **Mechanism B — generate a test in the project's own idiom.** A declarative spec becomes a real test file using the framework the project already depends on, which its own runner executes, and the existing JUnit ingestion handles the result.
 
@@ -203,7 +222,7 @@ The consequence is the important part: **a new framework needs a generator, neve
 
 A standard format for test *definition* does not exist the way one exists for results. An IETF draft (`draft-cui-bmwg-testcase-spec`, 2025) explicitly notes the absence of a formal standard and proposes a structure, but it is not a standard. Meanwhile API contracts are well specified — OpenAPI, AsyncAPI, protobuf, GraphQL SDL, JSON Schema — and a contract is enough to *derive* stimulus and an oracle.
 
-So the remaining gap is **contract-driven test generation**: given an OpenAPI document, produce the Phase One test tasks without a human writing them. That is a milestone, not a finished feature, and it is tracked in [Open Questions](#open-questions).
+So the remaining gap is **contract-driven test generation**: given an OpenAPI document, produce a task's rung 4 probes or its tests without a human writing them. That is a milestone, not a finished feature, and it is tracked in [Open Questions](#open-questions).
 
 ## Requirements
 
@@ -211,9 +230,9 @@ Derived from the existing ADRs rather than chosen freely:
 
 | # | Requirement | Source |
 |---|---|---|
-| R1 | Verification is mechanical, not a judgement about a diff | [ADR-0004](../adr/0004-manager-inspects-never-repairs.md) |
-| R2 | Success criteria are executable from the moment a task is created | [ADR-0006](../adr/0006-phase-one-is-mandatory.md) |
-| R3 | A Worker is not told whether it passed; the Manager holds the verdict | [Validation Flow](../execution/README.md#validation-flow) |
+| R1 | Verification is mechanical, not a judgement about a diff | [ADR-0004](../adr/0004-manager-inspects-never-repairs.md), [ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md) |
+| R2 | Every task declares an executable verification ladder when it is created, with at least one applicable rung | [ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md) |
+| R3 | A Worker's completion is a claim; the Manager holds the verdict, and never accepts over a failed ladder. The Worker sees only the findings of a `changes_requested` review | [ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md), [Validation Flow](../execution/README.md#validation-flow) |
 | R4 | Per-task verification must be fast enough to run on every task | Micro-task volume |
 | R5 | A failing test must be attributable to the task that caused it | [File Ownership](../permissions/README.md#file-ownership) |
 | R6 | The whole plan is judged against tests, not against the Developer's plan | [ADR-0005](../adr/0005-predefined-parallel-order.md) |
@@ -236,10 +255,12 @@ type TestVerdict =
 
 type ExpectedOutcome = "pass" | "fail_on_assertion";
 
+/** One result per rung. A task's rungs together form its LadderResult. */
 interface VerificationResult {
   taskId: string;
-  phase: number;
-  kind?: "stub" | "test";
+  rung: "compile" | "run" | "dependencies" | "serve" | "tests";
+  /** From the task. Only then can `expected` be "fail_on_assertion". */
+  writesFailingTest?: boolean;
 
   expected: ExpectedOutcome;
   observed: TestVerdict;
@@ -282,7 +303,7 @@ function satisfied(expected: ExpectedOutcome, observed: TestVerdict): boolean {
 
 Two properties are deliberate:
 
-- **Flaky and timeout never satisfy a task**, even in Phase One. A Phase One test that is merely flaky has not demonstrated that the behaviour is missing.
+- **Flaky and timeout never satisfy a task**, even one declared `writesFailingTest`. A new test that is merely flaky has not demonstrated that the behaviour is missing.
 - **A `failed_environment` never satisfies anything.** It means the test is broken, not that the behaviour is absent.
 
 ## Structural Proofs
@@ -293,7 +314,7 @@ Success criteria therefore sit on **tiers**, and the tier is recorded rather tha
 
 | Tier | Establishes | Example | Verdict means |
 |------|-------------|---------|---------------|
-| 1 — Behavioural | The behaviour is right | `npm test -- login` | The claimed behaviour was shown to fail before and pass after |
+| 1 — Behavioural | The behaviour is right | `npm test -- login` | Probes or tests that assert the claimed behaviour passed |
 | 2 — Structural | The change is real, wired in, well-formed | `tsc --noEmit` | The change compiles and is reachable — and nothing about behaviour |
 
 **The same verdict value carries a different claim at each tier.** A green `tsc --noEmit` is `passed` at tier 2 and says nothing at tier 1. This is why the tier travels with the criterion into the verdict and out into the report: a system that reports both as "passed" has thrown away the only information that distinguished them.
@@ -302,7 +323,7 @@ Success criteria therefore sit on **tiers**, and the tier is recorded rather tha
 
 Not every piece of work has a behavioural test available, and refusing the plan because of it produces a worse outcome than accepting a weaker proof. A new endpoint, a new screen, a new module: the honest first proof is that it compiles and is wired in. That is a genuine before/after transition — the import did not resolve before, the route was not registered before — it simply does not claim more than it can.
 
-The floor is unchanged: **every task carries at least one tier 1 or tier 2 criterion**, and a task whose criteria are all `review` is rejected at submission. Nothing became unverifiable. Only the height of the floor moved, and a task that clears neither is still refused.
+The floor is unchanged: **every task carries at least one tier 1 or tier 2 criterion**, and a task whose criteria are all `review` is rejected at submission. Applicable ladder rungs satisfy this floor: rungs 1–3 are tier 2, and rungs 4–5 are tier 1 when they assert behaviour. Nothing became unverifiable. Only the height of the floor moved, and a task that clears neither is still refused.
 
 ### What a structural pass does not prove
 
@@ -319,27 +340,32 @@ It is a real gate, and it catches the majority of what goes wrong in practice: a
 
 ## Expectation Inversion
 
-The expected outcome is a function of the task, and this is where Phase One is encoded:
+Every rung expects `pass`. Inversion exists for one case only: a task the Developer explicitly declares as writing a test for behaviour that does not exist yet (`writesFailingTest: true`). Nothing requires such a task ([ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md)).
 
 ```typescript
-function expectedOutcome(task: Task): ExpectedOutcome {
-  if (task.phase === 1 && task.kind === "test") return "fail_on_assertion";
+function expectedOutcome(task: Task, rung: VerificationResult["rung"], test?: TestOutcome): ExpectedOutcome {
+  if (task.writesFailingTest && rung === "tests" && test && writtenBy(task, test)) {
+    return "fail_on_assertion";
+  }
   return "pass";
 }
 ```
 
-| Task | Phase | Expected | Passing means |
+| Task | Rung | Expected | Passing means |
 |---|---|---|---|
-| Stub | 1 | `pass` | The declared path exists, parses, and exports the expected symbols |
-| Test | 1 | `fail_on_assertion` | The test runs and fails on an assertion |
-| Implementation | 2+ | `pass` | The failing test from Phase One now passes |
+| Any task | Every applicable rung | `pass` | The rung holds |
+| `writesFailingTest` | 1–4 | `pass` | The new test code builds and the harness runs |
+| `writesFailingTest` | 5, for the tests it wrote | `fail_on_assertion` | The test runs and fails on an assertion |
+| A later task implementing that behaviour | 5 | `pass` | The test now passes |
 
-The same verdict means opposite things in different phases. A test failing in Phase One is the objective; the identical test failing in Phase Two is a defect. The verdict layer is where that inversion lives, so no caller has to remember it.
+**Assumption:** only the tests the task wrote are inverted. Other tests selected on rung 5 still expect `pass`, so a test-writing task cannot break existing behaviour unnoticed.
+
+For such a task the same verdict means opposite things: its own test failing is the objective, while the identical test failing for a later task is a defect. The verdict layer is where that inversion lives, so no caller has to remember it.
 
 ## Components
 
 ```
-   Phase One declaration
+   Task declaration (ladder, tests)
             │
             ▼
    ┌─────────────────┐
@@ -362,13 +388,13 @@ The same verdict means opposite things in different phases. A test failing in Ph
                                     │
                                     ▼
                            ┌──────────────────┐
-                           │    Verifier      │  + expectation inversion
-                           └────────┬─────────┘
+                           │    Verifier      │  climbs the ladder; rung 3 stubs and checks;
+                           └────────┬─────────┘  inversion for writesFailingTest only
                                     ▼
-                           VerificationResult  → Manager
+                  VerificationResult per rung → LadderResult → Manager
 ```
 
-The **Verifier** is the only component the Manager talks to. It composes selection, execution, classification, and expectation inversion into a single `satisfied` boolean plus evidence.
+The **Verifier** is the only component the Manager's mechanical part talks to. It climbs the task's ladder, provisions rung 3 stubs and health checks, and composes selection, execution, classification, and expectation inversion into a `satisfied` boolean plus evidence per rung. The Manager agent reviews the resulting `LadderResult`.
 
 ## Test Selection
 
@@ -411,7 +437,7 @@ key = hash(testFileContent
 
 A cache hit short-circuits selection, execution, and classification entirely.
 
-Caching works unusually well here because the invalidation points are exactly the file changes: creating a stub changes a dependency hash, writing a test changes the test hash, implementing changes the implementation hash. Every real transition invalidates, and nothing else does.
+Caching works unusually well here because the invalidation points are exactly the file changes: creating a file changes a dependency hash, writing a test changes the test hash, implementing changes the implementation hash. Every real transition invalidates, and nothing else does.
 
 **Assumption:** Over-invalidation is preferred to under-invalidation. Hashing normalised content (stripping comments and whitespace) would reduce misses, but a normalisation bug causes a stale pass, which is far worse than a slow rebuild.
 
@@ -440,19 +466,19 @@ The advisory tier is what catches collateral damage. A task is not responsible f
 
 ## Cross-Task Attribution
 
-A Phase One failure is often caused by a *different* task. The common case: a stub does not export a symbol its test imports, so the test errors on import and appears to fail for the wrong reason.
+A ladder failure is sometimes caused by a *different* task. The common case: task B imports a symbol from a file task A owns, A has not exported it, and B fails rung 1 (or rung 5) with an unresolved import. B's own code may be correct.
 
 The classifier should detect this and attribute it correctly:
 
 ```json
 {
   "kind": "missing_export",
-  "message": "test imports 'validateUser' which src/auth.ts does not export",
-  "attributedTo": "task_stub_auth"
+  "message": "src/login.ts imports 'validateUser' which src/auth.ts does not export",
+  "attributedTo": "task_auth"
 }
 ```
 
-This turns a confusing "your test is broken" into "your stub is incomplete", and it points at the task that can actually fix it. Without it, every stub defect surfaces as a test defect, and the Developer debugs the wrong task.
+This turns a confusing "your code is broken" into "a file you depend on is incomplete", and it points at the task that can actually fix it. Without it, the Manager agent would send findings to a Worker that cannot act on them, and the Developer would debug the wrong task. Peer awareness helps prevent this case — B can see A's ownership and handoff — but it does not replace attribution.
 
 ## Global Invariant
 
@@ -460,7 +486,7 @@ This turns a confusing "your test is broken" into "your stub is incomplete", and
 
 After all phases complete, no test should be failing. A persistently failing test means the system is in a broken state that task-level verdicts have not surfaced.
 
-This is worth monitoring directly, because it catches what per-task verification structurally cannot: a task that was verified against its own tests while something else was already broken. It is also the check that Phase One is genuinely closed — if anything still fails, the gate did not do its job.
+This is worth monitoring directly, because it catches what per-task verification structurally cannot: a task that was verified against its own tests while something else was already broken. It is also the check on the ladder itself — if anything still fails at rest, some task was accepted that should not have been, or a rung was declared not applicable that applied. A test written by a `writesFailingTest` task that still fails at rest means the implementing task was never planned or never accepted.
 
 ## Build Order
 
@@ -469,29 +495,32 @@ Each milestone is independently useful, so the system delivers value before it i
 | # | Milestone | Delivers | Depends on |
 |---|---|---|---|
 | **M0** | Verdict contract | Verdict types; classify a parsed report into structured verdicts | — |
-| **M1** | Test-to-task binding | Registry mapping test files to owning tasks, from Phase One declarations | — |
+| **M1** | Test-to-task binding | Registry mapping test files to owning tasks, from task declarations (rung 5, and tasks that write tests) | — |
 | **M2** | Single-task verification | `task.assign` → run → `VerificationResult`. No caching, no selection | M0, M1 |
 | **M3** | Test selection | Import graph and reverse index; select instead of running everything | M2 |
 | **M4** | Caching | Content-addressed result reuse | M3 |
 | **M5** | Flake detection | Rerun-on-failure, `flaky` verdict, flake history | M2 |
 | **M6** | Blast radius | Advisory tier over dependent tests | M3 |
 | **M7** | Global invariant | At-rest health check and persistent-failure reporting | M4 |
+| **M8** | Verification ladder | Rungs 1–5 climbed in order, stopping at the first failure; rung 3 stubs and health checks; `LadderResult` | M2 |
 
 M0 and M1 can start in parallel. M3 and M5 are independent of each other once M2 lands.
 
-**M0 is the make-or-break, and JUnit XML largely defuses it.** The format already distinguishes `<failure>` from `<error>`, which is exactly the split the contract needs. The residual risk is a runner that can emit TAP but not XML — TAP has no such distinction, so a Phase One gate cannot be *proven* from a TAP report, only assumed. Prefer XML where the runner offers it, and record the format alongside the verdict so a TAP-derived pass is never mistaken for a proven one.
+**M0 is the make-or-break, and JUnit XML largely defuses it.** The format already distinguishes `<failure>` from `<error>`, which is exactly the split the contract needs. The residual risk is a runner that can emit TAP but not XML — TAP has no such distinction, so a rung 5 failure cannot be *proven* to be a defect rather than a broken environment, and a `writesFailingTest` expectation can only be assumed. Prefer XML where the runner offers it, and record the format alongside the verdict so a TAP-derived pass is never mistaken for a proven one.
 
 ## Risks
 
 | Risk | Impact | Mitigation |
 |---|---|---|
 | **Runner emits neither JUnit nor TAP** | The contract is unimplementable for that runner | Probe for XML first — the overwhelming majority can produce it. Fall back to TAP with a recorded fidelity warning |
-| **TAP cannot distinguish failure kinds** | A Phase One gate is assumed rather than proven from a TAP report | Prefer XML; record the source format on the verdict |
+| **TAP cannot distinguish failure kinds** | A rung 5 failure cannot be proven a defect, and a `writesFailingTest` expectation is assumed rather than proven | Prefer XML; record the source format on the verdict |
 | **Import graph is incomplete** | Selection silently misses affected tests — the worst failure mode, because it looks like success | Treat selection as advisory-first: widen rather than narrow, and cross-check against the advisory tier |
 | **Dynamic or reflective dependencies** | Same as above; a DI container or dynamic import is invisible statically | Declare these as global files so they invalidate everything |
 | **Two languages, two graphs** | JS/TS and Rust need separate import-graph implementations | Scope M3 to one language first and measure whether the other needs it |
-| **Phase One is more overhead than it is worth at small scale** | Every trivial change pays for a stub and a test task | This is [ADR-0006](../adr/0006-phase-one-is-mandatory.md)'s open question; the exemption threshold should be decided with data from this system |
-| **Stub defects cascade into test defects** | Phase One produces misleading failures | Cross-task attribution (above) |
+| **The ladder is declared too weakly** | Rungs marked not applicable to avoid work make every later verdict weak | Every not-applicable rung needs a reason; reports name the highest rung reached; the Manager agent sees the declaration in review |
+| **Stubs can lie** | Rung 3 passes against a stub the real service would reject | Record in the rung 3 evidence which services were stubbed and which were checked, so a stubbed pass is never read as a production pass. See [Coverage Gaps](gaps.md) |
+| **Environment cost moves to verification** | Starting services and servers per task is slow; parallel tasks contend for ports and fixtures | OS-assigned ports (`port: 0`). See [Coverage Gaps](gaps.md) |
+| **One task's defect surfaces in another** | A task fails for a file another task owns | Cross-task attribution (above) |
 
 ## Open Questions
 
@@ -501,13 +530,18 @@ M0 and M1 can start in parallel. M3 and M5 are independent of each other once M2
 - [ ] What is the per-task time budget before a task is treated as `timeout`?
 - [ ] Should the advisory blast-radius tier block the submission as a whole, or only report?
 - [ ] Is the at-rest invariant checked after every submission, or on a schedule?
-- [ ] Does a Phase One exemption threshold exist for trivial work? This system is what would produce the data to set one.
+- [ ] What is the minimum ladder for a task — is rung 1 alone ever enough to accept? (Open in [ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md).)
+- [ ] Are rung 3 service stubs generated from a contract (OpenAPI, SQL schema) or supplied per project?
+- [ ] How does rung 4 share ports and fixtures between concurrent tasks?
+- [ ] Does a `changes_requested` round re-run the whole ladder, or only the rungs that failed?
 - [ ] Are test results shared across submissions, or scoped to one? Sharing is faster; scoping avoids cross-session coupling.
 
 ## See Also
 
-- [ADR-0006 — Phase One Is Mandatory](../adr/0006-phase-one-is-mandatory.md)
+- [ADR-0006 — Phase One Is Mandatory](../adr/0006-phase-one-is-mandatory.md) (superseded)
 - [ADR-0007 — Test Verdict Contract](../adr/0007-test-verdict-contract.md)
+- [ADR-0012 — A Verification Ladder Replaces Phase One](../adr/0012-verification-ladder-replaces-phase-one.md)
+- [ADR-0013 — The Manager Verifies, Reviews, and Retires Workers](../adr/0013-manager-verifies-reviews-and-retires-workers.md)
 - [Execution](../execution/README.md)
 - [Tasks](../tasks/README.md)
 - [Permissions](../permissions/README.md)

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. The rule that scope is immutable during a task is superseded by [ADR-0014](0014-peer-aware-workers-and-access-requests.md): a Worker may request more access, and the Manager may grant it.
 
 ## Date
 

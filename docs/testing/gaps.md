@@ -10,6 +10,7 @@ This document records what the testing system **cannot** test, and why. It is th
 - [Cannot Test](#cannot-test)
 - [Can Test but Cannot Trust](#can-test-but-cannot-trust)
 - [Cannot Test, and Pre-Release TODOs](#cannot-test-and-pre-release-todos)
+- [Fixed Since the Last Revision](#fixed-since-the-last-revision)
 - [Fixed During This Work](#fixed-during-this-work)
 - [Deliberately Out of Scope](#deliberately-out-of-scope)
 
@@ -63,7 +64,9 @@ Nothing verifies that a migration ran, is reversible, or leaves the schema in th
 
 ### 8. Cross-task interference in shared state — **Silent**
 
-File ownership prevents two Workers writing the same file. Nothing prevents two Workers mutating the same database rows, the same cache keys, or the same queue. Two Phase One probes that each create the same fixture can collide, and the resulting failure looks like a flaky test rather than a conflict.
+File ownership prevents two Workers writing the same file. Nothing prevents two Workers mutating the same database rows, the same cache keys, or the same queue. Two tasks' rung 4 probes that each create the same fixture can collide, and the resulting failure looks like a flaky test rather than a conflict.
+
+Rung 3 of the [verification ladder](README.md#the-verification-ladder) reduces this but does not remove it. A task whose dependencies are stubbed gets its own stub and cannot collide with a peer. A dependency declared as `check` is the real, shared service, and two tasks verified against it at once can still interfere.
 
 ## Can Test but Cannot Trust
 
@@ -81,21 +84,29 @@ Mitigation is `unmodelled`, but it is a declaration, not a detection: a dynamic 
 
 ### 11. TAP-sourced verdicts — **Loud, recorded**
 
-TAP has one `not ok` for both a failed assertion and a test that could not run. A Phase One gate can therefore be *assumed* from a TAP report but not *proven*. JUnit XML carries the distinction and should be preferred.
+TAP has one `not ok` for both a failed assertion and a test that could not run. A rung 5 failure can therefore not be *proven* to be a defect rather than a broken environment, and the expected failure of a `writesFailingTest` task can be *assumed* from a TAP report but not *proven*. JUnit XML carries the distinction and should be preferred.
 
 ### 12. Time, randomness and external services — **Loud**
 
 Anything depending on the clock, a random seed, a network call to a third party, or a shared fixture is a flake source. The rerun-based detector catches instability but does not remove it, and a test that passes on rerun reports `flaky`, which never satisfies a task — correctly, but at the cost of a round trip every time.
 
+Rung 3 stubs reduce the external-service part of this: a stubbed service answers the same way every time. They do not remove it. A dependency declared as `check` still calls the real service, and the clock, random seeds and shared fixtures are untouched by stubbing.
+
 ### 13. Oracle strength for generated probes — **Silent, by design**
 
 Contract-derived probes assert response *shape*, never semantics. A schema cannot express "a valid password is 8+ characters". Generated probes prove the endpoint answers correctly-shaped; they do not prove it is *right*. A green contract suite is weak evidence of correctness and should not be read as strong.
+
+### 14. Stubs can lie — **Silent**
+
+Rung 3 proves the code works against the stub, not against the real service ([ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md)). A stubbed database accepts writes the real one would reject — a constraint violation, a type mismatch, a missing column. A stubbed HTTP service returns what the stub author expected, not what the service does. Every rung above 3 then passes against the same fiction.
+
+The failure mode is a false pass, and nothing in the ladder reports it. The rung 3 evidence in the `LadderResult` should record which services were stubbed and which were checked, so a stubbed pass is never read as a production pass. **Assumption:** stubs are provisioned by the Manager's mechanical verifier, so their fidelity is a property of the stub source, not of the Worker's code.
 
 ## Cannot Test, and Pre-Release TODOs
 
 Items here are things the harness cannot reach *and* that are not yet verified another way. They are separated from the numbered gaps because they are owed before a release rather than merely absent.
 
-### 14. LLM provider reachability and the credential path — **Blind**
+### 15. LLM provider reachability and the credential path — **Blind**
 
 A session cannot be verified without a model to verify it against, so the entire path from credential to first response is outside what the harness can assert. The probe system can call an HTTP endpoint; it cannot supply a real secret, cannot judge whether the key is the right one, and cannot tell a rejected key from a reachable provider that had nothing to say.
 

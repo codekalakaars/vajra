@@ -13,7 +13,7 @@ This is the first document a new contributor should read. It describes the core 
 - [Execution Model](#execution-model)
 - [Separation of Responsibilities](#separation-of-responsibilities)
 - [The Task](#the-task)
-- [Phase One](#phase-one)
+- [The Verification Ladder](#the-verification-ladder)
 
 ## Core Philosophy
 
@@ -36,18 +36,22 @@ No role may perform another role's function. When a role is blocked, it escalate
 
 ```
 Human
-  │  direction, finalizes tasks
+  │  direction, approves plans and results
   ▼
 Developer ──── the only role that creates tasks
-  │  submits tasks
+  │  submits Human-approved plans
   ▼
-Manager ────── orchestrates, supervises, inspects
+Manager ────── schedules, verifies (mechanical), reviews (LLM), retires Workers
   │  assigns one task at a time
   ▼
-Worker ─────── executes end to end, confined to the task
+Worker ─────── executes end to end, confined to the task and its grants
 ```
 
-Traffic flows strictly downward, with one exception: **problems flow upward** from Worker to Manager to Developer, which responds by creating a new task.
+Work flows downward. Three things flow back up, always through the Manager and never sideways:
+
+- **Problems** flow from Worker to Manager to Developer, which answers with the Human by creating a new task.
+- **Access requests** flow from a Worker to the Manager, which grants, denies, or asks the Worker to wait. See [ADR-0014](../adr/0014-peer-aware-workers-and-access-requests.md).
+- **Peer views** are read from the Manager: a Worker can see the plan, other tasks' status and owned files, and completed tasks' handoffs, but cannot message another Worker.
 
 | Role | Creates Tasks | Executes Tasks | Orchestrates | Talks to Human |
 |------|:------------:|:--------------:|:------------:|:--------------:|
@@ -65,7 +69,7 @@ This is worth stating plainly because it settles three questions at once. What a
 | Role | What it reasons about | What that demands |
 |------|----------------------|---------------------|
 | Developer | Requirement ambiguity, codebase shape, decomposition | Strong reasoning — it decides whether the work is specified correctly at all |
-| Manager | Whether output satisfies stated criteria | Sound judgement — it is the only independent check in the system |
+| Manager | Whether output satisfies stated criteria, given the ladder's evidence; whether to grant access | Sound judgement — it is the only independent check in the system |
 | Worker | One concrete edit inside a known scope | Capability and speed, multiplied by concurrency |
 
 One global model forces a single compromise across all three. Configuring each separately means the expensive reasoning happens once, in the Developer, instead of on every task in a parallel fan-out.
@@ -78,17 +82,17 @@ Two boundaries hold regardless of configuration:
 ## Execution Model
 
 1. The Human states a requirement to the Developer.
-2. The Developer defines the tasks — each with exact target file paths and explicit success criteria.
+2. The Developer defines the tasks — each with exact target file paths, explicit success criteria, and a [verification ladder](#the-verification-ladder).
 3. The Developer structures them into phases and groups, and sets the parallelism limit and any file-overlap priority. This is a planning decision, not something the Manager works out later.
-4. The Developer builds **Phase One** — stub files, then tests that fail. This gate is mandatory and runs before anything else. See [Phase One](../tasks/README.md#phase-one).
-5. The Human finalizes the plan with the Developer.
-6. The Developer submits it to the Manager.
-7. The Manager runs Phase One, then works through the later phases, assigning one task at a time to an idle Worker with permissions scoped to that task.
-8. Each Worker executes its task end to end and reports completion or failure.
-9. The Manager inspects the output against the success criteria.
-10. On success, the Manager reports to the Developer. On problems, the Manager reports the problems to the Developer, which creates new tasks to address them — and the cycle repeats.
+4. The Human approves the plan. Nothing is submitted without that approval.
+5. The Developer submits it to the Manager.
+6. The Manager works through the phases, assigning one task at a time to a fresh Worker with permissions scoped to that task.
+7. Each Worker executes its task end to end. It may read the peer view and request access to more files through the Manager. It reports completion or failure.
+8. The Manager's mechanical part runs the task's verification ladder. The Manager agent reviews the ladder's evidence, the diff, the Worker's report and the success criteria, and gives a verdict: `accepted`, `changes_requested`, or `rejected`.
+9. On `changes_requested`, the same Worker gets the findings and tries again, up to the task's review-round limit. On `accepted` or `rejected`, the Manager kills the Worker. A `rejected` task is escalated to the Developer, which decides with the Human what to do — and the cycle repeats.
+10. The Developer stays available while the run is active. A new Human request becomes a Human-approved plan revision; it never changes a task that is already assigned or in progress.
 
-Steps 7–9 repeat per task, across as many Workers and groups as the plan allows.
+Steps 6–9 repeat per task, across as many Workers and groups as the plan allows. See [ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md).
 
 See [Execution](../execution/README.md) for detail and [System Roles](../system-roles/README.md) for per-role behavior.
 
@@ -96,10 +100,10 @@ See [Execution](../execution/README.md) for detail and [System Roles](../system-
 
 | Role | Owns | Never does |
 |------|------|-----------|
-| Human | Direction, requirement definition, task finalization | Creates tasks directly, executes work, touches Workers |
-| Developer | Task definition, decomposition, success criteria, stub files | Executes tasks, supervises Workers, bypasses the Manager |
-| Manager | Assignment, supervision, inspection, escalation | Creates tasks, executes or repairs work, talks to Workers about scope |
-| Worker | End-to-end execution of exactly one task | Creates tasks, self-schedules, exceeds its file scope, talks to Human/Developer |
+| Human | Direction, requirement definition, approval of every plan, plan revision and final result | Creates tasks directly, executes work, talks to the Manager or Workers |
+| Developer | Task definition, decomposition, success criteria, verification ladders, escalation decisions (with the Human) | Modifies files, executes tasks, supervises Workers, bypasses the Manager, acts without the Human's approval |
+| Manager | Scheduling, permissions, supervision, the verification ladder (mechanical); verdicts and access decisions (LLM); killing Workers at their verdict | Creates tasks, writes or repairs code, puts a fix into its findings, accepts work the ladder failed |
+| Worker | End-to-end execution of exactly one task, including creating declared target files that do not exist yet | Creates tasks, self-schedules, writes outside its task and grants, talks to the Human, the Developer or other Workers |
 
 The separation is what makes inspection meaningful: because the Manager neither writes the code nor defines the task, its inspection is an independent check rather than a self-review.
 
@@ -108,23 +112,26 @@ The separation is what makes inspection meaningful: because the Manager neither 
 The task is the atomic unit of work in Vajra.
 
 - It is the **smallest** self-contained unit — there are no sub-tasks. A task is either executed whole or not at all.
-- It is **testable**: the target files are known and the success criteria are defined before the task is created.
+- It is **testable**: the target files are known, and the success criteria and verification ladder are defined before the task is created.
 - It is **end-to-end**: a single Worker can complete it without further decomposition.
 
 This is what makes the rest of the system tractable. Because a task cannot be too large, a Worker never has to ask for clarification mid-execution; because a task cannot be too vague, the Manager always has something concrete to inspect against; and because a task is atomic, a batch of them divides cleanly into groups that can run in parallel without ambiguity about who owns what.
 
-## Phase One
+## The Verification Ladder
 
-Every submission opens with a mandatory Phase One, in two ordered steps:
+Every task is verified by a ladder of mechanical checks, declared by the Developer and run by the Manager's mechanical part after the Worker reports completion. The rungs are climbed in order, and the ladder stops at the first rung that fails:
 
-1. **Stub files** — every declared target path exists, minimal but valid.
-2. **Tests** — a runnable test per behaviour, currently failing.
+1. **Compiles** — the changed code builds or type-checks.
+2. **Runs** — it starts without crashing.
+3. **Dependencies** — each database or external service it needs is stubbed or confirmed healthy. A service that is neither fails as `failed_environment`.
+4. **Serves** — if it is a server, it starts on a free port, becomes ready, and answers its probes correctly.
+5. **Tests** — the project's relevant tests pass.
 
-No later phase starts until Phase One completes. See [Phase One](../tasks/README.md#phase-one) and [ADR-0006](../adr/0006-phase-one-is-mandatory.md).
+A rung that does not apply is declared not applicable, with a reason. At least one rung must apply. The report to the Human names the highest rung each task reached, so a task that only compiled is never reported as tested.
 
-The gate converts a task set from a description of intent into something mechanically checkable. A test that exists and fails is a precise definition of "done", present before any implementation is written — so after the gate, the Worker's job narrows to making a failing test pass.
+Failures point at the right layer: "does not compile", "crashes on start", "database stub missing" and "probe returned 500" are different problems, and the ladder separates them. Tests are ordinary work the Developer may plan as tasks; they are not a gate.
 
-It also front-loads discovery. Questions that would otherwise surface mid-implementation, when they are expensive, surface in Phase One, where the only cost is a stub and a test.
+The ladder replaced Phase One, a mandatory opening phase of stub files and failing tests, which [ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md) removed.
 
 ## See Also
 

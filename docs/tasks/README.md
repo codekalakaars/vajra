@@ -9,7 +9,7 @@ This section is the conceptual documentation for the task model — what a task 
 - [What a Task Is](#what-a-task-is)
 - [Anatomy of a Task](#anatomy-of-a-task)
 - [Phases](#phases)
-- [Phase One](#phase-one)
+- [Verification Ladder](#verification-ladder)
 - [Task Groups](#task-groups)
 - [Parallel Order](#parallel-order)
 - [The limit is a ceiling, and the ceiling belongs to the host](#the-limit-is-a-ceiling-and-the-ceiling-belongs-to-the-host)
@@ -43,8 +43,10 @@ Every task carries:
 |---------|---------|
 | **Identity** | Unique identifier, used in all messages about the task |
 | **Description** | What the Worker must do, sufficient to act on without asking questions |
-| **Target files** | Exact paths the Worker may modify |
+| **Target files** | Exact paths the Worker may modify. The Worker creates any that do not exist yet |
 | **Success criteria** | The conditions that determine completion |
+| **Verification ladder** | Which ladder rungs apply and how each is run. See [Verification Ladder](#verification-ladder) |
+| **Review rounds** | How many `changes_requested` rounds the Manager may use before it must reject |
 | **Phase** | Which phase of the submission the task belongs to |
 | **Group** | Which parallel group within the phase |
 | **State** | Where the task is in its lifecycle |
@@ -63,11 +65,11 @@ A **phase** is a sequential stage of the submission. Phases run one after anothe
 Submission
 ├── maxParallelGroups: 3
 │
-├── Phase 1 — Phase One  (mandatory)
-│   ├── group: stubs
-│   └── group: tests          ordered after "stubs"
+├── Phase 1 — core
+│   ├── group: schema
+│   └── group: config        ordered after "schema"
 │
-├── Phase 2 — implementation
+├── Phase 2 — features
 │   ├── group: auth
 │   ├── group: session
 │   └── group: audit-log     priority-ordered against "auth" (shared file)
@@ -87,49 +89,40 @@ The hierarchy has four levels, each with one job:
 
 This gives each level exactly one ordering mechanism. Phases order stages, `groupOrder` orders groups inside a phase, `dependsOn` orders tasks inside a group, and `priority` resolves file collisions anywhere. See [Two Kinds of Ordering](#two-kinds-of-ordering).
 
+No phase is special. A submission may have one phase or several, and the first phase is ordinary work like any other. The mandatory Phase One of stubs and failing tests was removed by [ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md).
+
 **Assumption:** Phases are a flat ordered list, not a tree. Nested phases are not supported — a submission with more structure than "ordered stages" should be split into multiple submissions.
 
-## Phase One
+## Verification Ladder
 
-**Phase One is mandatory.** Every submission begins with it, and no later phase may start until it completes.
+Every task is verified by a **verification ladder**. The Manager's mechanical part runs it after the Worker reports completion. The rungs are climbed in order, and the ladder stops at the first rung that fails. See [ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md).
 
-Phase One contains exactly two kinds of work:
+| Rung | Question | Typical evidence | Tier |
+|------|----------|------------------|------|
+| 1. **Compiles** | Does the changed code build or type-check? | `tsc --noEmit`, `cargo check`, `go build`, a bundler build | 2 — structural |
+| 2. **Runs** | Does it start without crashing? | The entry point, script, or binary runs to a clean exit or reaches ready | 2 — structural |
+| 3. **Dependencies** | Does it work against the services it needs? | Each database or external service is stubbed, or confirmed reachable and healthy | 2 — structural, unless its checks assert behaviour |
+| 4. **Serves** | If it is a server, does it start and answer correctly? | Server started on a free port, readiness probed, probes asserted. See [Testing APIs Directly](../testing/README.md#testing-apis-directly) | 1 — behavioural, when probes assert behaviour |
+| 5. **Tests** | Do the project's relevant tests pass? | Selected tests from the project's own runner, ingested as JUnit XML or TAP | 1 — behavioural, when tests assert behaviour |
 
-| Work | What it produces | Why it must come first |
-|------|-----------------|-------------------------|
-| **Stub files** | Every `targetFiles` path exists, minimal but syntactically valid | A test cannot be written against a file that does not exist |
-| **Tests** | A runnable test per behaviour, currently failing | Success criteria become executable before any implementation exists |
+### Who declares what
 
-Phase One is ordered internally — stubs, then tests:
+- **The Developer declares the ladder for each task**: which rungs apply, and how each is run — the build command, the run command, the services the task depends on, the server and its probes, and the tests.
+- **A rung that does not apply is declared not applicable, with a reason.** A pure library has no rung 4; a script with no tests has no rung 5.
+- **At least one rung must apply.** A task whose ladder is entirely not applicable is invalid, for the same reason a task whose criteria are all `review` is invalid.
 
-```typescript
-groupOrder: [["stubs"], ["tests"]]
-```
+### Rules of the ladder
 
-### Why This Gate Exists
+- **Every rung expects `pass`.** Each rung produces a structured verdict under the [verdict contract](../adr/0007-test-verdict-contract.md); `flaky`, `timeout` and `failed_environment` never satisfy a rung.
+- **Rung 3 means stubbed or checked, never assumed.** A service that is neither stubbed nor confirmed healthy fails rung 3 as `failed_environment`.
+- **Tests are optional work, not a gate.** Writing tests is ordinary work the Developer may plan as its own tasks. When tests exist for the changed code, rung 5 runs them.
+- **A failing test is written on purpose only when declared.** A task explicitly declared as writing a test for missing behaviour (`writesFailingTest: true`) expects its test to fail on an assertion. No other task does.
 
-Phase One converts a task set from a description of intent into something mechanically checkable.
+**Assumption:** the Manager's mechanical verifier provisions the stubs and runs the health checks for rung 3. The Developer declares the dependencies; Workers do not write service stubs unless the Developer planned that as a task.
 
-- **Success criteria become executable before implementation starts.** A test that exists and fails is a precise definition of "done". Without it, "does it work?" is a judgement call; with it, the answer is a command's exit code.
-- **Every target path is guaranteed to exist.** A Worker never has to decide whether to create a file or which path to use — both were settled before it started.
-- **Discovery stops at the gate.** Questions that would otherwise surface mid-implementation, when they are expensive, surface in Phase One, when the only cost is a stub.
+### Why a ladder
 
-The result is that the Worker's job narrows to making a failing test pass, which is the one task with an unambiguous definition of success.
-
-### What Completes Phase One
-
-A Phase One task is complete when:
-
-| Task type | Success criterion |
-|-----------|-------------------|
-| **Stub** | The file exists at the exact declared path, is syntactically valid, and exports the symbols the rest of the work will reference |
-| **Test** | The test file exists, is collected by the test runner, and **fails on an assertion** |
-
-The second row carries a distinction that matters: a test that fails because of an import error or a syntax error is not a valid test, it is a broken one. It has not demonstrated that the behaviour is missing — only that the test cannot run. Phase One tests must fail for the *right* reason, and the success criteria should say so.
-
-**Assumption:** Phase One work is executed by Workers through the normal lifecycle, not performed directly by the Developer. This keeps stub and test creation auditable and inspectable like any other work. If the Developer is meant to create stubs itself outside the task flow, say so — it would be an exception to "all work is a task".
-
-**Assumption:** A Phase One test is expected to fail at the end of Phase One. A passing test in Phase One means either the behaviour already exists or the test is not testing anything, and both are worth surfacing at the gate rather than later.
+Each rung is only worth checking once the one below it holds, and each one that fails says where the problem is: "does not compile", "crashes on start", "database stub missing" and "probe returned 500" are different problems with different fixes. A task that cannot be verified stalls itself and what depends on it, not the whole submission.
 
 ## Task Groups
 
@@ -181,21 +174,21 @@ The ceiling is **derived from the machine, not fixed at a constant**, and it mov
 
 ```
 Submission
-  Phase One
-    group "stubs"  = [create auth.ts, create session.ts]
-    group "tests"  = [test auth, test session]   ordered after stubs
-  Phase Two
+  Phase 1
+    group "schema" = [define user schema]
+    group "config" = [add session config]         ordered after "schema"
+  Phase 2
     group "auth"   = [implement auth]
     group "session"= [implement session]
     group "audit"  = [implement audit]  shares auth.ts with "auth" → priority
 
 maxParallelGroups: 2
 
-t=0   Phase One: "stubs" starts. "tests" waits — groupOrder.
-t=1   "stubs" completes. "tests" starts.
-t=2   "tests" completes (tests now failing). Phase One done.
-t=3   Phase Two: "auth" and "session" start. "audit" waits on priority.
-t=4   "auth" completes → "audit" starts.
+t=0   Phase 1: "schema" starts. "config" waits — groupOrder.
+t=1   "schema" verified and accepted. "config" starts.
+t=2   "config" verified and accepted. Phase 1 done.
+t=3   Phase 2: "auth" and "session" start. "audit" waits on priority.
+t=4   "auth" accepted, its Worker killed, auth.ts released → "audit" starts.
 ```
 
 The idle slot while a lower-priority task waits is the cost of file-overlap priority: correctness outranks utilisation.
@@ -220,43 +213,64 @@ Phases and `groupOrder` sit above both, expressing stage ordering that is neithe
 
 | State | Meaning | Set by |
 |-------|---------|--------|
-| `draft` | Defined by the Developer but not yet finalized with the Human | Developer |
-| `pending` | Finalized and awaiting assignment | Developer |
+| `draft` | Defined by the Developer but not yet approved by the Human | Developer |
+| `pending` | Approved and awaiting assignment | Developer |
 | `assigned` | Handed to a Worker, not yet started | Manager |
 | `in_progress` | Actively being executed | Worker |
-| `completed` | Executed and met all success criteria | Worker, confirmed by Manager |
+| `frozen` | Paused, with its state saved, waiting for a file another task owns | Manager |
+| `verifying` | The Worker has claimed completion; the ladder and the Manager's review are running | Worker's `task.complete` |
+| `completed` | The ladder passed and the Manager agent accepted the work | Manager |
 | `failed` | Execution ended without meeting success criteria | Worker |
-| `rejected` | Manager inspection found problems despite reported success | Manager |
+| `rejected` | The Manager agent rejected the work, or review rounds ran out | Manager |
 | `blocked` | Cannot proceed and requires Developer input | Worker or Manager |
+
+`failed`, `rejected` and `blocked` are terminal. The Developer answers each, with the Human, by creating a new task.
 
 **Assumption:** `rejected` and `blocked` are modelled as distinct states because they have different owners — a rejection is closed by the Developer creating a remediation task, whereas a block is answered by the Developer revising or splitting the original task. Simplify if this distinction is not worth carrying.
 
 ## Task Lifecycle
 
 ```
-  ┌────────┐  finalize   ┌─────────┐  assign   ┌──────────┐  start   ┌────────────┐
-  │ draft  │────────────▶│ pending │───────────▶│ assigned │─────────▶│ in_progress│
-  └────────┘             └─────────┘            └──────────┘          └─────┬──────┘
-                                                                            │
-                            ┌───────────────────────────────────────────────┤
-                            ▼                                               ▼
-                      ┌───────────┐                                 ┌────────────┐
-                      │ completed │                                 │  failed    │
-                      └───────────┘                                 └────────────┘
-                            │                                               │
-                   inspect  │                                               │ escalate
-                            ▼                                               │
-                      accepted? ── no ──▶ ┌───────────┐                     │
-                          │                │ rejected │                     │
-                          ▼                └───────────┘                     │
-                     closed                                                      │
-                                                                              │
-                            ┌──────────────────────────────────────────────────┘
-                            ▼  Developer creates remediation task
-                       (back to draft)
+  ┌───────┐ approve ┌─────────┐ assign ┌──────────┐ start
+  │ draft │────────▶│ pending │───────▶│ assigned │───────┐
+  └───────┘         └─────────┘        └──────────┘       │
+      ▲                                                   ▼
+      │                      freeze          ┌─────────────┐   task.fail    ┌────────┐
+      │         ┌────────┐◀──────────────────│             │───────────────▶│ failed │
+      │         │ frozen │                   │ in_progress │                └────────┘
+      │         └────────┘──────────────────▶│             │  task.blocked  ┌─────────┐
+      │             │         resume         └─────────────┘───────────────▶│ blocked │
+      │             │                            │       ▲                  └─────────┘
+      │             │ wait timeout               │       │                       ▲
+      │             └────────────────────────────┼───────┼───────────────────────┘
+      │                            task.complete │       │ changes_requested
+      │                                          ▼       │ (rounds left)
+      │                                     ┌───────────┐│
+      │                                     │ verifying │┘
+      │                                     └───────────┘
+      │                            accepted  │         │  rejected, or
+      │                                      ▼         ▼  rounds exhausted
+      │                             ┌───────────┐ ┌──────────┐
+      │                             │ completed │ │ rejected │
+      │                             └───────────┘ └──────────┘
+      │                             Worker killed  Worker killed
+      │
+      └── failed, rejected, blocked: escalated; the Developer, with the Human, creates a new task
 ```
 
-The loop through `rejected` and `failed` is the system's main corrective path. Note that in every failure case, the **Manager does not retry** — it escalates, and only the Developer can produce follow-up work. See [ADR-0001](../adr/0001-developer-only-task-creation.md).
+A Worker's `task.complete` is a claim, and it moves the task to `verifying`. The Manager's mechanical part runs the [ladder](#verification-ladder), then the Manager agent reviews the result and gives one of three verdicts. See [ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md).
+
+| Verdict | Task becomes | What happens |
+|---------|--------------|--------------|
+| `accepted` | `completed` | The Worker is killed, its files are released, and dependent tasks are released |
+| `changes_requested` | `in_progress` | Findings go to the same Worker, which keeps its context and tries again. The review round goes up by one |
+| `rejected` | `rejected` | The Worker is killed and the task is escalated to the Developer |
+
+The `changes_requested` loop is bounded by the task's `maxReviewRounds`. When the rounds are used up, the next verdict that is not `accepted` is `rejected`. **Assumption:** the default is two rounds, so a task gets three attempts in total.
+
+A task moves to `frozen` when the Manager answers an access request for a file another task owns with `freeze`. It returns to `in_progress` when the file is released and access is granted. A frozen task that waits past its task timeout becomes `blocked` and is escalated. See [ADR-0014](../adr/0014-peer-aware-workers-and-access-requests.md).
+
+The Manager never repairs work and never creates follow-up tasks. Findings say what is wrong, not how to fix it. Anything that ends in `failed`, `rejected` or `blocked` goes to the Developer, and only the Developer produces follow-up work. See [ADR-0001](../adr/0001-developer-only-task-creation.md).
 
 A failure also holds back anything sequenced behind it: in-group [dependencies](#task-dependencies), later groups in the same phase, and all later phases. See [Parallel Order](#parallel-order).
 
@@ -267,44 +281,45 @@ A task may declare `dependsOn` — the set of tasks that must **complete success
 - Dependencies are **intra-group only**. A dependency never crosses a group boundary — use `groupOrder` within a phase, or a later phase, for anything wider.
 - Dependencies are set by the **Developer** at creation, from knowledge of the codebase.
 - The **Manager** respects dependencies when assigning, and may not assign a task whose dependencies are unmet.
-- Dependencies are **ordering only**. A dependency does not grant access to another task's files — each task's permissions remain scoped to its own target files.
+- Dependencies are **ordering only**. A dependency does not grant access to another task's files — each task's permissions remain scoped to its own target files and any access grants it received. A completed task may publish a structured handoff that dependent Workers can read through the Manager's peer view.
 
-Only `completed` satisfies a dependency. A failed, rejected, or blocked dependency leaves its dependents unassignable, because work built on an unfinished or failed foundation is not sound — running an implementation task against a stub that failed would produce a meaningless result.
+Only `completed` satisfies a dependency. A failed, rejected, or blocked dependency leaves its dependents unassignable, because work built on an unfinished or failed foundation is not sound — building on a schema change that was rejected would produce a meaningless result.
 
 The consequence is that one failure **stalls what depends on it, not the whole queue**. Independent groups and phases continue normally. The stall resolves when the Developer acts on the escalation and the dependency eventually completes.
 
 ## Task Scheduling Rules
 
 1. **The Manager executes the plan; it does not build one.** Phases, grouping, dependencies, and priority are all declared by the Developer. The Manager's scheduling is a traversal of that plan, not an optimisation.
-2. **Phase One comes first, always.** No phase after the first may begin until Phase One is fully `completed`. See [Phase One](#phase-one).
-3. **The Manager assigns; Workers never self-schedule.** A Worker with no assignment is idle and waits.
-4. **One task per Worker.** A Worker holds at most one non-terminal task at a time. See [ADR-0002](../adr/0002-single-task-workers.md).
-5. **Dependencies first.** A task is assignable only when every task it depends on is `completed`.
-6. **Priority over file overlap.** Where two tasks in different groups or phases share a file, the higher-priority one goes first, and the other waits. See [File Ownership](../permissions/README.md#file-ownership).
-7. **Permissions follow assignment.** A Worker's access is provisioned for the assigned task and withdrawn when it reaches a terminal state.
-8. **The parallelism limit is a ceiling, not a target.** The Manager runs as many groups as the limit allows, but never exceeds it.
+2. **The Manager assigns; Workers never self-schedule.** A Worker with no assignment is idle and waits.
+3. **One task per Worker.** A Worker holds at most one non-terminal task at a time, including while it is `frozen`. See [ADR-0002](../adr/0002-single-task-workers.md).
+4. **Dependencies first.** A task is assignable only when every task it depends on is `completed`.
+5. **Priority over file overlap.** Where two tasks in different groups or phases share a file, the higher-priority one goes first, and the other waits. See [File Ownership](../permissions/README.md#file-ownership).
+6. **Permissions follow assignment.** A Worker's access is provisioned for the assigned task, widened only by a recorded access grant, and withdrawn when the task reaches a terminal state. The Worker is killed at its task's verdict. See [ADR-0014](../adr/0014-peer-aware-workers-and-access-requests.md).
+7. **The parallelism limit is a ceiling, not a target.** The Manager runs as many groups as the limit allows, but never exceeds it.
 
 ## Task Completion Rules
 
 A task is `completed` only when all of the following hold:
 
 1. Every declared target file has been addressed.
-2. Every success criterion is satisfied — tests pass, assertions hold. For a Phase One test task, the criterion is that the test fails on an assertion rather than passing or erroring.
-3. Execution stayed within the task's file scope; no undeclared file was modified.
-4. The Worker reported completion with evidence for each criterion.
-5. The Manager's inspection agrees.
+2. Execution stayed within the task's file scope — its `targetFiles` plus any files granted to it during the task. No other file was modified.
+3. The Worker reported completion with evidence for each criterion.
+4. Every applicable rung of the [verification ladder](#verification-ladder) passed. For a task declared `writesFailingTest`, its test fails on an assertion rather than passing or erroring.
+5. The Manager agent reviewed the ladder verdicts and evidence, the diff, the Worker's report and the success criteria, and gave the verdict `accepted`.
 
-If inspection disagrees, the task becomes `rejected` regardless of the Worker's report. The Worker reporting success is a claim, not a verdict — the Manager holds the verdict.
+**The mechanical floor binds the Manager agent.** It may reject work the ladder passed. It may never accept work the ladder failed: a task whose ladder did not pass can only get `changes_requested` or `rejected`.
+
+The Worker reporting success is a claim, not a verdict — the Manager holds the verdict. See [ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md).
 
 ### A completed task is not automatically a verified one
 
 Completion and verification are different states, and a task earns them separately.
 
-A task whose criteria are all **tier 2** is verified **structurally**: the change exists, is wired in, and is well-formed, and nothing more. A task with at least one **tier 1** criterion is verified **behaviourally**: the behaviour it claims to produce was shown to fail before and pass after.
+A task whose criteria and applicable rungs are all **tier 2** is verified **structurally**: the change exists, is wired in, and is well-formed, and nothing more. A task with at least one **tier 1** criterion or rung is verified **behaviourally**: the behaviour it claims to produce was shown to hold. On the ladder, rungs 1–3 are structural and rungs 4–5 are behavioural when their probes or tests assert behaviour.
 
-Every task clears the mechanical floor — that is guaranteed by [validation rule 3](../specifications/task-spec.md#validation-rules), and a task whose criteria are all `review` is rejected outright. But the floor is a floor, not a ceiling, and it is met at different heights. The distinction is a **reporting** obligation, and it is not optional: a submission that reports a tier 2 pass and a tier 1 pass both as "passed" has reintroduced exactly the false pass that [ADR-0007](../adr/0007-test-verdict-contract.md) exists to prevent.
+Every task clears the mechanical floor — at least one ladder rung must apply (see [Validation Rules](../specifications/task-spec.md#validation-rules)), and a task whose criteria are all `review` is rejected outright. But the floor is a floor, not a ceiling, and it is met at different heights. The distinction is a **reporting** obligation, and it is not optional: a submission that reports a tier 2 pass and a tier 1 pass both as "passed" has reintroduced exactly the false pass that [ADR-0007](../adr/0007-test-verdict-contract.md) exists to prevent.
 
-So the final report to the Human distinguishes them — a task verified structurally says so, and names what it established. A whole submission built on tier 2 is a real, useful result and is not a fully tested one. See [Criterion Tiers](../specifications/task-spec.md#criterion-tiers) and [ADR-0011](../adr/0011-tiered-success-criteria.md).
+So the final report to the Human distinguishes them — every task names the **highest rung it reached**, and a task verified structurally says so and names what it established. A task that only compiled is never reported as tested. A whole submission built on tier 2 is a real, useful result and is not a fully tested one. See [Criterion Tiers](../specifications/task-spec.md#criterion-tiers) and [ADR-0011](../adr/0011-tiered-success-criteria.md).
 
 ## Failure Containment
 
@@ -320,6 +335,8 @@ A Worker that crashes, hangs, is killed, or exhausts memory fails **its** task. 
 
 Independence is what makes this safe: a task depends only on what it declared, and an unrelated task has no reason to care. A Worker pool absorbs the loss by leasing a fresh Worker for the next task, so a crash costs latency rather than capacity.
 
+A crash is not a review round. The bounded `changes_requested` loop applies only to work that reached `verifying`.
+
 ## See Also
 
 - [Task Specification](../specifications/task-spec.md)
@@ -328,4 +345,7 @@ Independence is what makes this safe: a task depends only on what it declared, a
 - [Permissions](../permissions/README.md)
 - [Testing](../testing/README.md)
 - [ADR-0005 — Predefined Parallel Order](../adr/0005-predefined-parallel-order.md)
-- [ADR-0006 — Phase One Is Mandatory](../adr/0006-phase-one-is-mandatory.md)
+- [ADR-0006 — Phase One Is Mandatory](../adr/0006-phase-one-is-mandatory.md) (superseded by ADR-0012)
+- [ADR-0012 — A Verification Ladder Replaces Phase One](../adr/0012-verification-ladder-replaces-phase-one.md)
+- [ADR-0013 — The Manager Verifies, Reviews, and Retires Workers](../adr/0013-manager-verifies-reviews-and-retires-workers.md)
+- [ADR-0014 — Peer-Aware Workers and Access Requests](../adr/0014-peer-aware-workers-and-access-requests.md)

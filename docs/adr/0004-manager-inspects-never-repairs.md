@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. Amended by [ADR-0013](0013-manager-verifies-reviews-and-retires-workers.md): before escalating, the Manager may return findings to the same Worker for a bounded number of review rounds. The Manager still never repairs work.
 
 ## Date
 

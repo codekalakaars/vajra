@@ -24,16 +24,18 @@ A Worker needs enough context to complete its task without asking questions, and
 
 **Assumption:** A Worker's context at assignment contains:
 
-- The task: description, `targetFiles`, `successCriteria`, `dependsOn`.
-- The declared permissions.
+- The task: description, `targetFiles`, `successCriteria`, `verification`, `dependsOn`.
+- The declared permissions, and any access grants made during the task.
 - The current contents of its target files, and of read-only files it needs.
 - Enough surrounding code to make the change coherently.
+- A bounded, read-only peer view from the Manager: the project goal, the plan's other tasks, each task's state and holder, the files each active task owns, and handoffs from completed tasks. The Worker can refresh it with `team.query`. See [ADR-0014](../adr/0014-peer-aware-workers-and-access-requests.md).
+- On a later review round, the Manager's findings (`review.feedback`), added to the context the Worker already holds.
 
-It does **not** contain: the Human's original requirement, other tasks, other Workers' state, or the full repository.
+It does **not** contain: the Human conversation, other Workers' conversations or intermediate edits, or the full repository.
 
-This is a deliberate limit. A Worker given the whole conversation may infer intent beyond what the task specified and drift outside its scope; the task is the contract, not the conversation that produced it.
+This is a deliberate limit. A Worker given the whole conversation may infer intent beyond what the task specified and drift outside its scope; the task is the contract, not the conversation that produced it. The peer view tells a Worker what its neighbours hold and have finished, not how they are doing it.
 
-TODO: Define how much surrounding code is pulled in, and how target files are located when a task names a path that does not yet exist.
+TODO: Define how much surrounding code is pulled in, and how much of the peer view goes into context by default versus on request (an open question in [ADR-0014](../adr/0014-peer-aware-workers-and-access-requests.md)). A target file that does not exist yet is created by the Worker that owns the task.
 
 ## Agent Runtime
 
@@ -42,7 +44,11 @@ The runtime hosts the three automated roles and mediates every message between t
 **Assumption:**
 
 - **Developer and Manager** are long-lived for a session. They span many tasks and hold the accumulated picture of the work.
-- **Workers** are per-task. Provisioned at assignment, destroyed at a terminal state, which keeps permissions from accumulating across tasks.
+- **Workers** are per-task. Provisioned at assignment and killed by the Manager's mechanical part when the task reaches a terminal state — at the verdict for a reviewed task. No Worker outlives its task's verdict, which keeps permissions from accumulating across tasks. See [ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md).
+- **A `changes_requested` verdict does not kill the Worker.** The same Worker receives the findings and keeps its context.
+- **A frozen Worker keeps its state.** It pauses with its context and its own files held, and resumes when the file it waits for is released. It still holds only its one task.
+
+Every kill is a runtime action, not a message, and is recorded in the audit log.
 
 This follows from permissions being derived per task. The cost is startup latency per task, which needs measuring before the design is safe to commit to.
 
@@ -55,12 +61,12 @@ Three distinct kinds of state, with different lifetimes:
 | State | Lifetime | Examples |
 |-------|----------|----------|
 | **Task state** | Until the task is closed, then archived | `Task` objects, state transitions |
-| **Execution state** | For one task execution | Worker context, in-flight edits, partial results |
+| **Execution state** | For one task, across its review rounds and freezes | Worker context, in-flight edits, partial results, review findings |
 | **Session state** | For a session | The task set, Manager's scheduling view, open escalations |
 
-**Assumption:** The task set is the durable source of truth. Execution state is disposable — destroying a Worker loses in-flight work, which is acceptable because a failed task is answered by a new task from the Developer, not by resuming the old one.
+**Assumption:** The task set is the durable source of truth. Execution state is preserved for as long as its task is open: across `changes_requested` rounds, so the same Worker can act on the findings, and across a freeze, so the Worker can resume where it stopped. It is discarded when the Worker is killed at a terminal state. A task that ends `failed`, `rejected` or `blocked` is answered by a new task from the Developer, not by resuming the old execution.
 
-This is why the corrective path is designed around escalation rather than retry: it removes any need to preserve failed execution state.
+TODO: Decide whether a frozen Worker's state is held in memory or saved to disk, and whether it survives a restart of the runtime.
 
 TODO: Decide the storage medium and whether archived tasks are retained, given the audit requirement in [Security Model](../permissions/security-model.md#audit-logs).
 
@@ -72,23 +78,25 @@ The engine drives the Manager's loop, and through it every task in the system. I
 
 Per task:
 
-1. Activate Phase One, then the next phase once the previous is `done`.
+1. Activate the first phase, then the next phase once the previous is `done`.
 2. Within a phase, activate groups per `groupOrder` and `maxParallelGroups`.
 3. Select an eligible task in an active group — dependencies `completed`, no higher-priority task holding a shared file, Worker available.
 4. Provision permissions; acquire file ownership.
-5. Assign, and supervise progress reports.
-6. On a terminal report, withdraw permissions; release ownership.
-7. Inspect against success criteria; record `completed` or `rejected`.
-8. Report upward; continue the loop.
+5. Assign, and supervise progress reports, `team.query` and `access.request` messages. Record grants, and freeze or resume the Worker as the Manager agent decides.
+6. On `task.complete`, move the task to `verifying` and run the [verification ladder](../tasks/README.md#verification-ladder), stopping at the first failing rung.
+7. Pass the ladder result, diff, Worker report, access grants and success criteria to the Manager agent for review.
+8. Apply the verdict. `accepted` records `completed`. `changes_requested` sends findings to the same Worker and returns to step 5, until `maxReviewRounds` is used up. `rejected` records `rejected`. The mechanical floor holds: a ladder fail is never recorded as `completed`.
+9. On a terminal state — including `failed` or `blocked` — kill the Worker, withdraw permissions, and release ownership.
+10. Report upward; continue the loop.
 
-Three properties are load-bearing:
+These properties are load-bearing:
 
 - **The plan is never adjusted.** A suboptimal grouping is executed as given. Correcting it is the Developer's job, and raising it is a suggestion at most.
-- **The phase gate is absolute.** A later phase cannot begin while Phase One is incomplete, so a Phase One failure stalls the submission rather than letting implementation proceed against missing groundwork.
+- **Facts are established by code and judged by a model.** The ladder and every scheduling decision are deterministic; the Manager agent decides only verdicts and access requests. See [ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md).
 - **Scheduling guards are not security boundaries.** Refusing a conflicting assignment prevents a problem; it does not prevent one. The Worker-side and environment-side controls in [Permissions](../permissions/README.md#enforcement-points) are what actually contain execution.
-- **Inspection is independent.** The inspecting role neither wrote the task's code nor defined its criteria, so a passing verdict means something.
+- **Review is independent.** The reviewing role neither wrote the task's code nor defined its criteria, so a passing verdict means something.
 
-TODO: Define how inspection evaluates `review`-type criteria, and what evidence it requires beyond the Worker's own report. `test` and `assertion` criteria are handled mechanically — see [Testing](../testing/README.md).
+TODO: Define how the Manager agent evaluates `review`-type criteria, and what evidence it requires beyond the Worker's own report and the ladder result. `test` and `assertion` criteria and ladder rungs are handled mechanically — see [Testing](../testing/README.md).
 
 ## LLM Providers
 
@@ -104,7 +112,7 @@ TODO: The credential path is implemented and not tested end to end — see [Cove
 
 ## Observability
 
-**Assumption:** The audit log in [Security Model](../permissions/security-model.md#audit-logs) and the runtime event stream are the same artifact, append-only, recording every task transition, permission grant, file write, and message.
+**Assumption:** The audit log in [Security Model](../permissions/security-model.md#audit-logs) and the runtime event stream are the same artifact, append-only, recording every task transition, permission grant, access grant, Worker freeze, resume and kill, file write, and message.
 
 If they must be separate, the audit log needs its own retention and access rules, and this section should say so.
 
@@ -117,10 +125,13 @@ TODO: Define the event schema, retention, and who can read the log.
 - [ ] Local subprocess or network transport to Workers? (Largest unresolved decision.)
 - [ ] Per-task Worker provisioning — is the startup cost acceptable?
 - [ ] How is surrounding code selected for a Worker's context?
-- [ ] How does inspection evaluate non-test criteria?
+- [ ] How does the Manager agent evaluate non-test criteria?
+- [ ] Does a `changes_requested` round re-run the whole ladder, or only the rungs that failed? ([ADR-0013](../adr/0013-manager-verifies-reviews-and-retires-workers.md))
+- [ ] How does rung 4 share ports and fixtures between concurrent tasks, and are ladder results cached across tasks that share a build? ([ADR-0012](../adr/0012-verification-ladder-replaces-phase-one.md))
+- [ ] Where is a frozen Worker's state kept, and does it survive a runtime restart?
 - [ ] Is the audit log the same artifact as the event stream?
 - [ ] Where is task state stored, and how long is it retained?
-- [ ] What is the context budget for a Worker, and what happens when a task exceeds it?
+- [ ] What is the context budget for a Worker, and what happens when a task exceeds it — now that review rounds and the peer view add to it?
 - [ ] When a second LLM provider is added, how are credentials stored per provider? [ADR-0009](../adr/0009-opencode-zen-is-the-only-provider.md) records this as deliberately undecided.
 
 ## See Also

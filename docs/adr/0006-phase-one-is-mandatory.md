@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-0012](0012-verification-ladder-replaces-phase-one.md).
 
 ## Date
 
@@ -60,5 +60,6 @@ Phases are the sequential spine of a submission: they run one after another, whi
 
 - [ADR-0001 — Developer-Only Task Creation](0001-developer-only-task-creation.md)
 - [ADR-0005 — Predefined Parallel Order](0005-predefined-parallel-order.md)
-- [Tasks](../tasks/README.md#phase-one)
+- [ADR-0012 — A Verification Ladder Replaces Phase One](0012-verification-ladder-replaces-phase-one.md)
+- [Tasks](../tasks/README.md)
 - [Execution](../execution/README.md)

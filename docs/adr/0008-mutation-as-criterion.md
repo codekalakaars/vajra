@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. Its references to Phase One predate [ADR-0012](0012-verification-ladder-replaces-phase-one.md), which removed it; the green-baseline rule now means mutation runs only after a task's tests pass on the ladder.
 
 ## Date
 
