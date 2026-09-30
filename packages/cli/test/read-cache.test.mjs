@@ -165,7 +165,7 @@ test('relative and absolute spellings share one cache entry', async (t) => {
   setMtime(f.file, T0)
   const h = createToolHandle(f.dir)
   const { relative } = await import('node:path')
-  const rel = relative(process.cwd(), f.file)
+  const rel = relative(f.dir, f.file)
   await h.callTool('read_file', { path: rel })
   // Same key → invalidation through the relative spelling clears the absolute one.
   await h.callTool('write_file', { path: f.file, content: 'version B' })
