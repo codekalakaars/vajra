@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Amends [ADR-0004](0004-manager-inspects-never-repairs.md).
+Accepted. Amends [ADR-0004](0004-manager-inspects-never-repairs.md). Amended by [ADR-0016](0016-failed-attempts-are-respawned.md): `changes_requested` respawns a fresh Worker with the checkpoint and findings instead of returning them to the same Worker.
 
 ## Date
 

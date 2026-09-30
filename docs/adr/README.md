@@ -52,8 +52,10 @@ Numbering is sequential and never reused. A reversed decision gets a new ADR tha
 | [0010](0010-every-role-is-an-llm-agent.md) | Developer, Manager and Worker are all LLM agents, each with its own model | Accepted |
 | [0011](0011-tiered-success-criteria.md) | Success criteria are tiered — behavioural, structural, review — and the mechanical floor is never dropped | Accepted |
 | [0012](0012-verification-ladder-replaces-phase-one.md) | A verification ladder — compiles, runs, dependencies, serves, tests — replaces Phase One | Accepted |
-| [0013](0013-manager-verifies-reviews-and-retires-workers.md) | The Manager has a mechanical part and an LLM part; it verifies, reviews with bounded rounds, and kills every Worker at its verdict | Accepted |
+| [0013](0013-manager-verifies-reviews-and-retires-workers.md) | The Manager has a mechanical part and an LLM part; it verifies, reviews with bounded rounds, and kills every Worker at its verdict | Accepted; amended by [0016](0016-failed-attempts-are-respawned.md) |
 | [0014](0014-peer-aware-workers-and-access-requests.md) | Workers are peer-aware through the Manager and may request more access | Accepted |
+| [0015](0015-workers-compact-their-own-context.md) | Workers compact their own context at 70% of the window, into a fixed checkpoint, and report `stuck` when compaction stops helping | Accepted |
+| [0016](0016-failed-attempts-are-respawned.md) | Every failed attempt ends its Worker; the Manager respawns the task with the checkpoint and findings, keeping the attempt's changes | Accepted |
 
 These first eight are mutually reinforcing. Each closes a hole the others would otherwise leave: 0001 centralizes planning authority, 0002 keeps execution attributable, 0003 bounds the damage a Worker can do, 0004 keeps verification independent of the work being verified, 0005 keeps the parallel structure a planning decision rather than a runtime one, 0006 made "done" executable before any implementation was written, 0007 makes verification checkable rather than nominal, and 0008 asks whether the check has teeth at all. 0006 has since been superseded by 0012, and 0003, 0004 and 0007 amended by 0012–0014.
 
@@ -70,6 +72,8 @@ These first eight are mutually reinforcing. Each closes a hole the others would 
 0013 says what the Manager's inspection is made of. A mechanical part establishes facts — scheduling, permissions, the ladder — and an LLM part judges them, returning `accepted`, `changes_requested` or `rejected`. The model may reject a ladder pass but never accept a ladder fail. `changes_requested` sends findings back to the same Worker for a bounded number of rounds, which amends 0004's rule that every problem is a Developer round trip; the Manager still never repairs. Every Worker is killed at its task's verdict.
 
 0014 relaxes two isolation rules while keeping the one-writer guarantee. Workers get a read-only peer view through the Manager, with no lateral channel. A Worker that needs a file outside its task can ask for it: a free file may be granted, and an owned file is waited for (`freeze` or `continue_meanwhile`) or declared `not_needed`. This supersedes 0003's scope-immutability rule; permissions are still derived per task and withdrawn at its end.
+
+0015 and 0016 are a pair. 0015 lets a Worker survive a full context by compacting it into a fixed checkpoint, and says when compaction has stopped helping. 0016 uses the same checkpoint when a Worker has to go: every failed attempt ends its Worker, and a fresh one continues from the checkpoint with the Manager's findings. That amends 0013, whose `changes_requested` returned findings to the same Worker.
 
 ## When to Write One
 

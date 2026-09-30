@@ -1,5 +1,7 @@
 # Agent Runtime Migration: Parallel Execution Plan
 
+> **Paused (2026-09-30).** S0 and S1 are merged and remain gates. Lanes L1–L7 and LADDER-A/B are paused by [`VAJRA_BUILD_PLAN.md`](VAJRA_BUILD_PLAN.md), which changes the same files. Do not start them. They will be re-planned against the code as it stands after that plan's PR 8. Decisions D3, D4 and D5 below are settled there.
+
 **Status:** Proposed. This document is the execution plan for
 [`AGENT_RUNTIME_ARCHITECTURE_PLAN.md`](AGENT_RUNTIME_ARCHITECTURE_PLAN.md) — how to
 carry it out with several agents working at once without them corrupting each
