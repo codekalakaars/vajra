@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 const dist = join(import.meta.dirname, '..', 'dist')
 const { capToolOutput } = await import(pathToFileURL(join(dist, 'worker', 'output-cap.js')).href)
 const { parseCommandResult } = await import(pathToFileURL(join(dist, 'worker', 'execute.js')).href)
-const { compressMessages } = await import(pathToFileURL(join(dist, 'developer', 'developer.js')).href)
+const { compressMessages } = await import(pathToFileURL(join(dist, 'model', 'compress.js')).href)
 const { getModelLimit } = await import(pathToFileURL(join(dist, 'model', 'context-window.js')).href)
 
 test('a result under the cap is untouched', () => {

@@ -655,3 +655,87 @@ test('an anchor outside a narrowed read is refused, because it was never shown',
   assert.match(feedback, /anchor for 'src\/todo\.ts' does not appear in the file/)
   assert.ok(WHOLE.includes('initialTodos.filter(Boolean)'), 'the anchor does exist in the real file')
 })
+
+// ---------------------------------------------------------------------------
+// The Developer's budget: how much it may do before it must produce a plan.
+// ---------------------------------------------------------------------------
+
+/** A provider that makes one tool call per round, forever, and records every request. */
+function endlessCalls(toolName, args) {
+  const requests = []
+  let n = 0
+  const restore = useProvider(async (_url, init) => {
+    requests.push(JSON.parse(init.body))
+    n++
+    return sseResponse([
+      {
+        choices: [{
+          delta: {
+            tool_calls: [{ index: 0, id: `call_${n}`, type: 'function', function: { name: toolName, arguments: JSON.stringify(args) } }],
+          },
+          finish_reason: null,
+        }],
+      },
+      toolFinish,
+    ])
+  })
+  return { requests, restore }
+}
+
+test('a Developer that only reads is cut off after exactly 30 tool calls', async () => {
+  const { requests, restore } = endlessCalls('read_file', { path: 'README.md' })
+  try {
+    const messages = []
+    await runTurn({ messages })
+
+    const results = messages.filter(m => m.role === 'tool').map(m => String(m.content))
+    assert.equal(results.length, 30, 'thirty calls ran, then the loop stopped')
+    assert.equal(
+      messages.filter(m => m.role === 'assistant' && m.tool_calls).flatMap(m => m.tool_calls).length,
+      results.length,
+      'no tool call is left without an answer',
+    )
+    assert.equal(requests.length, 30, 'the model was not asked again once the budget was spent')
+  } finally {
+    restore()
+  }
+})
+
+test('a round that asks for more calls than remain gets a refusal for the extras, not a dangling call', async () => {
+  // One round with 40 parallel reads: 30 fit, the other 10 must still be answered,
+  // because a provider rejects an assistant tool call that has no matching result.
+  const calls = Array.from({ length: 40 }, (_, i) => ({
+    index: i,
+    id: `call_${i}`,
+    type: 'function',
+    function: { name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }) },
+  }))
+  const restore = useProvider(async () => sseResponse([{ choices: [{ delta: { tool_calls: calls }, finish_reason: null }] }, toolFinish]))
+  try {
+    const messages = []
+    await runTurn({ messages })
+
+    const results = messages.filter(m => m.role === 'tool')
+    assert.equal(results.length, 40, 'every one of the 40 calls was answered')
+    assert.equal(results.filter(m => /Tool call budget exhausted/.test(String(m.content))).length, 10)
+  } finally {
+    restore()
+  }
+})
+
+test('search_files is free: it does not use up the tool-call budget', async () => {
+  const { requests, restore } = endlessCalls('search_files', { query: 'readme' })
+  try {
+    const messages = []
+    // Free calls are bounded by the iteration and time limits instead, so this
+    // run is allowed far more than 30 of them before the loop gives up.
+    await runTurn({ messages, summaryIndex: [{ path: 'README.md', symbols: [], imports: 0, exports: 0, lines: 1, preview: '# demo' }] })
+
+    const results = messages.filter(m => m.role === 'tool').map(m => String(m.content))
+    assert.equal(results.some(text => /Tool call budget exhausted/.test(text)), false, 'free calls never trip the tool budget')
+    assert.ok(requests.length > 30, `more than 30 free calls were allowed (${requests.length})`)
+    assert.ok(requests.length <= 61, `but the iteration limit still ends the loop (${requests.length})`)
+  } finally {
+    restore()
+  }
+})

@@ -1,5 +1,4 @@
 import type { TaskQueue, TaskState } from './taskqueue.js'
-import type { ChangeHistory } from '@codekalakaars/vajra-sandbox'
 import type { TaskEvent } from './ui.js'
 import type { LaunchHandle } from '../developer/developer.js'
 import type { ReadLockMode, ScheduleOrder, WorkerParams } from '../bench/params.js'

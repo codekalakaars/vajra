@@ -160,3 +160,17 @@ export class Governor {
     for (const wake of waiters) wake()
   }
 }
+
+/**
+ * The cap on Workers running at once: none, unless `--concurrency` asks for one.
+ *
+ * Without a cap the machine decides — a task starts while CPU and RAM have room
+ * for it, and the lowest-priority Worker is paused while the CPU is saturated
+ * (`governor.ts`). The flag stays as an explicit ceiling for a user who
+ * wants one, clamped to >= 1 so a zero or negative value cannot freeze the
+ * scheduler.
+ */
+export function resolveMaxWorkers(override?: number): number {
+  if (override === undefined || !Number.isFinite(override)) return Number.POSITIVE_INFINITY
+  return Math.max(1, Math.floor(override))
+}

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const developerUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'developer', 'developer.js')).href
+const developerUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'model', 'compress.js')).href
 const { compressMessages } = await import(developerUrl)
 
 function unitAssistant(id, toolIds) {

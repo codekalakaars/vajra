@@ -1,5 +1,5 @@
 import { posix } from 'node:path'
-import { normalizeProjectPath } from '@codekalakaars/vajra-sandbox'
+import { normalizeProjectPath, type FileLockManager } from '@codekalakaars/vajra-sandbox'
 import type { ReadLockMode } from '../bench/params.js'
 import type { TaskState } from './taskqueue.js'
 
@@ -84,4 +84,50 @@ export function tasksConflict(a: LeasedTask, b: LeasedTask, readLocks: ReadLockM
     if (otherMode !== undefined && (lease.mode === 'write' || otherMode === 'write')) return true
   }
   return false
+}
+
+/**
+ * Acquire a task's leases, one path at a time, in path order.
+ *
+ * The order is the load-bearing part. Two tasks that each want two of the same
+ * files can only wait on each other if they take the files in opposite orders,
+ * so taking them in one global order (sorted by path) means a task that is
+ * waiting holds nothing a peer is waiting for, and there is no cycle to
+ * deadlock on. A blanket `acquireOrWait` over the whole set is not available
+ * here: under `shared` a task's reads and its writes want different modes, and
+ * grouping them by mode reintroduces exactly that cycle.
+ *
+ * With `exclusive` every path is a write lease, so this is the same set of
+ * locks as before, taken one call at a time and in the same order every time.
+ */
+export async function acquireTaskLeases(
+  locks: FileLockManager,
+  task: LeaseFiles & { id: string },
+  readLocks: ReadLockMode,
+  projectDir: string,
+): Promise<void> {
+  const leases = [...taskLeases(task, readLocks, projectDir)].sort((a, b) =>
+    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+  )
+  for (const lease of leases) {
+    await locks.acquireOrWait([lease.path], task.id, lease.mode)
+  }
+}
+
+/**
+ * Whether every lease this task needs is free right now.
+ *
+ * Checked per lease for the same reason acquisition is per lease: under `shared`
+ * a task may hold reads on a file a peer is reading, so one blanket `write`
+ * check would refuse an admission that has no conflict in it.
+ */
+export function canAcquireTaskLeases(
+  locks: FileLockManager,
+  task: LeaseFiles & { id: string },
+  readLocks: ReadLockMode,
+  projectDir: string,
+): boolean {
+  return taskLeases(task, readLocks, projectDir).every(lease =>
+    locks.canAcquire([lease.path], lease.mode, task.id),
+  )
 }

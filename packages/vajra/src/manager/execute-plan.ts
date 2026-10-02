@@ -1,126 +1,36 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
-  FileLockManager,
   ChangeHistory,
-} from '@codekalakaars/vajra-sandbox'
-import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
-import { AgentRegistry, type AgentState } from './registry.js'
-import { TaskQueue, type TaskState, type TaskStatus } from './taskqueue.js'
-import { streamChatCompletion, type ChatMessage, type ReasoningEffort } from '../model/chat.js'
-import { evaluateSkipIfDetailed } from '../worker/skip.js'
-import { taskLeases } from './leases.js'
-import {
   createToolHandle,
-  tokenizeCommand,
-  computeTaskPermissions,
-  normalizeProjectPath,
-  spawnAgentPool,
+  FileLockManager,
   type Agent,
-  type LaunchHandle,
   type ToolCache,
 } from '@codekalakaars/vajra-sandbox'
-import { executeTask } from '../worker/execute.js'
+import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
+import { streamChatCompletion, type ChatMessage, type ReasoningEffort } from '../model/chat.js'
 import { buildProjectCard } from '../worker/project-card.js'
-import { buildHandoff } from './handoff.js'
-import { diffsWithin, type DiffFile } from '../worker/diff.js'
-import type { AttemptRecord, Handoff, WorkerContext } from '../worker/context-types.js'
 import { needsServer } from '../worker/server.js'
+import type { WorkerParams } from '../bench/params.js'
+import { createAttemptLog } from './attempts.js'
+import { commandResourcePath, withCommandResourceLock } from './command-locks.js'
+import { Governor, resolveMaxWorkers, type Sampler } from './governor.js'
+import { canAcquireTaskLeases } from './leases.js'
 import { masterDecide, masterLoop, runRollbackCommands, MASTER_DECIDE_TOOL_SPECS } from './master.js'
-import { finalReport, type FinalReport } from './report.js'
-import type { AgentEvent, AgentPhase, SessionUI } from './ui.js'
-import { TODAYS_PARAMS, type WorkerParams } from '../bench/params.js'
-import { Governor, type Sampler } from './governor.js'
 import { PauseGate } from './pause.js'
+import { AgentRegistry } from './registry.js'
+import { finalReport, type FinalReport } from './report.js'
+import { createTaskRunner } from './run-task.js'
+import { TaskQueue, type TaskState, type TaskStatus } from './taskqueue.js'
+import { safeAgentEmitter, type AgentEvent, type AgentPhase, type SessionUI } from './ui.js'
 
-/**
- * The cap on Workers running at once: none, unless `--concurrency` asks for one.
- *
- * Without a cap the machine decides — a task starts while CPU and RAM have room
- * for it, and the lowest-priority Worker is paused while the CPU is saturated
- * (`agent/governor.ts`). The flag stays as an explicit ceiling for a user who
- * wants one, clamped to >= 1 so a zero or negative value cannot freeze the
- * scheduler.
- */
-export function resolveMaxWorkers(override?: number): number {
-  if (override === undefined || !Number.isFinite(override)) return Number.POSITIVE_INFINITY
-  return Math.max(1, Math.floor(override))
-}
-
-const COMMAND_RESOURCE_PATHS: Record<string, string> = {
-  git: 'resource:git',
-  npm: 'resource:node_modules',
-  npx: 'resource:node_modules',
-  pnpm: 'resource:node_modules',
-  yarn: 'resource:node_modules',
-  cargo: 'resource:cargo',
-}
-
-export function commandResourcePath(command: string, argv?: readonly string[]): string | null {
-  let executable: string
-  if (argv?.[0]) {
-    executable = argv[0]
-  } else {
-    const tokenized = tokenizeCommand(command)
-    if (!tokenized.ok) return null
-    executable = tokenized.argv[0]
-  }
-  const name = (executable.split(/[\\/]/).pop() ?? '').toLowerCase()
-  return COMMAND_RESOURCE_PATHS[name] ?? null
-}
-
-export function withCommandResourceLock(
-  handle: LaunchHandle,
-  locks: FileLockManager,
-  owner: string,
-): LaunchHandle {
-  let nextLockId = 1
-  return {
-    callTool: async (tool, args) => {
-      if (tool !== 'run_command' || (typeof args !== 'object' || args === null)) {
-        return handle.callTool(tool, args)
-      }
-      const command = String((args as { command?: unknown }).command ?? '')
-      const argv = Array.isArray((args as { argv?: unknown }).argv)
-        ? (args as { argv: unknown[] }).argv.map(String)
-        : undefined
-      const path = commandResourcePath(command, argv)
-      if (path === null) return handle.callTool(tool, args)
-
-      const lockOwner = `${owner}:command-resource:${nextLockId++}`
-      await locks.acquireOrWait([path], lockOwner, 'write')
-      try {
-        return await handle.callTool(tool, args)
-      } finally {
-        locks.releaseFiles([path], lockOwner)
-      }
-    },
-  }
-}
 /** The Master tool loop parses model output; malformed JSON is not fatal. */
 function safeJson(raw: string): unknown {
   try {
     return JSON.parse(raw)
   } catch {
     return {}
-  }
-}
-
-/**
- * `ui.onAgentEvent`, wrapped so a renderer cannot fail a run.
- *
- * The port requires `onAgentEvent`, but JavaScript test doubles and embedders may
- * not implement it. Observability must never be able to fail a run.
- */
-export function safeAgentEmitter(ui: SessionUI): (event: AgentEvent) => void {
-  const agentUi = ui as { onAgentEvent?: (event: AgentEvent) => void }
-  return (event: AgentEvent): void => {
-    try {
-      agentUi.onAgentEvent?.(event)
-    } catch {
-      // a renderer that throws must not take the session down
-    }
   }
 }
 
@@ -220,7 +130,6 @@ export async function executePlan(
 
   // No Worker count: CPU and RAM decide, unless a session passed --concurrency.
   const maxWorkers = resolveMaxWorkers(options.concurrency)
-  const workerModel = params.workerModel
   const governor = new Governor(params, deps.sampler)
 
   /**
@@ -261,353 +170,19 @@ export async function executePlan(
   /** The worker agent each task is running under, for terminal transitions. */
   const taskAgents = new Map<string, string>()
 
-  /**
-   * What each completed task published, and what each failed attempt left.
-   *
-   * Both are in memory and in the run's result, not in the session store: a
-   * tuning run must not leave ten records per suite, and a handoff is only
-   * meaningful for the run it belongs to — the files it names are changed again
-   * by the next run.
-   */
-  const handoffs = new Map<string, Handoff>()
-  const attempts = new Map<string, AttemptRecord[]>()
-
-  /**
-   * How this project is built and checked, read off its manifests once.
-   *
-   * Built here rather than per Worker because it is the same for all of them:
-   * every pack in a run carries one card, so a Worker never spends a round
-   * discovering how the tests are run.
-   */
   const projectCard = buildProjectCard(projectDir)
-
-  /**
-   * The before and after of every file an attempt is on record for changing.
-   *
-   * Read now, because the rollback that follows a failed attempt deletes the
-   * evidence: a diff captured afterwards would show nothing. `undefined` from
-   * the ledger means no baseline was recorded, and there is no honest diff to
-   * write for that file.
-   */
-  const attemptContent = (
-    task: TaskState,
-  ): { files: string[]; before: Map<string, string | null>; after: Map<string, string | null> } => {
-    const files = changeHistory.getTaskFiles(task.id)
-    const before = new Map<string, string | null>()
-    const after = new Map<string, string | null>()
-    for (const path of files) {
-      const original = changeHistory.getOriginalContent(task.id, path)
-      if (original === undefined) continue
-      before.set(path, original)
-      try {
-        after.set(path, readFileSync(resolve(projectDir, path), 'utf-8'))
-      } catch {
-        after.set(path, null)
-      }
-    }
-    return { files: [...before.keys()], before, after }
-  }
-
-  const diffOfAttempt = (task: TaskState): string => {
-    const { files, before, after } = attemptContent(task)
-    return diffsWithin(
-      files.map((path): DiffFile => ({ path, before: before.get(path) ?? null, after: after.get(path) ?? null })),
-      params.respawnDiffChars,
-    )
-  }
-
-  /**
-   * The handoffs a task starts from: its direct dependencies in full, and the
-   * rest as interfaces only.
-   *
-   * Split that way because a transitive handoff describes code written against a
-   * tree this task is not looking at, while the declarations it established are
-   * exactly what a caller two steps away needs.
-   */
-  const upstreamOf = (
-    task: TaskState,
-  ): { direct: Handoff[]; transitive: Handoff[] } | undefined => {
-    const direct: Handoff[] = []
-    for (const id of task.dependsOn) {
-      const handoff = handoffs.get(id)
-      if (handoff) direct.push(handoff)
-    }
-    const transitive: Handoff[] = []
-    const seen = new Set(task.dependsOn)
-    const frontier = [...task.dependsOn]
-    while (frontier.length > 0) {
-      const id = frontier.shift() as string
-      for (const depId of queue.getTask(id)?.dependsOn ?? []) {
-        if (seen.has(depId)) continue
-        seen.add(depId)
-        const handoff = handoffs.get(depId)
-        if (handoff) transitive.push(handoff)
-        frontier.push(depId)
-      }
-    }
-    return direct.length === 0 && transitive.length === 0 ? undefined : { direct, transitive }
-  }
-
-  /**
-   * Acquire a task's leases, one path at a time, in path order.
-   *
-   * The order is the load-bearing part. Two tasks that each want two of the
-   * same files can only wait on each other if they take the files in opposite
-   * orders, so taking them in one global order (sorted by path) means a task
-   * that is waiting holds nothing a peer is waiting for — and there is no cycle
-   * to deadlock on. A blanket `acquireOrWait` over the whole set is not
-   * available here: under `shared` a task's reads and its writes want different
-   * modes, and grouping them by mode reintroduces exactly that cycle.
-   *
-   * With `exclusive` every path is a write lease, so this is the same set of
-   * locks as before, taken one call at a time and in the same order every time.
-   */
-  const acquireLeases = async (task: TaskState): Promise<void> => {
-    const leases = [...taskLeases(task, params.readLocks, projectDir)].sort((a, b) =>
-      a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
-    )
-    for (const lease of leases) {
-      await fileLocks.acquireOrWait([lease.path], task.id, lease.mode)
-    }
-  }
-
-  /**
-   * Whether every lease this task needs is free right now.
-   *
-   * Checked per lease for the same reason acquisition is per lease: under
-   * `shared` a task may hold reads on a file a peer is reading, so one blanket
-   * `write` check would refuse an admission that has no conflict in it.
-   */
-  const canAcquireLeases = (task: TaskState): boolean =>
-    taskLeases(task, params.readLocks, projectDir).every(lease =>
-      fileLocks.canAcquire([lease.path], lease.mode, task.id),
-    )
-
-  /**
-   * One attempt of one task, end to end. Everything it owns (dirty flag,
-   * permissions, handle scope, locks) is torn down on every exit path, and
-   * a throw fails *this* task only — peers keep their changes.
-   *
-   * The retry policy is not here: the Manager decides whether this gets another
-   * attempt. This returns whether the attempt succeeded.
-   */
-  const runTaskOnce = async (task: TaskState): Promise<boolean> => {
-    let agent: AgentState | null = null
-    let dirty = false
-    try {
-      const allTaskFiles = [...task.readFile, ...task.writeFile, ...task.deleteFile]
-      // D4: wait for locks instead of permanently skipping on conflict.
-      await acquireLeases(task)
-
-      // D2: track dirty-set via onMutate rather than changeHistory.hasChanges
-      // alone (baseline records can make hasChanges unreliable across rollbacks).
-      const permissions = computeTaskPermissions(task, projectDir)
-      const permissionLookup = (path: string) =>
-        permissions[normalizeProjectPath(projectDir, path)] ?? null
-
-      let taskHandle: LaunchHandle
-      if (sandbox) {
-        taskHandle = sandbox.handleForTask(task.id, permissionLookup, () => {
-          dirty = true
-        })
-      } else {
-        taskHandle = createToolHandle(projectDir, {
-          cache: toolCache,
-          permissions: path => {
-            const key = normalizeProjectPath(projectDir, path)
-            return permissions[key] ?? { read: false, write: false, edit: false, delete: false }
-          },
-          onMutate: () => {
-            dirty = true
-          },
-        })
-      }
-      taskHandle = withCommandResourceLock(taskHandle, commandResourceLocks, task.id)
-
-      if (task.skipIf && task.skipIf.length > 0) {
-        const skipResult = await evaluateSkipIfDetailed(
-          task.skipIf,
-          projectDir,
-          async (command, args) => {
-            const output = await taskHandle.callTool('run_command', {
-              command: [command, ...args].join(' '),
-              argv: [command, ...args],
-              timeoutMs: 30_000,
-            })
-            try {
-              const parsed = JSON.parse(String(output)) as { exitCode?: unknown }
-              return { code: typeof parsed.exitCode === 'number' ? parsed.exitCode : -1 }
-            } catch {
-              return { code: -1 }
-            }
-          },
-        )
-        for (const w of skipResult.warnings) ui.warning(`⚠ ${w}`)
-        const shouldSkip = skipResult.shouldSkip
-        if (shouldSkip) {
-          queue.skipTask(task.id)
-          ui.onTaskEvent({ type: 'skipped', taskId: task.id, title: task.title })
-          return true
-        }
-      }
-
-      agent = registry.createAgent(sessionId, 'worker', task.title, masterAgentId)
-      taskAgents.set(task.id, agent.id)
-      queue.assignTask(task.id, agent.id)
-      registry.updateStatus(agent.id, 'running')
-      queue.startTask(task.id)
-
-      // Progress label derived from the queue: terminal + in-flight counts
-      // are still meaningful when tasks start and finish interleaved.
-      const progress = queue.getStatus()
-      ui.onTaskEvent({
-        type: 'start',
-        taskId: task.id,
-        index:
-          progress.done +
-          progress.failed +
-          progress.skipped +
-          progress.assigned +
-          progress.running,
-        total: progress.total,
-        title: task.title,
-      })
-
-      for (const filePath of allTaskFiles) {
-        await changeHistory.recordBefore(task.id, filePath)
-      }
-
-      // Interrupted during setup: nothing has been written yet, so hand
-      // the task back instead of reporting a run that never happened.
-      if (isInterrupted()) {
-        queue.returnToPending(task.id)
-        if (agent) registry.updateStatus(agent.id, 'pending')
-        return true
-      }
-
-      dirty = false
-      const gate = new PauseGate()
-      pauseGates.set(task.id, gate)
-      const upstream = upstreamOf(task)
-      const earlier = attempts.get(task.id) ?? []
-      // What the Worker did with the attempt, once the Worker has ended it.
-      let attemptEnd: Omit<AttemptRecord, 'attempt' | 'diff'> | undefined
-      const workerContext: WorkerContext = {
-        ...(plan.contracts && plan.contracts.length > 0 ? { contracts: plan.contracts } : {}),
-        projectCard,
-        ...(upstream ? { upstream } : {}),
-        ...(earlier.length > 0 ? { previousAttempts: earlier } : {}),
-        onAttemptEnd: record => {
-          attemptEnd = record
-        },
-      }
-      const success = await executeTask(
-        agent.id,
-        task,
-        taskHandle,
-        apiKey,
-        workerModel,
-        ui,
-        changeHistory,
-        queue,
-        registry,
-        sessionId,
-        fileLocks,
-        projectDir,
-        abortSignal,
-        emitWorker,
-        params,
-        gate,
-        workerContext,
-      )
-
-      // The record of this attempt, read off disk while its changes are still
-      // there. The rollback below is what makes the retry start from a clean
-      // tree, and it is also what would erase this evidence.
-      const recorded: AttemptRecord = {
-        attempt: earlier.length + 1,
-        ...(attemptEnd ?? { outcome: success ? 'done' : 'error', filesWritten: [] }),
-        ...(success ? {} : { diff: diffOfAttempt(task) }),
-      }
-      attempts.set(task.id, [...earlier, recorded])
-      if (success && attemptEnd) {
-        const { before, after } = attemptContent(task)
-        handoffs.set(
-          task.id,
-          buildHandoff({
-            taskId: task.id,
-            title: task.title,
-            filesWritten: attemptEnd.filesWritten,
-            before,
-            after,
-            summary: attemptEnd.summary ?? '',
-            maxSummaryChars: params.handoffSummaryChars,
-          }),
-        )
-      }
-
-      const noChanges = !dirty && !changeHistory.hasChanges(task.id)
-      if (noChanges && !success) {
-        ui.onTaskEvent({ type: 'no-changes', taskId: task.id, title: task.title })
-      }
-
-      if (success) {
-        queue.completeTask(task.id, true)
-        registry.updateStatus(agent.id, 'done')
-        ui.onTaskEvent({ type: 'done', taskId: task.id, title: task.title })
-        return true
-      } else {
-        if (dirty || changeHistory.hasChanges(task.id)) {
-          await changeHistory.rollback(task.id)
-        } else {
-          // Only an attempt that changed nothing is a no-op, because only that
-          // is the case a second identical attempt cannot improve on. Marking
-          // every failure here spent the task's retries on nothing: the Manager
-          // asks `noChanges` before it looks at `maxRetries`, so a task that
-          // failed having done real work was skipped as a no-op and never
-          // retried, which is how a run lost a task to one stalled round.
-          noOpTasks.add(task.id)
-        }
-        // The Manager still owns the terminal state: it may roll back and
-        // try again. Hand the failure back rather than failing here.
-        return false
-      }
-    } catch (e) {
-      // A throw used to end the whole run and leak this task's locks.
-      // Fail only this task, roll back only its own changes, persist.
-      const message = e instanceof Error ? e.message : String(e)
-      taskErrors.set(task.id, message)
-      try {
-        if (changeHistory.hasChanges(task.id)) {
-          await changeHistory.rollback(task.id)
-        }
-      } catch {
-        // Rollback is best effort — never let it mask the original error.
-      }
-      const state = queue.getTask(task.id)
-      if (
-        state &&
-        state.status !== 'done' &&
-        state.status !== 'failed' &&
-        state.status !== 'skipped'
-      ) {
-        queue.failTask(task.id)
-        ui.onTaskEvent({ type: 'failed', taskId: task.id, title: task.title })
-      }
-      if (agent) registry.updateStatus(agent.id, 'failed')
-      ui.error(`Task failed: ${task.title} — ${message}`)
-      return false
-    } finally {
-      // Load-bearing under concurrency: a lock leaked here deadlocks every
-      // peer waiting on those paths until the process is killed.
-      fileLocks.release(task.id)
-      // An attempt that ends while paused (an interrupt) must not leave its gate
-      // shut for the scheduler to find; release thaws the sandbox side.
-      pauseGates.get(task.id)?.resume()
-      pauseGates.delete(task.id)
-      sandbox?.releaseTask(task.id)
-    }
-  }
+  const attemptLog = createAttemptLog({
+    queue,
+    changeHistory,
+    projectDir,
+    respawnDiffChars: params.respawnDiffChars,
+    handoffSummaryChars: params.handoffSummaryChars,
+  })
+  const runTaskOnce = createTaskRunner({
+    plan, params, projectDir, apiKey, abortSignal, ui, queue, registry, sessionId, masterAgentId,
+    sandbox, toolCache, changeHistory, fileLocks, commandResourceLocks, emitWorker, attemptLog,
+    projectCard, pauseGates, taskErrors, noOpTasks, taskAgents,
+  })
 
   /**
    * §4: the Manager owns the scheduler and the failure policy; this
@@ -685,7 +260,7 @@ export async function executePlan(
     },
     onTaskEvent: event => ui.onTaskEvent(event),
     canAdmitTask: task => {
-      if (!canAcquireLeases(task)) return false
+      if (!canAcquireTaskLeases(fileLocks, task, params.readLocks, projectDir)) return false
       const resourcePaths = [
         ...task.rollback,
         ...task.validation,

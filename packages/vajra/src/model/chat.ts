@@ -1,6 +1,5 @@
 import OpenAI from 'openai'
 import type {
-  ChatCompletion,
   ChatCompletionChunk,
   ChatCompletionMessageParam,
   ChatCompletionTool,
@@ -309,30 +308,6 @@ function toUsage(
     completionTokens,
     totalTokens: usage.total_tokens ?? promptTokens + completionTokens,
   }
-}
-
-function toResult(completion: ChatCompletion): ChatCompletionResult {
-  const choice = completion.choices[0]
-  if (!choice) throw new Error('Provider response had no choices')
-
-  const msg = choice.message
-  const funcCalls = msg.tool_calls?.filter(tc => tc.type === 'function') ?? []
-  const message: ChatMessage = {
-    role: 'assistant',
-    content: msg.content ?? null,
-    ...(funcCalls.length > 0
-      ? {
-          tool_calls: funcCalls.map(tc => ({
-            id: tc.id,
-            type: 'function' as const,
-            function: { name: tc.function.name, arguments: tc.function.arguments },
-          })),
-        }
-      : {}),
-  }
-
-  const usage = toUsage(completion.usage)
-  return { message, finishReason: choice.finish_reason ?? null, ...(usage ? { usage } : {}) }
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

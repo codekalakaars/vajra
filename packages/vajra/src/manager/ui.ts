@@ -368,3 +368,20 @@ function parseExit(text: string): CommandPayload | null {
  * not something the session service may depend on.
  */
 export const SILENT_EXIT = '\u0000exit'
+
+/**
+ * `ui.onAgentEvent`, wrapped so a renderer cannot fail a run.
+ *
+ * The port requires `onAgentEvent`, but JavaScript test doubles and embedders may
+ * not implement it. Observability must never be able to fail a run.
+ */
+export function safeAgentEmitter(ui: SessionUI): (event: AgentEvent) => void {
+  const agentUi = ui as { onAgentEvent?: (event: AgentEvent) => void }
+  return (event: AgentEvent): void => {
+    try {
+      agentUi.onAgentEvent?.(event)
+    } catch {
+      // a renderer that throws must not take the session down
+    }
+  }
+}

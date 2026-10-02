@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
-import { compressMessages, type LaunchHandle } from '../developer/developer.js'
+import { compressMessages } from '../model/compress.js'
+import type { LaunchHandle } from '@codekalakaars/vajra-sandbox'
 import { getModelLimit } from '../model/context-window.js'
 import { ContextBudget, promptChars } from '../model/budget.js'
 import { buildContextPack } from './pack.js'
@@ -8,7 +9,7 @@ import type { AgentRegistry } from '../manager/registry.js'
 import type { TaskQueue } from '../manager/taskqueue.js'
 import { streamChatCompletion, type ChatMessage, type ReasoningEffort, type ToolCall } from '../model/chat.js'
 import { reasoningLevelsFor } from '../model/catalog.js'
-import { getWorkerToolSpecs } from '../developer/tools.js'
+import { getWorkerToolSpecs } from '@codekalakaars/vajra-sandbox'
 import type { ChangeHistory, FileLockManager } from '@codekalakaars/vajra-sandbox'
 import type { AgentEvent, AgentLabel, SessionStreamer } from '../manager/ui.js'
 import { dispatchToolCall, loopHooks, READ_ONLY_TOOLS } from '../model/tool-dispatch.js'
@@ -18,6 +19,7 @@ import type { ContextRef, EditSpec, VerifySpec } from '@codekalakaars/vajra-prot
 import type { PauseGate } from '../manager/pause.js'
 import { capToolOutput } from './output-cap.js'
 import { elideMessages } from './elide.js'
+import type { DiffFile } from './diff.js'
 import { WorkLedger } from './ledger.js'
 import {
   CHECKPOINT_TOOL,
@@ -29,7 +31,6 @@ import {
   parseCheckpoint,
   type ProgressMark,
 } from './checkpoint.js'
-import { diffsWithin, type DiffFile } from './diff.js'
 import { renderPreviousAttempts } from '../manager/handoff.js'
 import { legacySystemPrompt, packSystemPrompt, START_MESSAGE } from './prompt.js'
 import type { AttemptOutcome, Checkpoint, WorkerContext } from './context-types.js'
