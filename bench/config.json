@@ -14,7 +14,7 @@
   "preloadReads": false,
   "toolOutputMaxChars": 20000,
   "warmSandboxes": 1,
-  "contextPack": false,
+  "contextPack": true,
   "packWindowShare": 0.35,
   "anchorContextLines": 12,
   "elision": false,

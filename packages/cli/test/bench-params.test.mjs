@@ -9,9 +9,18 @@ import { loadWorkerParams, WorkerParamsError } from '../dist/config.js'
 
 const configPath = fileURLToPath(new URL('../../../bench/config.json', import.meta.url))
 
-test('bench/config.json starts as today\'s behaviour, key for key', () => {
+// The keys a tuning sweep has settled, so the committed config differs from
+// TODAYS_PARAMS (what an interactive session and the replay fixtures use) in
+// exactly these and nowhere else. Anything not listed here must still match.
+const TUNED = {
+  // 5/5 on wide, chain and fan both ways; median wall time down 41-48% and
+  // rounds per task roughly halved (bench/results/2026-10-02-context-pack.jsonl).
+  contextPack: true,
+}
+
+test('bench/config.json is today\'s behaviour except for the keys a sweep has settled', () => {
   const config = JSON.parse(readFileSync(configPath, 'utf-8'))
-  assert.deepEqual(config, { ...TODAYS_PARAMS })
+  assert.deepEqual(config, { ...TODAYS_PARAMS, ...TUNED })
 })
 
 // The leases a config's `readLocks` produces are the scheduler's business, and
@@ -36,7 +45,7 @@ function candidate(patch = {}) {
 
 test('the committed context keys are read, not defaulted', () => {
   const params = loadWorkerParams(configPath)
-  assert.equal(params.contextPack, false)
+  assert.equal(params.contextPack, true, 'settled by the context-pack sweep')
   assert.equal(params.elision, false)
   assert.equal(params.checkpoints, false)
   assert.equal(params.respawnContext, false)

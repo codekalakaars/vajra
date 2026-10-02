@@ -27,9 +27,16 @@ const configUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'config.
 const { runBench } = await import(benchUrl)
 const { loadWorkerParams } = await import(configUrl)
 
-/** The repo's own arrangement, so a test states which config it ran with. */
-const CONFIG_PATH = fileURLToPath(new URL('../../../bench/config.json', import.meta.url))
-const REAL_CONFIG = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'))
+/**
+ * The repo's own arrangement with the context pack off, so a test states which
+ * config it ran with. The committed config has the pack on; these tests pin the
+ * run's mechanics with scripted providers that answer the legacy prompt, and
+ * the pack has its own tests below, which switch it on explicitly.
+ */
+const COMMITTED_PATH = fileURLToPath(new URL('../../../bench/config.json', import.meta.url))
+const REAL_CONFIG = { ...JSON.parse(readFileSync(COMMITTED_PATH, 'utf-8')), contextPack: false }
+const CONFIG_PATH = join(mkdtempSync(join(tmpdir(), 'vajra-bench-base-')), 'config.json')
+writeFileSync(CONFIG_PATH, `${JSON.stringify(REAL_CONFIG, null, 2)}\n`, 'utf-8')
 
 /** Valid JavaScript, so a task's `node --check` verify passes once it is written. */
 const WRITTEN = 'module.exports = { written: true }\n'
