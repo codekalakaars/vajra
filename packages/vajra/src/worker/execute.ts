@@ -34,7 +34,11 @@ import {
 import { renderPreviousAttempts } from '../manager/handoff.js'
 import { legacySystemPrompt, packSystemPrompt, START_MESSAGE } from './prompt.js'
 import type { AttemptOutcome, Checkpoint, WorkerContext } from './context-types.js'
+import { parseCommandResult, killProcessGroup, waitForServerStartup } from './validation.js'
+import { preloadReadFiles } from './preload.js'
 import { allocateServerPort, findServerEntry, needsServer, probeServerPort, substituteServerPort } from './server.js'
+
+export { parseCommandResult } from './validation.js'
 
 export interface ExecuteTaskInput {  agentId: string
   task: {
@@ -77,103 +81,6 @@ export interface ExecuteTaskInput {  agentId: string
 }
 
 /**
- * Parse a C1 run_command result. Non-JSON or missing exitCode is failure —
- * never the old `exitCode = 0` fallback (C2t).
- */
-export function parseCommandResult(output: string): {
-  ok: boolean
-  exitCode: number
-  signal: string | null
-  stdout: string
-  stderr: string
-} {
-  try {
-    const parsed = JSON.parse(output) as {
-      exitCode?: number
-      signal?: string | null
-      stdout?: string
-      stderr?: string
-    }
-    if (typeof parsed.exitCode !== 'number') {
-      return { ok: false, exitCode: -1, signal: null, stdout: output, stderr: 'Malformed run_command result' }
-    }
-    const signal = parsed.signal ?? null
-    const ok = parsed.exitCode === 0 && signal === null
-    return {
-      ok,
-      exitCode: parsed.exitCode,
-      signal,
-      stdout: parsed.stdout ?? '',
-      stderr: parsed.stderr ?? '',
-    }
-  } catch {
-    // Bare string success from an older handle is still not trusted (C1).
-    return {
-      ok: false,
-      exitCode: -1,
-      signal: null,
-      stdout: output,
-      stderr: 'run_command did not return JSON {exitCode, signal, stdout, stderr}',
-    }
-  }
-}
-
-async function killProcessGroup(
-  serverProcess: ReturnType<typeof import('node:child_process').spawn>,
-): Promise<void> {
-  // Consume piped stdout/stderr so the buffer cannot fill and stall the server.
-  serverProcess.stdout?.resume()
-  serverProcess.stderr?.resume()
-  if (serverProcess.exitCode !== null || serverProcess.signalCode !== null) return
-  try {
-    if (serverProcess.pid) {
-      // Negative pid signals the process group (spawn used detached: true).
-      process.kill(-serverProcess.pid, 'SIGTERM')
-    }
-  } catch {
-    try {
-      serverProcess.kill('SIGTERM')
-    } catch {
-      // already dead
-    }
-  }
-  await new Promise<void>((resolve) => {
-    const t = setTimeout(() => {
-      try {
-        if (serverProcess.pid) process.kill(-serverProcess.pid, 'SIGKILL')
-      } catch { /* ignore */ }
-      resolve()
-    }, 3000)
-    serverProcess.once('close', () => {
-      clearTimeout(t)
-      resolve()
-    })
-  })
-}
-
-function waitForServerStartup(
-  serverProcess: ReturnType<typeof import('node:child_process').spawn>,
-  timeoutMs: number,
-): Promise<boolean> {
-  return new Promise(resolve => {
-    let settled = false
-    const finish = (started: boolean) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      serverProcess.off('error', onError)
-      serverProcess.off('exit', onExit)
-      resolve(started)
-    }
-    const onError = () => finish(false)
-    const onExit = () => finish(false)
-    const timer = setTimeout(() => finish(true), timeoutMs)
-    serverProcess.once('error', onError)
-    serverProcess.once('exit', onExit)
-  })
-}
-
-/**
  * The reasoning level this Worker may ask for.
  *
  * The run's config states a level; only the model's own catalog entry knows
@@ -184,71 +91,6 @@ function waitForServerStartup(
  */
 function reasoningFor(model: string, level: ReasoningEffort): ReasoningEffort {
   return reasoningLevelsFor(model).includes(level) ? level : 'off'
-}
-
-/** One file's preload: its contents, or why it has none. */
-interface PreloadedRead {
-  path: string
-  content?: string
-  error?: string
-}
-
-/**
- * The task's read files, loaded before the first round and handed over in the
- * first user message.
- *
- * Read through the same handle the Worker's own reads go through, so what the
- * Worker is given is what `read_file` would have answered — the permission gate
- * and the masked-file stub included — and they run together because they are
- * independent. A file that cannot be read is named as unread rather than left
- * out: silence would leave the Worker planning against contents it never saw.
- *
- * These are the arrangement's reads, not the Worker's: they are not tool calls,
- * so they are not announced as ones and they do not spend the call budget.
- */
-async function preloadReadFiles(
-  paths: string[],
-  handle: LaunchHandle,
-  maxChars: number,
-  onUnreadable: (path: string, why: string) => void,
-): Promise<string | null> {
-  if (paths.length === 0) return null
-  const settled: PreloadedRead[] = await Promise.all(
-    paths.map(async path => {
-      try {
-        const result = await handle.callTool('read_file', { path })
-        const text = typeof result === 'string' ? result : JSON.stringify(result ?? '')
-        // Capped like any read the Worker makes itself, so preloading cannot be
-        // the thing that fills the window.
-        return { path, content: capToolOutput('read_file', text, maxChars) }
-      } catch (e) {
-        return { path, error: e instanceof Error ? e.message : String(e) }
-      }
-    }),
-  )
-  const blocks: string[] = []
-  for (const { path, content, error } of settled) {
-    if (error !== undefined) {
-      onUnreadable(path, error)
-      blocks.push([
-        `--- NOT READ: ${path} ---`,
-        `It could not be read before you started: ${error}`,
-        'Read it yourself with read_file if the task needs it.',
-      ].join('\n'))
-      continue
-    }
-    blocks.push([
-      `--- BEGIN FILE: ${path} ---`,
-      content ?? '',
-      `--- END FILE: ${path} ---`,
-    ].join('\n'))
-  }
-  return [
-    'These files were read for you. Their contents are as of this message, so do not',
-    'call read_file on them again unless you need a window this text does not show.',
-    '',
-    ...blocks,
-  ].join('\n')
 }
 
 /**
