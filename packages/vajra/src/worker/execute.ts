@@ -4,7 +4,6 @@ import { compressMessages } from '../model/compress.js'
 import type { LaunchHandle } from '@codekalakaars/vajra-sandbox'
 import { getModelLimit } from '../model/context-window.js'
 import { ContextBudget, promptChars } from '../model/budget.js'
-import { buildContextPack } from './pack.js'
 import type { AgentRegistry } from '../manager/registry.js'
 import type { TaskQueue } from '../manager/taskqueue.js'
 import { streamChatCompletion, type ChatMessage, type ReasoningEffort, type ToolCall } from '../model/chat.js'
@@ -29,13 +28,13 @@ import {
   madeProgress,
   markAt,
   parseCheckpoint,
-  type ProgressMark,
+  type ProgressMark
 } from './checkpoint.js'
-import { renderPreviousAttempts } from '../manager/handoff.js'
-import { legacySystemPrompt, packSystemPrompt, START_MESSAGE } from './prompt.js'
+import { START_MESSAGE } from './prompt.js'
 import type { AttemptOutcome, Checkpoint, WorkerContext } from './context-types.js'
 import { parseCommandResult, killProcessGroup, waitForServerStartup } from './validation.js'
-import { preloadReadFiles } from './preload.js'
+import { buildOpening } from './opening.js'
+import { createAttemptClock } from './attempt-clock.js'
 import { allocateServerPort, findServerEntry, needsServer, probeServerPort, substituteServerPort } from './server.js'
 
 export { parseCommandResult } from './validation.js'
@@ -130,72 +129,8 @@ export async function executeTask(
   const agent: AgentLabel = { role: 'worker', taskId: task.id, title: task.title }
   const emit = (event: AgentEvent): void => onAgentEvent?.(event)
 
-  /**
-   * One signal for the whole attempt: the session's, and the run's deadline.
-   *
-   * Everything the attempt waits on is handed the combined signal, so whichever
-   * of the two ends it — a person pressing Ctrl-C, or the clock — the attempt is
-   * judged the same way.
-   *
-   * The deadline is enforced wherever the attempt can still be interrupted:
-   * before each round, before each group of tool calls, and as the ceiling on a
-   * validation command. A provider request already in flight is not cut short,
-   * because `streamChatCompletion` puts the signal in the request body and the
-   * SDK only reads a signal passed as request options; a round that never comes
-   * back still ends when it does. That gap is in chat.ts, not here.
-   */
-  const deadlineMs = params.taskTimeoutSec * 1000
-  const attemptStartedAt = Date.now()
-  // Time the attempt has been allowed to run. A pause is the scheduler's
-  // decision, not the task's slowness, so the clock stops while the gate is shut.
-  const activeMs = (): number => Date.now() - attemptStartedAt - (gate?.pausedMs() ?? 0)
-  const deadlineController = new AbortController()
-  const deadline = deadlineController.signal
-  let deadlineTimer: ReturnType<typeof setTimeout> | null = null
-  const armDeadline = (): void => {
-    if (deadlineTimer) clearTimeout(deadlineTimer)
-    deadlineTimer = null
-    if (deadline.aborted || gate?.paused) return
-    deadlineTimer = setTimeout(
-      () => deadlineController.abort(new DOMException('Attempt timed out', 'TimeoutError')),
-      Math.max(0, deadlineMs - activeMs()),
-    )
-    deadlineTimer.unref?.()
-  }
-  armDeadline()
-  gate?.onChange(armDeadline)
-  const attemptSignal = signal ? AbortSignal.any([signal, deadline]) : deadline
-
-  /**
-   * Hold here while the scheduler has this Worker paused. The session ending
-   * opens it too: a paused Worker must still be able to notice an interrupt.
-   */
-  const waitWhilePaused = async (): Promise<void> => {
-    if (!gate?.paused || signal?.aborted) return
-    await new Promise<void>(resolve => {
-      const done = (): void => {
-        signal?.removeEventListener('abort', done)
-        resolve()
-      }
-      signal?.addEventListener('abort', done, { once: true })
-      void gate.wait().then(done)
-    })
-  }
-
-  /**
-   * Whether the attempt ran out of time, as opposed to the session ending.
-   *
-   * A timeout is a failed attempt rather than a silent success: leaving the loop
-   * on the abort and carrying on to validation would report a task done having
-   * done nothing, and would hand the run back a result nothing stands behind.
-   */
-  const outOfTime = (): boolean => deadline.aborted
-  const timedOutMessage = (): string => `Attempt timed out after ${params.taskTimeoutSec}s.`
-
-  const preloaded = params.preloadReads
-    ? await preloadReadFiles(task.readFile, handle, params.toolOutputMaxChars, (path, why) =>
-        streamer.warning(`Could not preload ${path}: ${why}`))
-    : null
+  const clock = createAttemptClock({ timeoutSec: params.taskTimeoutSec, gate, signal })
+  const { signal: attemptSignal, waitWhilePaused, outOfTime, timedOutMessage } = clock
 
   /**
    * How full this model's window is, and what one character costs in tokens.
@@ -210,90 +145,10 @@ export async function executeTask(
   /** What the harness saw this attempt do. The half no model can misreport. */
   const ledger = new WorkLedger()
 
-  /**
-   * The retry's account of what it is replacing, rendered here rather than by
-   * the pack so it is byte-for-byte the same block whether the pack is on (where
-   * it is section 3) or off (where it is appended to the first user message).
-   */
-  const previousAttempt =
-    params.respawnContext && context?.previousAttempts && context.previousAttempts.length > 0
-      ? renderPreviousAttempts(context.previousAttempts, params.respawnDiffChars)
-      : undefined
-
-  /**
-   * The compiled context, or `null` when the run has `contextPack` off.
-   *
-   * Built here, at dispatch, through the task's own handle — the same call path,
-   * permission gate and masked-file stub a Worker's own `read_file` goes through,
-   * so the pack can never show more than the Worker would have been allowed to
-   * read. A pack that cannot be built falls back to the legacy prompt with a
-   * warning rather than failing the attempt: an unreadable file is not a reason
-   * to refuse to do the work.
-   */
-  let pack: Awaited<ReturnType<typeof buildContextPack>> | null = null
-  if (params.contextPack) {
-    try {
-      pack = await buildContextPack({
-        task,
-        params,
-        model,
-        read: async (path, symbols) =>
-          asText(
-            await handle.callTool(
-              'read_file',
-              symbols && symbols.length > 0 ? { path, symbols } : { path },
-            ),
-          ),
-        list: async path => asText(await handle.callTool('list_files', { path })),
-        ...(context?.contracts ? { contracts: context.contracts } : {}),
-        ...(context?.projectCard !== undefined ? { projectCard: context.projectCard } : {}),
-        ...(context?.upstream ? { upstream: context.upstream } : {}),
-        ...(previousAttempt !== undefined ? { previousAttempt } : {}),
-      })
-      emit({
-        type: 'context',
-        agent,
-        kind: 'pack',
-        pack: {
-          tokens: pack.tokens,
-          hash: pack.hash,
-          paths: pack.paths,
-          omitted: pack.omitted.length,
-          stale: pack.staleAnchors.length,
-          relocated: pack.relocatedAnchors.length,
-        },
-      })
-    } catch (e) {
-      streamer.warning(
-        `Could not build the context pack (${e instanceof Error ? e.message : String(e)}); starting from the task prompt instead.`,
-      )
-      pack = null
-    }
-  }
-
-  const systemPrompt = pack ? packSystemPrompt(pack.text) : legacySystemPrompt(task, preloaded !== null)
-
-  /**
-   * The first user message.
-   *
-   * With a pack it says only "start": the pack is the whole brief, and a second
-   * paragraph in front of it is a paragraph the model reads before it knows what
-   * it is starting. Without a pack it carries the preloaded reads, and either way
-   * the retry's account of what it is replacing goes last, where it is read as
-   * context for the task rather than as the task.
-   */
-  let messages: ChatMessage[] = [
-    { role: 'system', content: systemPrompt },
-    {
-      role: 'user',
-      content: pack
-        ? [START_MESSAGE, ...(previousAttempt === undefined ? [] : ['', previousAttempt])].join('\n')
-        : [
-            preloaded ? `${START_MESSAGE}\n\n${preloaded}` : START_MESSAGE,
-            ...(previousAttempt === undefined ? [] : ['', previousAttempt]),
-          ].join('\n'),
-    },
-  ]
+  const { preloaded, pack, messages: openingMessages, previousAttempt } = await buildOpening({
+    task, params, model, handle, context, streamer, emit, agent,
+  })
+  let messages: ChatMessage[] = openingMessages
 
   const toolSpecs = getWorkerToolSpecs()
 
@@ -579,7 +434,7 @@ export async function executeTask(
         compactions++
         lastCheckpoint = checkpoint
         messages = compactedMessages({
-          system: systemPrompt,
+          system: openingMessages[0]?.content ?? '',
           taskMessage: messages[1]?.content ?? START_MESSAGE,
           checkpoint,
           ledger,
@@ -687,7 +542,7 @@ export async function executeTask(
             // C5: task timeout is seconds; run_command timeoutMs is milliseconds.
             // The attempt's own deadline is the ceiling, because a command that
             // outlives it would outlive the attempt that is waiting on it.
-            timeoutMs: Math.max(1, Math.min(task.timeoutSeconds * 1000, deadlineMs - activeMs())),
+            timeoutMs: Math.max(1, Math.min(task.timeoutSeconds * 1000, clock.remainingMs())),
           }
           emit({
             type: 'tool-start',
@@ -779,6 +634,6 @@ export async function executeTask(
     streamer.error(`Worker failed: ${errorMessage}`)
     return finishAttempt(false)
   } finally {
-    if (deadlineTimer) clearTimeout(deadlineTimer)
+    clock.dispose()
   }
 }

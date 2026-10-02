@@ -4,7 +4,9 @@ One model loop per task attempt.
 
 | File | What |
 |------|------|
-| `execute.ts` | `executeTask`: the loop, verification, attempt record |
+| `execute.ts` | `executeTask`: the model loop, the context ladder, verification, the attempt record |
+| `opening.ts` | The first two messages: builds the context pack, picks the prompt, adds the previous attempt |
+| `attempt-clock.ts` | The attempt's deadline and abort signal; the clock stops while the Worker is paused |
 | `validation.ts` | Parsing a command's result; starting and stopping the server a task's checks need |
 | `preload.ts` | Putting a task's read files in the first message (the `preloadReads` option) |
 | `pack.ts` | Builds the context pack the Worker starts from |
