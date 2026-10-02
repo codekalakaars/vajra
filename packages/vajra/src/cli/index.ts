@@ -3,7 +3,6 @@
 // Must stay the first import: it runs before the native addon is loaded, so an
 // unsupported platform gets the real reason rather than a loader error.
 import '@codekalakaars/vajra-sandbox/platform-guard'
-
 import { Command } from 'commander'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'

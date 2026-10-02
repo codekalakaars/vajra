@@ -1,6 +1,5 @@
 import type {
   DeveloperPlan,
-  
   ToolName
 } from '@codekalakaars/vajra-protocol'
 import {
@@ -13,8 +12,6 @@ import { streamChatCompletion, type ChatMessage, type ReasoningEffort, type Tool
 import { getModelLimit } from '../model/context-window.js'
 import { getDeveloperToolSpecs, parseToolCall } from '@codekalakaars/vajra-sandbox'
 import {
-  
-  
   searchSummary,
   type LaunchHandle,
   type SummaryEntry

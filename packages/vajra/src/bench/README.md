@@ -4,7 +4,11 @@
 
 | File | What |
 |------|------|
-| `run.ts` | The command: fresh copy of the suite, run the plan through the Manager, run the acceptance tests, write the result |
+| `run.ts` | The command and `runBench`: fresh copy of the suite, run the plan through the Manager, write the result |
+| `suite.ts` | Reading a suite from disk: its plan, acceptance command and fixture; the setup error |
+| `checks.ts` | The checks made before anything runs: verify commands fail on the fixture, every pack fits |
+| `bench-ui.ts` | The UI a bench run gives the Manager: it feeds the recorder and prints nothing unless asked |
+| `acceptance.ts` | Running the suite's acceptance tests after the run |
 | `params.ts` | `WorkerParams`: every run parameter, and `TODAYS_PARAMS` (the defaults interactive code and the replay fixtures use) |
 | `config.ts` | `loadWorkerParams`: validates `bench/config.json`, names the bad key |
 | `metrics.ts` | Wall time, critical path, idle, paused, context use, per-task rounds |

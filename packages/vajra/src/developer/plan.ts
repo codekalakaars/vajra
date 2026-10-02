@@ -2,7 +2,6 @@ import type {
   DeveloperPlan,
   EditSpec,
   PlanContract,
-  
   PlannedTask,
   PlannedTaskInput
 } from '@codekalakaars/vajra-protocol'

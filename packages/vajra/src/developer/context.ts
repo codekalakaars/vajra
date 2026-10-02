@@ -1,18 +1,13 @@
 import type {
-  
-  
   ProjectFileEntry
 } from '@codekalakaars/vajra-protocol'
 import { deriveIndexBudget } from '@codekalakaars/vajra-sandbox'
 import { getModelLimit } from '../model/context-window.js'
 import {
-  
   scanProject,
   buildSummaryIndex,
   formatSummaryIndexHierarchical,
   renderSummaryIndex,
-  
-  
   type SummaryEntry
 } from '@codekalakaars/vajra-sandbox'
 import { buildNestedTree } from '@codekalakaars/vajra-sandbox'
