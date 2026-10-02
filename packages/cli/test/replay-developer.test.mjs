@@ -18,10 +18,9 @@ import {
  * Replay: the Developer loop must produce the same observable behaviour for the
  * same provider script, every time.
  *
- * This is the safety net the migration needs. Step 2 of
- * AGENT_RUNTIME_ARCHITECTURE_PLAN.md moves the model/tool loop out of
- * `developer.ts` and `execute.ts` into a shared engine, and a refactor that
- * cannot be proven identical is a guess. What is pinned here is the part a
+ * This is the safety net for any change to the model/tool loop in
+ * `developer.ts` and `execute.ts`: a refactor that cannot be proven identical
+ * is a guess. What is pinned here is the part a
  * refactor could plausibly break and a unit test would not notice: the order
  * tool calls are dispatched in, the order their results are appended to the
  * conversation, the event stream the UI receives, and the value the turn
