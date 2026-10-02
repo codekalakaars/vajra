@@ -144,10 +144,12 @@ export async function dispatchToolCall<L extends RunLabel>(options: DispatchOpti
   // Worker does not, and that difference is C3 in the migration plan rather
   // than something to quietly settle here.
   let args: unknown
+  let unparseable: string | null = null
   try {
     args = JSON.parse(call.function.arguments)
-  } catch {
+  } catch (error) {
     args = undefined
+    unparseable = error instanceof Error ? error.message : String(error)
   }
 
   if (announceStart) {
@@ -159,10 +161,22 @@ export async function dispatchToolCall<L extends RunLabel>(options: DispatchOpti
   let ok = false
   let detail: string | undefined
   try {
-    raw = await executor.callTool(tool, args, { signal })
-    const outcome = summariseResult(tool, args, raw, Date.now() - started)
-    ok = outcome.ok
-    detail = outcome.detail
+    if (unparseable !== null) {
+      // The tool is not run with arguments it was never given. Calling it with
+      // `undefined` made it fail on "reading 'path'", which tells a model
+      // nothing about what it did wrong; a model that cannot tell that its JSON
+      // was malformed concludes that the *content* is the problem and starts
+      // working around backticks and quotes instead of re-sending the call.
+      raw =
+        `Error: the arguments of this ${tool} call were not valid JSON (${unparseable}), so nothing was run. ` +
+        'Send the call again with valid JSON: inside a string, write a newline as \\n, a tab as \\t, ' +
+        'a double quote as \\" and a backslash as \\\\. Backticks and single quotes need no escaping.'
+    } else {
+      raw = await executor.callTool(tool, args, { signal })
+      const outcome = summariseResult(tool, args, raw, Date.now() - started)
+      ok = outcome.ok
+      detail = outcome.detail
+    }
   } catch (error) {
     raw = `Error: ${error instanceof Error ? error.message : String(error)}`
   } finally {

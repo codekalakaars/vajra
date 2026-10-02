@@ -613,3 +613,24 @@ test('a Worker whose history outgrows the window drops its oldest exchanges, nev
   assert.ok(requests.at(-1).messages.length < 2 + 5 * 2, 'older exchanges were dropped')
   assert.ok(events.some(e => e.type === 'warning' && /Context trimmed/.test(e.text)))
 })
+
+test('a tool call whose arguments are not valid JSON is answered with why, and the tool is not run', async t => {
+  // Content full of backticks and quotes is where a model's JSON breaks. Before,
+  // the tool ran on `undefined` and the model was told "reading 'path'", so it
+  // concluded the content was the problem and began working around backticks.
+  const broken = '{"path": "a.js", "content": "const s = `x` + \'y\' + "unescaped"}'
+  const script = [
+    { toolCalls: [{ name: 'write_file', rawArgs: broken }] },
+    { text: 'done' },
+  ]
+  const { requests, calls } = await runWorker(t, {
+    script,
+    task: { ...TASK, writeFile: ['a.js'] },
+  })
+  assert.deepEqual(calls.filter(c => c.tool === 'write_file'), [], 'the tool was never called')
+  const answer = requests[1].messages.find(m => m.role === 'tool').content
+  assert.match(answer, /not valid JSON/)
+  assert.match(answer, /nothing was run/)
+  assert.match(answer, /Backticks and single quotes need no escaping/)
+  assert.doesNotMatch(answer, /reading 'path'/)
+})

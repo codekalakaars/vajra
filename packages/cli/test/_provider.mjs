@@ -67,7 +67,8 @@ export function sseResponse(payloads) {
 }
 
 /** A chunk carrying one streamed tool call. `index` must be distinct per call. */
-export function toolCallChunk({ name, args = {}, index = 0, id = `call_${index}` }) {
+// `rawArgs` sends the arguments string exactly as given, so a test can send JSON a model might mangle.
+export function toolCallChunk({ name, args = {}, rawArgs, index = 0, id = `call_${index}` }) {
   return {
     id: 's',
     object: 'chat.completion.chunk',
@@ -79,7 +80,7 @@ export function toolCallChunk({ name, args = {}, index = 0, id = `call_${index}`
         delta: {
           role: 'assistant',
           content: null,
-          tool_calls: [{ index, id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+          tool_calls: [{ index, id, type: 'function', function: { name, arguments: rawArgs ?? JSON.stringify(args) } }],
         },
         finish_reason: null,
       },
