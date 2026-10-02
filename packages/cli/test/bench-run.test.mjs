@@ -564,3 +564,56 @@ test('the pack budget check is skipped entirely while the pack is off', async t 
 
   assert.notEqual(code, 2, errors.join('\n'))
 })
+
+test('a failed attempt is retried, not skipped as a no-op', async t => {
+  // The regression this pins down: an attempt was marked a no-op on *every*
+  // failure, so the Manager — which asks "no changes?" before it looks at
+  // `retries` — skipped the retry and the run lost a task to one bad attempt.
+  // A failure that really changed nothing is still skipped; this is not that case.
+  // `decideFailure`'s own tests are right; what was wrong was what fed it.
+  const suite = makeSuite(t, {
+    tasks: [
+      {
+        id: 't1',
+        title: 'Write out-1.js',
+        description: 'Create out-1.js',
+        edits: [{ op: 'create', path: 'out-1.js', change: 'create the module' }],
+        verify: [{ command: 'node', args: ['--check', 'out-1.js'], kind: 'proves-change' }],
+        type: 'create',
+      },
+    ],
+  })
+  const out = outPath(t)
+
+  // The first attempt says it is done without writing anything, so the verify
+  // fails; the second writes the file. Both attempts see a fresh conversation,
+  // which is how the attempt boundary is counted.
+  let attempts = 0
+  const restore = useProvider(async (_url, init) => {
+    const body = JSON.parse(init.body)
+    const messages = Array.isArray(body.messages) ? body.messages : []
+    if (!messages.some(m => m.role === 'tool')) attempts++
+    const round = attempts === 1
+      ? { text: 'I finished.' }
+      : messages.some(m => m.role === 'tool')
+        ? { text: 'now it is written' }
+        : { toolCalls: [{ name: 'write_file', args: { path: 'out-1.js', content: WRITTEN } }] }
+    return sseResponse(roundChunks(round))
+  })
+  t.after(() => restore())
+
+  const lines = []
+  const code = await withApiKey(() =>
+    runBench({
+      allowUnenforced: true,
+      suiteDir: suite,
+      configPath: candidateConfig({ retries: 1 }),
+      out,
+      write: line => lines.push(line),
+    }),
+  )
+
+  assert.equal(attempts, 2, 'the task was given a second attempt')
+  assert.equal(code, 0, lines.join('\n'))
+  assert.equal(resultAt(out).tasks[0].attempts, 2)
+})

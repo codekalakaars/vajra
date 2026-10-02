@@ -1448,10 +1448,17 @@ export async function executePlan(
       } else {
         if (dirty || changeHistory.hasChanges(task.id)) {
           await changeHistory.rollback(task.id)
+        } else {
+          // Only an attempt that changed nothing is a no-op, because only that
+          // is the case a second identical attempt cannot improve on. Marking
+          // every failure here spent the task's retries on nothing: the Manager
+          // asks `noChanges` before it looks at `maxRetries`, so a task that
+          // failed having done real work was skipped as a no-op and never
+          // retried, which is how a run lost a task to one stalled round.
+          noOpTasks.add(task.id)
         }
         // The Manager still owns the terminal state: it may roll back and
         // try again. Hand the failure back rather than failing here.
-        noOpTasks.add(task.id)
         return false
       }
     } catch (e) {
