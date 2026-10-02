@@ -67,12 +67,21 @@ export interface ChatCompletionRequest {
   round?: number
   /** Cap of the caller's loop, when known. */
   roundBudget?: number
+  /**
+   * How long the request may go without hearing from the gateway, in ms, before it
+   * is abandoned and sent again: no response headers, or no chunk once streaming.
+   * A model that is merely slow keeps sending chunks; one that has stalled sends
+   * nothing, and waiting longer does not help. Defaults to the request timeout.
+   */
+  stallMs?: number
 }
 
 export type ChatRoundEvent =
   | { type: 'llm-start'; round: number }
   | { type: 'llm-end'; round: number; ms: number; budget?: number; usage?: TokenUsage }
   | { type: 'heartbeat'; elapsedMs: number }
+  /** A request went quiet for `afterMs` and is being sent again. */
+  | { type: 'llm-stall'; round: number; afterMs: number }
 
 export interface ChatCompletionResult {
   message: ChatMessage
@@ -371,13 +380,7 @@ export async function streamChatCompletion(
     // array — without this the meter would never see a number.
     stream_options: { include_usage: true },
   }
-  // Request options, not body fields: the SDK reads `signal` and `timeout` only
-  // from its second argument. In the body they were serialized and sent to the
-  // gateway, and a round that never answered could be stopped by neither.
-  const requestOptions = {
-    timeout: REQUEST_TIMEOUT_MS,
-    ...(request.signal ? { signal: request.signal } : {}),
-  }
+  const stallMs = request.stallMs ?? REQUEST_TIMEOUT_MS
 
   // Characters already shown to the UI — never re-emit them on retry (F4).
   let emitted = 0
@@ -388,7 +391,31 @@ export async function streamChatCompletion(
   try {
     for (let attempt = 0; ; attempt++) {
       throwIfAborted(request.signal)
+
+      // One watchdog per attempt. It is reset by every chunk, so a long answer that
+      // keeps streaming is never cut, and it abandons only a request that has gone
+      // quiet. Its abort is told apart from the caller's by `stalled`.
+      let stalled = false
+      const stallController = new AbortController()
+      let stallTimer: ReturnType<typeof setTimeout> | null = null
+      const armStall = (): void => {
+        if (stallTimer) clearTimeout(stallTimer)
+        stallTimer = setTimeout(() => {
+          stalled = true
+          stallController.abort()
+        }, stallMs)
+        stallTimer.unref?.()
+      }
+      // Request options, not body fields: the SDK reads `signal` and `timeout` only
+      // from its second argument. In the body they were serialized and sent to the
+      // gateway, and a round that never answered could be stopped by neither.
+      const requestOptions = {
+        timeout: stallMs,
+        signal: request.signal ? AbortSignal.any([request.signal, stallController.signal]) : stallController.signal,
+      }
+
       try {
+        armStall()
         const stream = await client.chat.completions.create(params, requestOptions) as AsyncIterable<ChatCompletionChunk>
 
         content = ''
@@ -396,6 +423,7 @@ export async function streamChatCompletion(
         const toolCalls = new Map<number, { id: string; name: string; arguments: string }>()
 
         for await (const chunk of stream) {
+          armStall()
           throwIfAborted(request.signal)
           // The usage chunk carries no choices — read it before the guard.
           const usage = toUsage(chunk.usage)
@@ -439,6 +467,12 @@ export async function streamChatCompletion(
           if (choice.finish_reason) finishReason = choice.finish_reason
         }
 
+        // The SDK ends a stream that was aborted mid-way quietly, as if it had
+        // finished, so the loop above cannot tell a whole answer from a cut one.
+        // Whichever side aborted, what was collected is not the answer.
+        throwIfAborted(request.signal)
+        if (stalled) throw new Error('The stream went quiet and was abandoned.')
+
         const orderedToolCalls: ToolCall[] = [...toolCalls.entries()]
           .sort(([a], [b]) => a - b)
           .map(([, tc]) => ({
@@ -459,6 +493,17 @@ export async function streamChatCompletion(
           ...(roundUsage ? { usage: roundUsage } : {}),
         }
       } catch (err) {
+        if (stalled && !request.signal?.aborted) {
+          // Quiet for `stallMs`: send the round again, up to the same limit as any
+          // other retryable failure. Nothing was acted on, so re-sending is safe.
+          request.onEvent?.({ type: 'llm-stall', round: request.round ?? 1, afterMs: stallMs })
+          if (attempt < MAX_RETRIES) {
+            content = ''
+            await sleep(INITIAL_RETRY_DELAY_MS, request.signal)
+            continue
+          }
+          throw new Error(`The model did not answer for ${Math.round(stallMs / 1000)}s, ${MAX_RETRIES + 1} times in a row.`)
+        }
         if (isAbortError(err)) throw err
         // Now that the signal reaches the SDK, an abort mid-request surfaces as
         // the SDK's own error type. Callers know an abort by AbortError, so it
@@ -473,6 +518,8 @@ export async function streamChatCompletion(
           continue
         }
         throw new Error(extractErrorMessage(err))
+      } finally {
+        if (stallTimer) clearTimeout(stallTimer)
       }
     }
   } finally {

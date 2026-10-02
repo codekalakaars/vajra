@@ -91,6 +91,8 @@ export type AgentEvent =
   | { type: 'phase'; agent: AgentLabel; phase: AgentPhase }
   /** Nothing has happened for a while — emit elapsed so the screen still moves. */
   | { type: 'heartbeat'; agent: AgentLabel; elapsedMs: number }
+  /** A model request went quiet for `afterMs` and was sent again. */
+  | { type: 'llm-stall'; agent: AgentLabel; round: number; afterMs: number }
   /** Something the user should see (compaction, dropped deps) — not progress. */
   | { type: 'warning'; agent: AgentLabel; text: string }
   /**

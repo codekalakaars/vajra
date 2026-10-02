@@ -93,6 +93,8 @@ interface TaskRecord {
   modelRounds: number
   /** The longest single model round, in ms: what separates a slow task from a stalled request. */
   slowestRoundMs: number
+  /** Model requests that went quiet and were sent again. */
+  stalledRequests: number
   toolCalls: number
   /** The largest prompt one model round sent, as the provider counted it. */
   peakPromptTokens: number
@@ -151,6 +153,7 @@ function toRecord(spec: BenchTaskSpec, index: number): TaskRecord {
     attempts: 0,
     modelRounds: 0,
     slowestRoundMs: 0,
+    stalledRequests: 0,
     toolCalls: 0,
     peakPromptTokens: 0,
     contextTrims: 0,
@@ -283,6 +286,7 @@ export function createBenchRecorder(spec: BenchRecorderSpec): BenchRecorder {
     if (!record) return
     openAttempt(record, at)
     if (event.type === 'llm-start') record.modelRounds++
+    else if (event.type === 'llm-stall') record.stalledRequests++
     else if (event.type === 'tool-start') record.toolCalls++
     else if (event.type === 'llm-end') {
       record.slowestRoundMs = Math.max(record.slowestRoundMs, event.ms)
@@ -429,6 +433,7 @@ export function createBenchRecorder(spec: BenchRecorderSpec): BenchRecorder {
         criticalPathMs: longestChainMs(records, spec.config.readLocks, lastAt ?? NEVER),
         idleMs,
         pausedMs: records.reduce((sum, record) => sum + record.pausedMs, 0),
+        stalledRequests: records.reduce((sum, record) => sum + record.stalledRequests, 0),
         peakCpu: round3(outcome.resources?.peakCpu ?? 0),
         peakOwnCpu: round3(outcome.resources?.peakOwnCpu ?? 0),
         chokingSamples: outcome.resources?.chokingSamples ?? 0,
@@ -452,6 +457,7 @@ export function createBenchRecorder(spec: BenchRecorderSpec): BenchRecorder {
           attempts: record.attempts,
           modelRounds: record.modelRounds,
           slowestRoundMs: record.slowestRoundMs,
+          stalledRequests: record.stalledRequests,
           toolCalls: record.toolCalls,
           pausedMs: record.pausedMs,
           peakPromptTokens: record.peakPromptTokens,

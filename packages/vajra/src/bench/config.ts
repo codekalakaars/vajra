@@ -185,6 +185,7 @@ export function loadWorkerParams(path: string): WorkerParams {
     retries: requireInteger(raw, 'retries', path, 0),
     preloadReads,
     toolOutputMaxChars: requireInteger(raw, 'toolOutputMaxChars', path, 1000),
+    modelStallSec: requireInteger(raw, 'modelStallSec', path, 5),
     contextPack: requireBoolean(raw, 'contextPack', path),
     packWindowShare: requireFraction(raw, 'packWindowShare', path),
     anchorContextLines: requireInteger(raw, 'anchorContextLines', path, 0),

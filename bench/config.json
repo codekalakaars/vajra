@@ -14,6 +14,7 @@
   "retries": 2,
   "preloadReads": false,
   "toolOutputMaxChars": 20000,
+  "modelStallSec": 45,
   "warmSandboxes": 1,
   "contextPack": true,
   "packWindowShare": 0.35,

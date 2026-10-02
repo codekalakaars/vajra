@@ -74,6 +74,7 @@ Every parameter lives in one checked-in file, `bench/config.json`, and nowhere e
   "retries": 2,
   "preloadReads": false,
   "toolOutputMaxChars": 20000,
+  "modelStallSec": 45,
   "warmSandboxes": 1,
   "contextPack": false,
   "packWindowShare": 0.35,
@@ -110,6 +111,7 @@ Every parameter lives in one checked-in file, `bench/config.json`, and nowhere e
 | `retries` | integer ≥ 0 | Attempts after the first, for every task |
 | `preloadReads` | boolean | Read files in the first message. Superseded by `contextPack` when that is on |
 | `toolOutputMaxChars` | integer ≥ 1000 | The most of one tool result a Worker keeps |
+| `modelStallSec` | integer ≥ 5 | Seconds a model request may go without hearing from the gateway (no headers, or no chunk once streaming) before it is abandoned and the round sent again. A slow model keeps streaming and is never cut |
 | `warmSandboxes` | integer ≥ 0 | Sandboxes kept warm between tasks |
 | `contextPack` | boolean | The Worker starts from a compiled context pack in its system prompt (Batch K2) |
 | `packWindowShare` | 0..1 | The most of the Worker's window the pack may take |

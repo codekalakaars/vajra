@@ -60,6 +60,11 @@ export interface WorkerParams {
    * its end, anything else its beginning; a cut result says how to get the rest.
    */
   toolOutputMaxChars: number
+  /**
+   * Seconds a model request may go without hearing from the gateway (no headers, or no
+   * chunk once streaming) before it is abandoned and the round is sent again.
+   */
+  modelStallSec: number
   /** Sandboxes kept warm between tasks. */
   warmSandboxes: number
 
@@ -118,6 +123,7 @@ export const TODAYS_PARAMS: Readonly<WorkerParams> = Object.freeze({
   retries: 2,
   preloadReads: false,
   toolOutputMaxChars: 20000,
+  modelStallSec: 45,
   warmSandboxes: 1,
   contextPack: false,
   packWindowShare: 0.35,

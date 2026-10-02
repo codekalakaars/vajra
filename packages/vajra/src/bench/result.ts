@@ -27,6 +27,8 @@ export interface BenchResult {
    * pauses a lot is one the machine, not the arrangement, is slowing down.
    */
   pausedMs: number
+  /** Model requests that went quiet for `modelStallSec` and were sent again, over the whole run. */
+  stalledRequests: number
   /** The highest machine-wide CPU reading during the run, 0..1. */
   peakCpu: number
   /** The highest share of the machine the run itself used. Low while `peakCpu` is high means the load was not ours. */
@@ -79,6 +81,8 @@ export interface BenchTaskResult {
   modelRounds: number
   /** The longest single model round, in ms. A task slow for one round stalled; one slow in every round is just slow. */
   slowestRoundMs: number
+  /** Model requests that went quiet for `modelStallSec` and were sent again. */
+  stalledRequests: number
   toolCalls: number
   /** Time this task's Worker was paused. */
   pausedMs: number

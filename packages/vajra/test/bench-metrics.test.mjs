@@ -121,6 +121,7 @@ test('a two-wave stream measures the wall, the floor under it, and the idle in i
       attempts: 1,
       modelRounds: 1,
       slowestRoundMs: 0,
+      stalledRequests: 0,
       toolCalls: 1,
       pausedMs: 0,
       peakPromptTokens: 0,
@@ -140,6 +141,7 @@ test('a two-wave stream measures the wall, the floor under it, and the idle in i
       attempts: 1,
       modelRounds: 0,
       slowestRoundMs: 0,
+      stalledRequests: 0,
       toolCalls: 0,
       pausedMs: 0,
       peakPromptTokens: 0,
@@ -157,6 +159,7 @@ test('a two-wave stream measures the wall, the floor under it, and the idle in i
       attempts: 1,
       modelRounds: 0,
       slowestRoundMs: 0,
+      stalledRequests: 0,
       toolCalls: 0,
       pausedMs: 0,
       peakPromptTokens: 0,
@@ -332,8 +335,8 @@ test('a run that spawned nothing measures nothing, and does not throw', () => {
   assert.equal(result.criticalPathMs, 0)
   assert.equal(result.idleMs, 0)
   assert.deepEqual(result.tasks, [
-    { id: 't1', title: 'Task t1', status: 'pending', attempts: 0, modelRounds: 0, slowestRoundMs: 0, toolCalls: 0, pausedMs: 0, peakPromptTokens: 0, peakContextShare: 0, contextTrims: 0, ...NO_CONTEXT },
-    { id: 't2', title: 'Task t2', status: 'pending', attempts: 0, modelRounds: 0, slowestRoundMs: 0, toolCalls: 0, pausedMs: 0, peakPromptTokens: 0, peakContextShare: 0, contextTrims: 0, ...NO_CONTEXT },
+    { id: 't1', title: 'Task t1', status: 'pending', attempts: 0, modelRounds: 0, slowestRoundMs: 0, stalledRequests: 0, toolCalls: 0, pausedMs: 0, peakPromptTokens: 0, peakContextShare: 0, contextTrims: 0, ...NO_CONTEXT },
+    { id: 't2', title: 'Task t2', status: 'pending', attempts: 0, modelRounds: 0, slowestRoundMs: 0, stalledRequests: 0, toolCalls: 0, pausedMs: 0, peakPromptTokens: 0, peakContextShare: 0, contextTrims: 0, ...NO_CONTEXT },
   ])
 })
 
@@ -721,4 +724,20 @@ test('the slowest model round is kept per task, so a stalled request shows apart
     [1400, 'taskEvent', done('Task t1')],
   ])
   assert.equal(recorder.result({ success: true }).tasks[0].slowestRoundMs, 61000)
+})
+
+test('a request that went quiet and was sent again is counted against its task', () => {
+  const tasks = [task('t1', { writeFile: ['a.txt'] })]
+  const clock = fakeClock()
+  const recorder = recorderFor(tasks, {}, clock)
+  const stall = { type: 'llm-stall', agent: worker('t1'), round: 2, afterMs: 45000 }
+  drive(recorder, clock, [
+    [1000, 'taskEvent', start('Task t1')],
+    [1100, 'agentEvent', stall],
+    [1200, 'agentEvent', stall],
+    [1300, 'taskEvent', done('Task t1')],
+  ])
+  const result = recorder.result({ success: true })
+  assert.equal(result.tasks[0].stalledRequests, 2)
+  assert.equal(result.stalledRequests, 2)
 })
