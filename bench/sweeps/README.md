@@ -28,13 +28,13 @@ step means adding a file here, never editing the runner.
 
 ```bash
 pnpm build:all                                    # the sweep measures dist/, not src/
-node scripts/tune.mjs bench/sweeps/baseline.json  # ~20 runs, hours if a suite is slow
+node bench/tune.mjs bench/sweeps/baseline.json  # ~20 runs, hours if a suite is slow
 ```
 
 Check what a sweep would do before paying for it:
 
 ```bash
-node scripts/tune.mjs bench/sweeps/cpu-thresholds.json --dry-run
+node bench/tune.mjs bench/sweeps/cpu-thresholds.json --dry-run
 ```
 
 Useful options while iterating on a step:

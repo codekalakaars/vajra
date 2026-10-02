@@ -12,19 +12,19 @@
     "url": "https://github.com/codekalakaars/vajra/issues"
   },
   "scripts": {
-    "build": "pnpm --filter @codekalakaars/vajra-core run build",
-    "build:debug": "pnpm --filter @codekalakaars/vajra-core run build:debug",
-    "test": "node --test \"test/*.test.mjs\"",
-    "test:rust": "cargo test --manifest-path packages/core/Cargo.toml",
-    "lint": "cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnings",
-    "dev": "turbo run dev --filter=@codekalakaars/vajra-cli --filter=@codekalakaars/vajra-protocol --filter=@codekalakaars/vajra-sandbox --filter=@codekalakaars/vajra-agent-core",
-    "cli": "pnpm --filter @codekalakaars/vajra-cli build && node packages/cli/dist/index.js",
+    "build": "pnpm --filter @codekalakaars/vajra-native run build",
+    "build:debug": "pnpm --filter @codekalakaars/vajra-native run build:debug",
+    "test": "node --test \"bench/test/*.test.mjs\"",
+    "test:rust": "cargo test --manifest-path packages/native/Cargo.toml",
+    "lint": "cargo clippy --manifest-path packages/native/Cargo.toml --all-targets -- -D warnings",
+    "dev": "turbo run dev --filter=@codekalakaars/vajra --filter=@codekalakaars/vajra-protocol --filter=@codekalakaars/vajra-sandbox",
+    "cli": "pnpm --filter @codekalakaars/vajra build && node packages/vajra/dist/cli/index.js",
     "dev:all": "pnpm -r --parallel dev",
     "build:all": "turbo run build",
     "test:all": "turbo run test && pnpm test"
   },
   "devDependencies": {
-    "@codekalakaars/vajra-core": "workspace:*",
+    "@codekalakaars/vajra-native": "workspace:*",
     "turbo": "^2.10.12"
   },
   "packageManager": "pnpm@11.9.0",

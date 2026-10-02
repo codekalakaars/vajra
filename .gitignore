@@ -42,5 +42,5 @@ vendor/
 
 # Added by cargo
 
-# `target/` above already covers packages/core/target, where the crate is built.
+# `target/` above already covers packages/native/target, where the crate is built.
 .vajra-profile-*.sh

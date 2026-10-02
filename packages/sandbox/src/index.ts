@@ -5,10 +5,6 @@
 // built by the parent process and passed to the sandboxed worker — the worker
 // never modifies it.
 //
-// CLI usage:
-//   vajra-sandbox status   — check sandbox capabilities
-//   vajra-sandbox config   — create/view .vajra-sandbox.json
-//   vajra-sandbox test     — test if sandbox works
 
 export { createSandboxConfig, type SandboxConfig, type SandboxEnvironments, type FileRule, type CreateSandboxInput } from './config.js'
 export {
@@ -32,3 +28,7 @@ export {
   type WorkerLease,
   type WorkerPoolOptions,
 } from './pool.js'
+
+// The confined worker process, and the repository index and tool specs it serves.
+export * from './process/index.js'
+export * from './project/index.js'

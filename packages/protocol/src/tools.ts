@@ -1,7 +1,7 @@
 // Tool schema the agent's model sees, and what each tool dispatches to.
 // run_shell is deliberately not offered — run_command (argv-based, no shell)
 // covers file-editing tasks without the shell-injection surface.
-// This package does not import vajra-core — browser bundles can't load .node.
+// This package does not import vajra-native — browser bundles can't load .node.
 
 import { z } from 'zod'
 

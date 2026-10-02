@@ -1,5 +1,5 @@
 // Platform gate. Import this FIRST in an entry point, before anything that
-// transitively loads `@codekalakaars/vajra-core`.
+// transitively loads `@codekalakaars/vajra-native`.
 //
 // ESM evaluates all imported modules before the importing module's own body, so
 // an inline `assertSupportedPlatform()` call in the entry point would run after

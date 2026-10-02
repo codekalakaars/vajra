@@ -5,9 +5,9 @@
       "dependsOn": ["^build"],
       "outputs": [
         "dist/**",
-        "packages/core/index.js",
-        "packages/core/index.d.ts",
-        "packages/core/*.node"
+        "index.js",
+        "index.d.ts",
+        "*.node"
       ]
     },
     "dev": {

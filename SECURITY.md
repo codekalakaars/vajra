@@ -2,7 +2,7 @@
 
 ## Scope
 
-Vajra is mid-rewrite. The native core (`vajra-core`) now enforces filesystem
+Vajra is mid-rewrite. The native core (`vajra-native`) now enforces filesystem
 confinement on Linux (Landlock), and provides output redaction. **Vajra supports
 Linux only** — on any other platform, including macOS and Windows, the CLI
 refuses to start rather than running unconfined.

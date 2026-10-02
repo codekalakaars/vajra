@@ -4,6 +4,8 @@
 
 Accepted. Its references to Phase One predate [ADR-0012](0012-verification-ladder-replaces-phase-one.md), which removed it; the green-baseline rule now means mutation runs only after a task's tests pass on the ladder.
 
+**Not implemented.** This describes a design that was never built and is not part of the current repository (see [../architecture.md](../architecture.md)). Kept as a record of the design.
+
 ## Date
 
 TODO: Date this decision was made.

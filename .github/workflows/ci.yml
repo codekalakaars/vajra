@@ -36,14 +36,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            packages/core/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('packages/core/Cargo.lock') }}
+            packages/native/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('packages/native/Cargo.lock') }}
 
       - name: Clippy (deny warnings)
-        run: cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --manifest-path packages/native/Cargo.toml --all-targets -- -D warnings
 
       - name: Rust unit tests
-        run: cargo test --manifest-path packages/core/Cargo.toml
+        run: cargo test --manifest-path packages/native/Cargo.toml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

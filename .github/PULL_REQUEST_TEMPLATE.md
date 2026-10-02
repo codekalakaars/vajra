@@ -11,6 +11,6 @@ Closes #...
 - [ ] `cargo clippy --all-targets -- -D warnings` passes
 - [ ] `cargo test` passes
 - [ ] `pnpm build && pnpm test` passes
-- [ ] Regenerated `packages/core/index.js` / `index.d.ts` are committed, if bindings changed
+- [ ] Regenerated `packages/native/index.js` / `index.d.ts` are committed, if bindings changed
 - [ ] Works on Linux (CI matrix is green)
 - [ ] Commit messages follow Conventional Commits

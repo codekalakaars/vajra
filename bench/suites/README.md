@@ -36,7 +36,7 @@ finished run leaves different, and a check lays it over a fresh copy of
 run in the run directory once `accept/` has been copied to `<run>/accept/`. The
 test files are named outright: with no shell there is nothing to expand a glob,
 and `node --test <dir>` runs the directory as a file and fails.
-`packages/cli/test/bench-suites.test.mjs` runs exactly this, so it is the
+`packages/vajra/test/bench-suites.test.mjs` runs exactly this, so it is the
 working specification of what a run must do with these four directories.
 
 ### The tests a task is judged by
@@ -70,7 +70,7 @@ built from `context` / `edits` / `verify`. It also carries the same plan lowered
 — `instructions`, `readFile`, `writeFile`, `deleteFile`, `createDir`,
 `validation` — because the scheduler, the leases and the Worker's prompt read
 those, and a suite should bench the plan whether the runner lowers it or passes
-it through. `packages/cli/test/bench-suites.test.mjs` fails when the two forms
+it through. `packages/vajra/test/bench-suites.test.mjs` fails when the two forms
 disagree.
 
 Two things follow from that and are worth knowing before changing a plan:
@@ -107,7 +107,7 @@ Two things follow from that and are worth knowing before changing a plan:
    and dependencies that put the tasks in the wave shape the suite is for.
 5. Add the suite directory and the test picks it up; there is no list to update.
 
-Then run `node --test test/bench-suites.test.mjs` from `packages/cli`. It
+Then run `node --test test/bench-suites.test.mjs` from `packages/vajra`. It
 checks every suite above without a model: `validatePlan` on the plan and the
 evidence a run builds, both sides of every command the suite runs, and both
 halves of the acceptance rule.

@@ -4,6 +4,8 @@
 
 Accepted. Amended by [ADR-0012](0012-verification-ladder-replaces-phase-one.md): with Phase One removed, every ladder rung expects `pass`, and expectation inversion applies only to a task explicitly declared as writing a test for missing behaviour.
 
+**Not implemented.** This describes a design that was never built and is not part of the current repository (see [../architecture.md](../architecture.md)). Kept as a record of the design.
+
 ## Date
 
 TODO: Date this decision was made.

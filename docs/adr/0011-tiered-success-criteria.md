@@ -4,6 +4,8 @@
 
 Accepted
 
+**Not implemented.** This describes a design that was never built and is not part of the current repository (see [../architecture.md](../architecture.md)). Kept as a record of the design.
+
 ## Date
 
 2026-09-28

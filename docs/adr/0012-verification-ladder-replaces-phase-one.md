@@ -4,6 +4,8 @@
 
 Accepted. Supersedes [ADR-0006](0006-phase-one-is-mandatory.md). Amends [ADR-0007](0007-test-verdict-contract.md).
 
+**Not implemented.** This describes a design that was never built and is not part of the current repository (see [../architecture.md](../architecture.md)). Kept as a record of the design.
+
 ## Date
 
 2026-09-29

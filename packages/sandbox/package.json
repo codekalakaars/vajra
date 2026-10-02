@@ -23,28 +23,17 @@
   "files": [
     "dist"
   ],
-  "bin": {
-    "vajra-sandbox": "dist/cli.js"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test \"test/*.test.mjs\"",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@codekalakaars/vajra-protocol": "workspace:*"
-  },
-  "peerDependencies": {
-    "@codekalakaars/vajra-core": "workspace:*"
-  },
-  "peerDependenciesMeta": {
-    "@codekalakaars/vajra-core": {
-      "optional": true
-    }
+    "@codekalakaars/vajra-protocol": "workspace:*",
+    "@codekalakaars/vajra-native": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.5.4",
-    "typescript": "^5.5.4",
-    "@codekalakaars/vajra-core": "workspace:*"
+    "typescript": "^5.5.4"
   }
 }
