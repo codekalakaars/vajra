@@ -21,7 +21,7 @@
     "cli": "pnpm --filter @codekalakaars/vajra-cli build && node packages/cli/dist/index.js",
     "dev:all": "pnpm -r --parallel dev",
     "build:all": "turbo run build",
-    "test:all": "turbo run test"
+    "test:all": "turbo run test && pnpm test"
   },
   "devDependencies": {
     "@codekalakaars/vajra-core": "workspace:*",
