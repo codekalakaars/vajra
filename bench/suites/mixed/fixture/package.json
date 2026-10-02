@@ -1,0 +1,5 @@
+{
+  "name": "bench-mixed",
+  "private": true,
+  "type": "module"
+}

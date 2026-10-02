@@ -1,0 +1,5 @@
+{
+  "name": "bench-wide",
+  "private": true,
+  "type": "module"
+}

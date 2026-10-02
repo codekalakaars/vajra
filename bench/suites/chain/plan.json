@@ -1,0 +1,227 @@
+{
+  "summary": "Four tasks, each depending on the last, all on one file: nothing to parallelise.",
+  "acceptance": {
+    "command": "node",
+    "args": [
+      "--test",
+      "accept/chain.test.mjs"
+    ],
+    "timeoutMs": 120000
+  },
+  "tasks": [
+    {
+      "id": "chain-split",
+      "title": "splitWords in src/steps.js",
+      "description": "Split a text into its words.",
+      "type": "modify",
+      "dependsOn": [],
+      "context": [
+        {
+          "path": "tests/task-chain-split.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        },
+        {
+          "path": "src/steps.js",
+          "reason": "the code this task changes"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/steps.js",
+          "op": "modify",
+          "change": "Replace the stub with splitWords(text): split the text on runs of whitespace and drop the empty pieces, so '  a  b  ' gives ['a', 'b'], 'a\\tb\\nc' gives ['a', 'b', 'c'] and '' or '   ' gives []. Throw a TypeError when the argument is not a string. Leave joinWords, topWords and reportLine exactly as they are.",
+          "anchor": "export function splitWords() { throw new Error('splitWords is not implemented') }"
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-chain-split.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/steps.js, at the text `export function splitWords() { throw new Error('splitWords is not implemented') }`: Replace the stub with splitWords(text): split the text on runs of whitespace and drop the empty pieces, so '  a  b  ' gives ['a', 'b'], 'a\\tb\\nc' gives ['a', 'b', 'c'] and '' or '   ' gives []. Throw a TypeError when the argument is not a string. Leave joinWords, topWords and reportLine exactly as they are."
+      ],
+      "readFile": [
+        "tests/task-chain-split.test.mjs",
+        "src/steps.js"
+      ],
+      "writeFile": [
+        "src/steps.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-chain-split.test.mjs"
+      ]
+    },
+    {
+      "id": "chain-join",
+      "title": "joinWords in src/steps.js",
+      "description": "Put words back together with single spaces.",
+      "type": "modify",
+      "dependsOn": [
+        "chain-split"
+      ],
+      "context": [
+        {
+          "path": "tests/task-chain-join.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        },
+        {
+          "path": "src/steps.js",
+          "reason": "the code this task changes"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/steps.js",
+          "op": "modify",
+          "change": "Replace the stub with joinWords(words): trim every word, drop the ones left empty and join what is left with a single space, so [' a ', '', 'b'] gives 'a b', ['x'] gives 'x' and [] gives ''. Leave splitWords, topWords and reportLine exactly as they are.",
+          "anchor": "export function joinWords() { throw new Error('joinWords is not implemented') }"
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-chain-join.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/steps.js, at the text `export function joinWords() { throw new Error('joinWords is not implemented') }`: Replace the stub with joinWords(words): trim every word, drop the ones left empty and join what is left with a single space, so [' a ', '', 'b'] gives 'a b', ['x'] gives 'x' and [] gives ''. Leave splitWords, topWords and reportLine exactly as they are."
+      ],
+      "readFile": [
+        "tests/task-chain-join.test.mjs",
+        "src/steps.js"
+      ],
+      "writeFile": [
+        "src/steps.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-chain-join.test.mjs"
+      ]
+    },
+    {
+      "id": "chain-top",
+      "title": "topWords in src/steps.js",
+      "description": "Rank the words of a count table.",
+      "type": "modify",
+      "dependsOn": [
+        "chain-join"
+      ],
+      "context": [
+        {
+          "path": "tests/task-chain-top.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        },
+        {
+          "path": "src/steps.js",
+          "reason": "the code this task changes"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/steps.js",
+          "op": "modify",
+          "change": "Replace the stub with topWords(counts, limit): counts is an object of word to count, and the result is an array of [word, count] pairs sorted by count from highest to lowest, cut to at most limit pairs, where words with the same count stay in the order their keys first appear in counts. So topWords({ a: 2, b: 1, c: 3 }, 2) is [['c', 3], ['a', 2]], topWords({ a: 1, b: 1 }, 2) is [['a', 1], ['b', 1]] and topWords({}, 2) is []. Throw a TypeError when limit is not an integer and a RangeError when limit is below 1. Leave splitWords, joinWords and reportLine exactly as they are.",
+          "anchor": "export function topWords() { throw new Error('topWords is not implemented') }"
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-chain-top.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/steps.js, at the text `export function topWords() { throw new Error('topWords is not implemented') }`: Replace the stub with topWords(counts, limit): counts is an object of word to count, and the result is an array of [word, count] pairs sorted by count from highest to lowest, cut to at most limit pairs, where words with the same count stay in the order their keys first appear in counts. So topWords({ a: 2, b: 1, c: 3 }, 2) is [['c', 3], ['a', 2]], topWords({ a: 1, b: 1 }, 2) is [['a', 1], ['b', 1]] and topWords({}, 2) is []. Throw a TypeError when limit is not an integer and a RangeError when limit is below 1. Leave splitWords, joinWords and reportLine exactly as they are."
+      ],
+      "readFile": [
+        "tests/task-chain-top.test.mjs",
+        "src/steps.js"
+      ],
+      "writeFile": [
+        "src/steps.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-chain-top.test.mjs"
+      ]
+    },
+    {
+      "id": "chain-report",
+      "title": "reportLine in src/steps.js",
+      "description": "Report the commonest words of a text.",
+      "type": "modify",
+      "dependsOn": [
+        "chain-top"
+      ],
+      "context": [
+        {
+          "path": "tests/task-chain-report.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        },
+        {
+          "path": "src/steps.js",
+          "reason": "the code this task changes"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/steps.js",
+          "op": "modify",
+          "change": "Replace the stub with reportLine(text, limit): count the words of text with splitWords, keep the top limit of them with topWords, and write them as word:count pairs joined by ', ', so reportLine('b a b c', 2) is 'b:2, a:1' and reportLine('x y', 5) is 'x:1, y:1'. A text with no words gives the empty string. Leave splitWords, joinWords and topWords exactly as they are.",
+          "anchor": "export function reportLine() { throw new Error('reportLine is not implemented') }"
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-chain-report.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/steps.js, at the text `export function reportLine() { throw new Error('reportLine is not implemented') }`: Replace the stub with reportLine(text, limit): count the words of text with splitWords, keep the top limit of them with topWords, and write them as word:count pairs joined by ', ', so reportLine('b a b c', 2) is 'b:2, a:1' and reportLine('x y', 5) is 'x:1, y:1'. A text with no words gives the empty string. Leave splitWords, joinWords and topWords exactly as they are."
+      ],
+      "readFile": [
+        "tests/task-chain-report.test.mjs",
+        "src/steps.js"
+      ],
+      "writeFile": [
+        "src/steps.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-chain-report.test.mjs"
+      ]
+    }
+  ]
+}

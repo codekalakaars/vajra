@@ -1,0 +1,516 @@
+{
+  "summary": "Ten tasks over four files: ordering, shared reads and concurrency together.",
+  "acceptance": {
+    "command": "node",
+    "args": [
+      "--test",
+      "accept/mixed.test.mjs"
+    ],
+    "timeoutMs": 120000
+  },
+  "tasks": [
+    {
+      "id": "mixed-parse-create",
+      "title": "tokenize in src/parse.js",
+      "description": "Split a report line into its fields.",
+      "type": "create",
+      "dependsOn": [],
+      "context": [
+        {
+          "path": "tests/task-mixed-parse-create.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/parse.js",
+          "op": "create",
+          "change": "Write a module whose only export is tokenize(text): split the text on runs of whitespace and drop the empty pieces, so '  a  b ' gives ['a', 'b'] and '' gives []. Throw a TypeError when the argument is not a string."
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-mixed-parse-create.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/parse.js: Write a module whose only export is tokenize(text): split the text on runs of whitespace and drop the empty pieces, so '  a  b ' gives ['a', 'b'] and '' gives []. Throw a TypeError when the argument is not a string."
+      ],
+      "readFile": [
+        "tests/task-mixed-parse-create.test.mjs"
+      ],
+      "writeFile": [
+        "src/parse.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-mixed-parse-create.test.mjs"
+      ]
+    },
+    {
+      "id": "mixed-parse-extract",
+      "title": "extract in src/parse.js",
+      "description": "Read one named field out of tokenized tokens.",
+      "type": "modify",
+      "dependsOn": [
+        "mixed-parse-create"
+      ],
+      "context": [
+        {
+          "path": "tests/task-mixed-parse-extract.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        },
+        {
+          "path": "src/parse.js",
+          "reason": "tokenize, the function extract is built next to"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/parse.js",
+          "op": "modify",
+          "change": "Add extract(tokens, name) to the module, leaving tokenize exactly as it is: the value of the first token that starts with name followed by '=', with the name= part cut off, or null when no token does. So extract(['name=alice', 'total=10'], 'name') is 'alice' and extract(['name=alice'], 'date') is null. Empty values are returned as they are, so extract(['name='], 'name') is the empty string."
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-mixed-parse-extract.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/parse.js: Add extract(tokens, name) to the module, leaving tokenize exactly as it is: the value of the first token that starts with name followed by '=', with the name= part cut off, or null when no token does. So extract(['name=alice', 'total=10'], 'name') is 'alice' and extract(['name=alice'], 'date') is null. Empty values are returned as they are, so extract(['name='], 'name') is the empty string."
+      ],
+      "readFile": [
+        "tests/task-mixed-parse-extract.test.mjs",
+        "src/parse.js"
+      ],
+      "writeFile": [
+        "src/parse.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-mixed-parse-extract.test.mjs"
+      ]
+    },
+    {
+      "id": "mixed-parse-merge",
+      "title": "parseAll in src/parse.js",
+      "description": "Read every field of a line at once.",
+      "type": "modify",
+      "dependsOn": [
+        "mixed-parse-extract"
+      ],
+      "context": [
+        {
+          "path": "tests/task-mixed-parse-merge.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        },
+        {
+          "path": "src/parse.js",
+          "reason": "tokenize, the function parseAll is built on"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/parse.js",
+          "op": "modify",
+          "change": "Add parseAll(text) to the module, leaving tokenize and extract exactly as they are: an object of every name=value token in the text, with the token after the first '=' as the value, where a token with no '=' is ignored and a name that appears twice keeps the last value. Keys stay in the order they first appear. So parseAll('name=alice junk total=10') is { name: 'alice', total: '10' } and parseAll('name=alice name=bob') is { name: 'bob' }."
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-mixed-parse-merge.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/parse.js: Add parseAll(text) to the module, leaving tokenize and extract exactly as they are: an object of every name=value token in the text, with the token after the first '=' as the value, where a token with no '=' is ignored and a name that appears twice keeps the last value. Keys stay in the order they first appear. So parseAll('name=alice junk total=10') is { name: 'alice', total: '10' } and parseAll('name=alice name=bob') is { name: 'bob' }."
+      ],
+      "readFile": [
+        "tests/task-mixed-parse-merge.test.mjs",
+        "src/parse.js"
+      ],
+      "writeFile": [
+        "src/parse.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-mixed-parse-merge.test.mjs"
+      ]
+    },
+    {
+      "id": "mixed-format-create",
+      "title": "formatLine in src/format.js",
+      "description": "Write one field back out as name=value.",
+      "type": "create",
+      "dependsOn": [
+        "mixed-parse-create"
+      ],
+      "context": [
+        {
+          "path": "tests/task-mixed-format-create.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/format.js",
+          "op": "create",
+          "change": "Write a module whose only export is formatLine(key, value): the field written back out as the key and the value joined by '=', with the space around either one trimmed off, so formatLine(' name ', ' alice ') is 'name=alice'. Throw a TypeError when either argument is not a string."
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-mixed-format-create.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/format.js: Write a module whose only export is formatLine(key, value): the field written back out as the key and the value joined by '=', with the space around either one trimmed off, so formatLine(' name ', ' alice ') is 'name=alice'. Throw a TypeError when either argument is not a string."
+      ],
+      "readFile": [
+        "tests/task-mixed-format-create.test.mjs"
+      ],
+      "writeFile": [
+        "src/format.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-mixed-format-create.test.mjs"
+      ]
+    },
+    {
+      "id": "mixed-format-wrap",
+      "title": "formatReport in src/format.js",
+      "description": "Order and write out every field of a line.",
+      "type": "modify",
+      "dependsOn": [
+        "mixed-format-create",
+        "mixed-parse-merge"
+      ],
+      "context": [
+        {
+          "path": "tests/task-mixed-format-wrap.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        },
+        {
+          "path": "src/parse.js",
+          "reason": "parseAll, which tells formatReport which fields the line carries"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/format.js",
+          "op": "modify",
+          "change": "Add formatReport(text) to the module, leaving formatLine exactly as it is: parse the line with parseAll from './parse.js', keep only its first MAX_FIELDS fields in the order parseAll gives them, and return them written with formatLine, with the fields in REQUIRED first in the order FIELD_ORDER lists them and every other field after them sorted alphabetically. FIELD_ORDER, REQUIRED and MAX_FIELDS come from './shared.js'. So formatReport('total=10 name=alice') is ['name=alice', 'total=10'], formatReport('date=x total=10 name=a') is ['name=a', 'total=10', 'date=x'] and formatReport('') is []."
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-mixed-format-wrap.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/format.js: Add formatReport(text) to the module, leaving formatLine exactly as it is: parse the line with parseAll from './parse.js', keep only its first MAX_FIELDS fields in the order parseAll gives them, and return them written with formatLine, with the fields in REQUIRED first in the order FIELD_ORDER lists them and every other field after them sorted alphabetically. FIELD_ORDER, REQUIRED and MAX_FIELDS come from './shared.js'. So formatReport('total=10 name=alice') is ['name=alice', 'total=10'], formatReport('date=x total=10 name=a') is ['name=a', 'total=10', 'date=x'] and formatReport('') is []."
+      ],
+      "readFile": [
+        "tests/task-mixed-format-wrap.test.mjs",
+        "src/parse.js"
+      ],
+      "writeFile": [
+        "src/format.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-mixed-format-wrap.test.mjs"
+      ]
+    },
+    {
+      "id": "mixed-validate-create",
+      "title": "checkField in src/validate.js",
+      "description": "Say what is wrong with one field.",
+      "type": "create",
+      "dependsOn": [
+        "mixed-parse-create"
+      ],
+      "context": [
+        {
+          "path": "tests/task-mixed-validate-create.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/validate.js",
+          "op": "create",
+          "change": "Write a module whose only export is checkField(key, value): null when the field is fine, otherwise the one message naming it, which is key + ': bad key' when the key is not a lowercase letter followed by lowercase letters, digits or underscores, and key + ': empty value' when the value is not a string or is blank once trimmed. A key that is wrong is reported on its own, so checkField('Name', ' ') is 'Name: bad key'. checkField is the module's only export."
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-mixed-validate-create.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/validate.js: Write a module whose only export is checkField(key, value): null when the field is fine, otherwise the one message naming it, which is key + ': bad key' when the key is not a lowercase letter followed by lowercase letters, digits or underscores, and key + ': empty value' when the value is not a string or is blank once trimmed. A key that is wrong is reported on its own, so checkField('Name', ' ') is 'Name: bad key'. checkField is the module's only export."
+      ],
+      "readFile": [
+        "tests/task-mixed-validate-create.test.mjs"
+      ],
+      "writeFile": [
+        "src/validate.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-mixed-validate-create.test.mjs"
+      ]
+    },
+    {
+      "id": "mixed-validate-check",
+      "title": "checkReport in src/validate.js",
+      "description": "Say everything that is wrong with a line.",
+      "type": "modify",
+      "dependsOn": [
+        "mixed-validate-create",
+        "mixed-parse-merge"
+      ],
+      "context": [
+        {
+          "path": "tests/task-mixed-validate-check.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        },
+        {
+          "path": "src/parse.js",
+          "reason": "parseAll, which tells checkReport which fields the line carries"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/validate.js",
+          "op": "modify",
+          "change": "Add checkReport(text) to the module, leaving checkField exactly as it is: the messages from checkField for every field parseAll finds in the line, in the order parseAll gives them, followed by 'missing: ' + name for each field in REQUIRED that the line does not carry at all, in the order REQUIRED lists them. parseAll comes from './parse.js' and REQUIRED from './shared.js'. So checkReport('name=alice total=10') is [], checkReport('name=alice') is ['missing: total'], checkReport('Name=alice total=10') is ['Name: bad key', 'missing: name'] and checkReport('') is ['missing: name', 'missing: total']."
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-mixed-validate-check.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/validate.js: Add checkReport(text) to the module, leaving checkField exactly as it is: the messages from checkField for every field parseAll finds in the line, in the order parseAll gives them, followed by 'missing: ' + name for each field in REQUIRED that the line does not carry at all, in the order REQUIRED lists them. parseAll comes from './parse.js' and REQUIRED from './shared.js'. So checkReport('name=alice total=10') is [], checkReport('name=alice') is ['missing: total'], checkReport('Name=alice total=10') is ['Name: bad key', 'missing: name'] and checkReport('') is ['missing: name', 'missing: total']."
+      ],
+      "readFile": [
+        "tests/task-mixed-validate-check.test.mjs",
+        "src/parse.js"
+      ],
+      "writeFile": [
+        "src/validate.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-mixed-validate-check.test.mjs"
+      ]
+    },
+    {
+      "id": "mixed-index-create",
+      "title": "The report barrel in src/index.js",
+      "description": "One entry point for the whole toolkit.",
+      "type": "create",
+      "dependsOn": [
+        "mixed-format-create",
+        "mixed-validate-create"
+      ],
+      "context": [
+        {
+          "path": "tests/task-mixed-index-create.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/index.js",
+          "op": "create",
+          "change": "Make this the entry point of the toolkit: re-export everything from './parse.js', './format.js' and './validate.js', re-export FIELD_ORDER, REQUIRED and MAX_FIELDS from './shared.js', and export the constant PIPELINE, whose value is the text 'parse -> check -> format'. No function of your own yet."
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-mixed-index-create.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/index.js: Make this the entry point of the toolkit: re-export everything from './parse.js', './format.js' and './validate.js', re-export FIELD_ORDER, REQUIRED and MAX_FIELDS from './shared.js', and export the constant PIPELINE, whose value is the text 'parse -> check -> format'. No function of your own yet."
+      ],
+      "readFile": [
+        "tests/task-mixed-index-create.test.mjs"
+      ],
+      "writeFile": [
+        "src/index.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-mixed-index-create.test.mjs"
+      ]
+    },
+    {
+      "id": "mixed-index-wire",
+      "title": "renderReport in src/index.js",
+      "description": "Render and check one line in a single call.",
+      "type": "modify",
+      "dependsOn": [
+        "mixed-index-create",
+        "mixed-format-wrap",
+        "mixed-validate-check"
+      ],
+      "context": [
+        {
+          "path": "tests/task-mixed-index-wire.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/index.js",
+          "op": "modify",
+          "change": "Add renderReport(text) to the entry point, leaving the re-exports and PIPELINE exactly as they are: import formatReport from './format.js' and checkReport from './validate.js' to call them, then return an object with fields, the array formatReport(text) gives, and problems, the array checkReport(text) gives. So renderReport('name=alice total=10') is { fields: ['name=alice', 'total=10'], problems: [] } and renderReport('name=alice') is { fields: ['name=alice'], problems: ['missing: total'] }."
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-mixed-index-wire.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/index.js: Add renderReport(text) to the entry point, leaving the re-exports and PIPELINE exactly as they are: import formatReport from './format.js' and checkReport from './validate.js' to call them, then return an object with fields, the array formatReport(text) gives, and problems, the array checkReport(text) gives. So renderReport('name=alice total=10') is { fields: ['name=alice', 'total=10'], problems: [] } and renderReport('name=alice') is { fields: ['name=alice'], problems: ['missing: total'] }."
+      ],
+      "readFile": [
+        "tests/task-mixed-index-wire.test.mjs"
+      ],
+      "writeFile": [
+        "src/index.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-mixed-index-wire.test.mjs"
+      ]
+    },
+    {
+      "id": "mixed-index-describe",
+      "title": "describeReport in src/index.js",
+      "description": "Say what renderReport found, in one line.",
+      "type": "modify",
+      "dependsOn": [
+        "mixed-index-wire"
+      ],
+      "context": [
+        {
+          "path": "tests/task-mixed-index-describe.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/index.js",
+          "op": "modify",
+          "change": "Add describeReport(text) to the entry point, leaving the re-exports, PIPELINE and renderReport exactly as they are: run renderReport(text) once, and when problems is not empty return 'rejected: ' followed by the problems joined with ', ', otherwise return 'accepted: ' followed by the fields joined with '; '. So describeReport('name=alice total=10') is 'accepted: name=alice; total=10' and describeReport('name=alice') is 'rejected: missing: total'."
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-mixed-index-describe.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/index.js: Add describeReport(text) to the entry point, leaving the re-exports, PIPELINE and renderReport exactly as they are: run renderReport(text) once, and when problems is not empty return 'rejected: ' followed by the problems joined with ', ', otherwise return 'accepted: ' followed by the fields joined with '; '. So describeReport('name=alice total=10') is 'accepted: name=alice; total=10' and describeReport('name=alice') is 'rejected: missing: total'."
+      ],
+      "readFile": [
+        "tests/task-mixed-index-describe.test.mjs"
+      ],
+      "writeFile": [
+        "src/index.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-mixed-index-describe.test.mjs"
+      ]
+    }
+  ]
+}
