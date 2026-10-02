@@ -56,9 +56,13 @@ export interface BenchRecorderSpec {
 }
 
 /** The run's outcome, which only the caller knows: the acceptance command runs after the last event. */
+const round3 = (value: number): number => Math.round(value * 1000) / 1000
+
 export interface BenchOutcome {
   success: boolean
   failureReason?: string
+  /** The governor's readings over the run. */
+  resources?: { peakCpu: number; peakOwnCpu: number; chokingSamples: number; externalLoadSamples: number }
 }
 
 export interface BenchRecorder {
@@ -87,6 +91,8 @@ interface TaskRecord {
   endedAt?: number
   attempts: number
   modelRounds: number
+  /** The longest single model round, in ms: what separates a slow task from a stalled request. */
+  slowestRoundMs: number
   toolCalls: number
   /** The largest prompt one model round sent, as the provider counted it. */
   peakPromptTokens: number
@@ -144,6 +150,7 @@ function toRecord(spec: BenchTaskSpec, index: number): TaskRecord {
     status: 'pending',
     attempts: 0,
     modelRounds: 0,
+    slowestRoundMs: 0,
     toolCalls: 0,
     peakPromptTokens: 0,
     contextTrims: 0,
@@ -277,8 +284,9 @@ export function createBenchRecorder(spec: BenchRecorderSpec): BenchRecorder {
     openAttempt(record, at)
     if (event.type === 'llm-start') record.modelRounds++
     else if (event.type === 'tool-start') record.toolCalls++
-    else if (event.type === 'llm-end' && event.usage) {
-      record.peakPromptTokens = Math.max(record.peakPromptTokens, event.usage.promptTokens)
+    else if (event.type === 'llm-end') {
+      record.slowestRoundMs = Math.max(record.slowestRoundMs, event.ms)
+      if (event.usage) record.peakPromptTokens = Math.max(record.peakPromptTokens, event.usage.promptTokens)
     } else if (event.type === 'warning' && event.text.startsWith('Context trimmed')) {
       record.contextTrims++
     }
@@ -421,6 +429,10 @@ export function createBenchRecorder(spec: BenchRecorderSpec): BenchRecorder {
         criticalPathMs: longestChainMs(records, spec.config.readLocks, lastAt ?? NEVER),
         idleMs,
         pausedMs: records.reduce((sum, record) => sum + record.pausedMs, 0),
+        peakCpu: round3(outcome.resources?.peakCpu ?? 0),
+        peakOwnCpu: round3(outcome.resources?.peakOwnCpu ?? 0),
+        chokingSamples: outcome.resources?.chokingSamples ?? 0,
+        externalLoadSamples: outcome.resources?.externalLoadSamples ?? 0,
         peakContextShare: Math.max(0, ...records.map(record => contextShare(record.peakPromptTokens))),
         contextTrims: records.reduce((sum, record) => sum + record.contextTrims, 0),
         seekRatio: ratio(seeks, toolCalls),
@@ -439,6 +451,7 @@ export function createBenchRecorder(spec: BenchRecorderSpec): BenchRecorder {
           status: record.status,
           attempts: record.attempts,
           modelRounds: record.modelRounds,
+          slowestRoundMs: record.slowestRoundMs,
           toolCalls: record.toolCalls,
           pausedMs: record.pausedMs,
           peakPromptTokens: record.peakPromptTokens,

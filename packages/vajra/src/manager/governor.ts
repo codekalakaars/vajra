@@ -1,5 +1,6 @@
 import { cpus, freemem } from 'node:os'
 import { readFileSync } from 'node:fs'
+import { descendants } from '@codekalakaars/vajra-sandbox'
 
 /**
  * How many Workers the machine can carry, measured rather than configured.
@@ -9,6 +10,13 @@ import { readFileSync } from 'node:fs'
  * pauses its lowest-priority Worker, one per sample, and resumes them as the CPU
  * recovers. The governor only measures and answers; which task to pause is the
  * scheduler's call, because only it knows the plan.
+ *
+ * Only load that is ours counts. The Workers spend most of their time waiting on
+ * the model, so a machine that is saturated by other programs is saturated by
+ * them: pausing a Worker would not relieve it, only slow the run. The sampler
+ * therefore also reads how much of the machine this process and everything it
+ * started is using, and the governor throttles only when that is at least
+ * `cpuOwnMin`.
  *
  * CPU has two thresholds, not one. Pausing at 90% and admitting again at 89%
  * would admit the Worker that pushes it back over, every sample; the gap
@@ -21,6 +29,11 @@ export interface ResourceSample {
   cpu: number
   /** RAM the kernel can hand out without swapping, in MB. */
   availableMemMb: number
+  /**
+   * The share of all cores used by this process and everything it started,
+   * 0..1. Absent when the sampler cannot tell, which counts as all of it.
+   */
+  ownCpu?: number
 }
 
 export type Sampler = () => ResourceSample
@@ -30,6 +43,12 @@ export interface GovernorConfig {
   cpuPauseAt: number
   /** CPU share below which a paused Worker resumes, or a new one is admitted. */
   cpuResumeAt: number
+  /**
+   * The least share of the machine this run must be using for a busy CPU to be
+   * its doing. Below it, a saturated machine is someone else's load: nothing is
+   * paused and Workers keep starting.
+   */
+  cpuOwnMin: number
   /** RAM that must stay free after admitting a Worker. */
   minFreeMemMb: number
   /** RAM one Worker is assumed to take, until the next reading shows what it did. */
@@ -62,22 +81,69 @@ function cpuTimes(): { busy: number; total: number } {
   return { busy, total }
 }
 
+/** Clock ticks per second in /proc/<pid>/stat. 100 on every Linux kernel Vajra supports. */
+const TICKS_PER_SECOND = 100
+
+/** CPU ticks (user + system) a process has used so far, or null if it is gone. */
+function processTicks(pid: number): number | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf-8')
+    // The command name is in parentheses and may contain spaces, so count from the last ')'.
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+    const ticks = Number(fields[11]) + Number(fields[12])
+    return Number.isFinite(ticks) ? ticks : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * The machine's real readings. CPU is the busy share between two calls, so the
  * first call measures from the moment the sampler was made.
  */
 export function systemSampler(): Sampler {
   let previous = cpuTimes()
+  /** Each of our processes' ticks at the last reading, so only the new ones are counted. */
+  let seen = new Map<number, number>()
   return () => {
     const current = cpuTimes()
     const total = current.total - previous.total
     const busy = current.busy - previous.busy
     previous = current
+
+    // A process that appeared since the last reading counts in full: it did all
+    // its work inside the interval. One that exited is simply absent.
+    const now = new Map<number, number>()
+    let ownTicks = 0
+    for (const pid of [process.pid, ...descendants(process.pid)]) {
+      const ticks = processTicks(pid)
+      if (ticks === null) continue
+      now.set(pid, ticks)
+      ownTicks += Math.max(0, ticks - (seen.get(pid) ?? 0))
+    }
+    seen = now
+    // `total` is milliseconds summed over every core, the same unit as the ticks below.
+    const ownMs = (ownTicks * 1000) / TICKS_PER_SECOND
+
     return {
       cpu: total > 0 ? Math.min(1, Math.max(0, busy / total)) : 0,
       availableMemMb: availableMemMb(),
+      ownCpu: total > 0 ? Math.min(1, Math.max(0, ownMs / total)) : 0,
     }
   }
+}
+
+/** What a run's readings added up to, for the result. */
+export interface GovernorStats {
+  samples: number
+  /** The highest machine-wide CPU reading. */
+  peakCpu: number
+  /** The highest share of the machine this run itself used. */
+  peakOwnCpu: number
+  /** Readings at which a Worker would have been paused. */
+  chokingSamples: number
+  /** Readings at which the machine was busy but the load was not ours, so nothing was throttled. */
+  externalLoadSamples: number
 }
 
 export class Governor {
@@ -85,6 +151,13 @@ export class Governor {
   /** Workers admitted since the last reading, whose RAM it has not seen yet. */
   private admittedSinceSample = 0
   private timer: ReturnType<typeof setInterval> | null = null
+  private readonly counts: GovernorStats = {
+    samples: 0,
+    peakCpu: 0,
+    peakOwnCpu: 0,
+    chokingSamples: 0,
+    externalLoadSamples: 0,
+  }
   private tickWaiters: Array<() => void> = []
 
   constructor(
@@ -116,8 +189,24 @@ export class Governor {
   sample(): ResourceSample {
     this.latest = this.sampler()
     this.admittedSinceSample = 0
+    const { counts, latest } = this
+    counts.samples++
+    counts.peakCpu = Math.max(counts.peakCpu, latest.cpu)
+    counts.peakOwnCpu = Math.max(counts.peakOwnCpu, latest.ownCpu ?? 0)
+    if (this.choking()) counts.chokingSamples++
+    else if (latest.cpu >= this.config.cpuResumeAt) counts.externalLoadSamples++
     this.wake()
     return this.latest
+  }
+
+  stats(): GovernorStats {
+    return { ...this.counts }
+  }
+
+  /** Whether the load on the machine is ours to relieve. A sampler that cannot tell counts as ours. */
+  private ours(): boolean {
+    const own = this.latest.ownCpu
+    return own === undefined || own >= this.config.cpuOwnMin
   }
 
   get reading(): ResourceSample {
@@ -126,12 +215,12 @@ export class Governor {
 
   /** CPU is saturated: the scheduler should pause a Worker. */
   choking(): boolean {
-    return this.latest.cpu >= this.config.cpuPauseAt
+    return this.latest.cpu >= this.config.cpuPauseAt && this.ours()
   }
 
-  /** CPU has room again: a paused Worker may resume. */
+  /** CPU has room again, or is busy with something else: a paused Worker may resume. */
   relieved(): boolean {
-    return this.latest.cpu < this.config.cpuResumeAt
+    return this.latest.cpu < this.config.cpuResumeAt || !this.ours()
   }
 
   /**

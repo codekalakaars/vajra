@@ -61,6 +61,7 @@ Every parameter lives in one checked-in file, `bench/config.json`, and nowhere e
 {
   "cpuPauseAt": 0.9,
   "cpuResumeAt": 0.75,
+  "cpuOwnMin": 0.1,
   "minFreeMemMb": 1024,
   "workerMemMb": 256,
   "resourceSampleMs": 1000,
@@ -96,6 +97,7 @@ Every parameter lives in one checked-in file, `bench/config.json`, and nowhere e
 |-----------|--------|------------------|
 | `cpuPauseAt` | 0..1 | CPU share at which the lowest-priority Worker is paused, one per reading, never the last one running |
 | `cpuResumeAt` | 0..1, below `cpuPauseAt` | CPU share below which a paused Worker resumes (highest priority first) and new Workers may start |
+| `cpuOwnMin` | 0..1 | The share of the machine this run must itself be using for a busy CPU to count. Below it the load is someone else's: nothing is paused and Workers keep starting |
 | `minFreeMemMb` | integer ≥ 0 | RAM that must stay available after starting a Worker |
 | `workerMemMb` | integer ≥ 1 | RAM set aside per Worker started since the last reading |
 | `resourceSampleMs` | integer ≥ 50 | How often CPU and RAM are read |
@@ -125,7 +127,7 @@ Every parameter lives in one checked-in file, `bench/config.json`, and nowhere e
 | `respawnDiffChars` | integer ≥ 0 | Diff of the failed attempt shown to the retry |
 | `handoffSummaryChars` | integer ≥ 100 | The most of a finished task's summary passed to its dependents |
 
-**There is no Worker count.** A ready task starts whenever the CPU is below `cpuResumeAt` and RAM would stay above `minFreeMemMb` with one more Worker, and no Worker is paused. When the CPU reaches `cpuPauseAt`, the scheduler pauses the Worker with the lowest priority by the dependency graph. Pausing freezes the Worker's sandbox process and every command it started, and holds its model loop; nothing is lost and no retry is used.
+**There is no Worker count.** A ready task starts whenever the CPU is below `cpuResumeAt` and RAM would stay above `minFreeMemMb` with one more Worker, and no Worker is paused. When the CPU reaches `cpuPauseAt` **and this run's own process tree is using at least `cpuOwnMin` of the machine**, the scheduler pauses the Worker with the lowest priority by the dependency graph. Workers mostly wait on the model, so a machine saturated by other programs is saturated by them: pausing a Worker would not relieve it. Measured with 8 busy-loop processes running alongside `wide`: 144 s with every busy CPU counted, 25 s with only our own load counted. Pausing freezes the Worker's sandbox process and every command it started, and holds its model loop; nothing is lost and no retry is used.
 
 Bench reads only this file. Only the API key comes from the environment. Every result stores the full config it ran with.
 

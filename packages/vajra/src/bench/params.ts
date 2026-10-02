@@ -30,6 +30,11 @@ export interface WorkerParams {
   cpuPauseAt: number
   /** CPU share (0..1) below which a paused Worker resumes or a new one starts. Below `cpuPauseAt`. */
   cpuResumeAt: number
+  /**
+   * The share of the machine (0..1) this run must itself be using for a busy CPU to count.
+   * Below it, the load is someone else's: nothing is paused and Workers keep starting.
+   */
+  cpuOwnMin: number
   /** RAM, in MB, that must stay available after starting a Worker. */
   minFreeMemMb: number
   /** RAM, in MB, one Worker is assumed to need until a reading shows otherwise. */
@@ -100,6 +105,7 @@ export type ReadLockMode = 'exclusive' | 'shared'
 export const TODAYS_PARAMS: Readonly<WorkerParams> = Object.freeze({
   cpuPauseAt: 0.9,
   cpuResumeAt: 0.75,
+  cpuOwnMin: 0.1,
   minFreeMemMb: 1024,
   workerMemMb: 256,
   resourceSampleMs: 1000,

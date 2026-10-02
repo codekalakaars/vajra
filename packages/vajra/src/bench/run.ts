@@ -243,6 +243,7 @@ export async function runBench(options: BenchOptions): Promise<number> {
 
     const result: BenchResult = recorder.result({
       success,
+      resources: execution.resources,
       ...(success ? {} : { failureReason: reasons.join('; ') }),
     })
     const outPath = options.out ?? defaultResultPath(suite)

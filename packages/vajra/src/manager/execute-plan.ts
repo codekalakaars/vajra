@@ -15,7 +15,7 @@ import { needsServer } from '../worker/server.js'
 import type { WorkerParams } from '../bench/params.js'
 import { createAttemptLog } from './attempts.js'
 import { commandResourcePath, withCommandResourceLock } from './command-locks.js'
-import { Governor, resolveMaxWorkers, type Sampler } from './governor.js'
+import { Governor, resolveMaxWorkers, type GovernorStats, type Sampler } from './governor.js'
 import { canAcquireTaskLeases } from './leases.js'
 import { masterLoop } from './master.js'
 import { masterDecide, MASTER_DECIDE_TOOL_SPECS } from './master-llm.js'
@@ -96,6 +96,8 @@ export interface ExecutePlanResult {
   tasks: Array<{ id: string; title: string; status: TaskStatus; error?: string }>
   /** First Worker spawned to last task completed; 0 when none ever started. */
   wallMs: number
+  /** What the governor read over the run: peak CPU, how much was ours, how often it throttled. */
+  resources: GovernorStats
 }
 
 
@@ -361,5 +363,6 @@ export async function executePlan(
       }
     }),
     wallMs,
+    resources: governor.stats(),
   }
 }

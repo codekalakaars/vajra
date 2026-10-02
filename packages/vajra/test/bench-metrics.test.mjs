@@ -120,6 +120,7 @@ test('a two-wave stream measures the wall, the floor under it, and the idle in i
       status: 'done',
       attempts: 1,
       modelRounds: 1,
+      slowestRoundMs: 0,
       toolCalls: 1,
       pausedMs: 0,
       peakPromptTokens: 0,
@@ -138,6 +139,7 @@ test('a two-wave stream measures the wall, the floor under it, and the idle in i
       status: 'done',
       attempts: 1,
       modelRounds: 0,
+      slowestRoundMs: 0,
       toolCalls: 0,
       pausedMs: 0,
       peakPromptTokens: 0,
@@ -154,6 +156,7 @@ test('a two-wave stream measures the wall, the floor under it, and the idle in i
       status: 'done',
       attempts: 1,
       modelRounds: 0,
+      slowestRoundMs: 0,
       toolCalls: 0,
       pausedMs: 0,
       peakPromptTokens: 0,
@@ -329,8 +332,8 @@ test('a run that spawned nothing measures nothing, and does not throw', () => {
   assert.equal(result.criticalPathMs, 0)
   assert.equal(result.idleMs, 0)
   assert.deepEqual(result.tasks, [
-    { id: 't1', title: 'Task t1', status: 'pending', attempts: 0, modelRounds: 0, toolCalls: 0, pausedMs: 0, peakPromptTokens: 0, peakContextShare: 0, contextTrims: 0, ...NO_CONTEXT },
-    { id: 't2', title: 'Task t2', status: 'pending', attempts: 0, modelRounds: 0, toolCalls: 0, pausedMs: 0, peakPromptTokens: 0, peakContextShare: 0, contextTrims: 0, ...NO_CONTEXT },
+    { id: 't1', title: 'Task t1', status: 'pending', attempts: 0, modelRounds: 0, slowestRoundMs: 0, toolCalls: 0, pausedMs: 0, peakPromptTokens: 0, peakContextShare: 0, contextTrims: 0, ...NO_CONTEXT },
+    { id: 't2', title: 'Task t2', status: 'pending', attempts: 0, modelRounds: 0, slowestRoundMs: 0, toolCalls: 0, pausedMs: 0, peakPromptTokens: 0, peakContextShare: 0, contextTrims: 0, ...NO_CONTEXT },
   ])
 })
 
@@ -703,4 +706,19 @@ test('elisions, compactions and stuck are counted per task and for the run', () 
   assert.equal(result.elisions, 2)
   assert.equal(result.compactions, 1)
   assert.equal(result.stuck, 1)
+})
+
+test('the slowest model round is kept per task, so a stalled request shows apart from a slow task', () => {
+  const tasks = [task('t1', { writeFile: ['a.txt'] })]
+  const clock = fakeClock()
+  const recorder = recorderFor(tasks, {}, clock)
+  const llmEnd = ms => ({ type: 'llm-end', agent: worker('t1'), round: 1, ms })
+  drive(recorder, clock, [
+    [1000, 'taskEvent', start('Task t1')],
+    [1100, 'agentEvent', llmEnd(4000)],
+    [1200, 'agentEvent', llmEnd(61000)],
+    [1300, 'agentEvent', llmEnd(5000)],
+    [1400, 'taskEvent', done('Task t1')],
+  ])
+  assert.equal(recorder.result({ success: true }).tasks[0].slowestRoundMs, 61000)
 })

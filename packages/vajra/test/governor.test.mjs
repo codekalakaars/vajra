@@ -286,3 +286,66 @@ test('a paused Worker is resumed when the run ends, so it can finish', async () 
   settle.forEach(fn => fn())
   await done
 })
+
+// --- whose load it is -------------------------------------------------------
+
+test('a busy machine whose load is not ours is not ours to relieve: nothing pauses, Workers still start', () => {
+  const machine = fakeMachine({ cpu: 0.99, ownCpu: 0.02 })
+  const governor = new Governor(params({ cpuOwnMin: 0.1 }), machine.sampler)
+  assert.equal(governor.choking(), false, 'pausing our Workers would not lower someone else\'s load')
+  assert.equal(governor.relieved(), true)
+  assert.equal(governor.canAdmit(), true)
+  governor.sample()
+  assert.deepEqual(
+    { choking: governor.stats().chokingSamples, external: governor.stats().externalLoadSamples },
+    { choking: 0, external: 1 },
+  )
+})
+
+test('the same reading with a large share of it ours does throttle', () => {
+  const machine = fakeMachine({ cpu: 0.99, ownCpu: 0.6 })
+  const governor = new Governor(params({ cpuOwnMin: 0.1 }), machine.sampler)
+  assert.equal(governor.choking(), true)
+  assert.equal(governor.relieved(), false)
+  assert.equal(governor.canAdmit(), false)
+  governor.sample()
+  assert.equal(governor.stats().chokingSamples, 1)
+})
+
+test('a sampler that cannot tell whose load it is is treated as all ours, as before', () => {
+  const machine = fakeMachine({ cpu: 0.99 })
+  const governor = new Governor(params(), machine.sampler)
+  assert.equal(governor.choking(), true)
+})
+
+test('the statistics keep the peaks across a run', () => {
+  const machine = fakeMachine({ cpu: 0.2, ownCpu: 0.1 })
+  const governor = new Governor(params(), machine.sampler)
+  for (const [cpu, ownCpu] of [[0.5, 0.3], [0.95, 0.7], [0.3, 0.1]]) {
+    machine.reading.cpu = cpu
+    machine.reading.ownCpu = ownCpu
+    governor.sample()
+  }
+  const stats = governor.stats()
+  assert.equal(stats.samples, 3)
+  assert.equal(stats.peakCpu, 0.95)
+  assert.equal(stats.peakOwnCpu, 0.7)
+  assert.equal(stats.chokingSamples, 1)
+})
+
+test('the real sampler sees CPU burned by a process this one started', async () => {
+  const { spawn } = await import('node:child_process')
+  const { cpus } = await import('node:os')
+  const busy = spawn(process.execPath, ['-e', 'const end = Date.now() + 2500; while (Date.now() < end) {}'], { stdio: 'ignore' })
+  try {
+    const sample = systemSampler()
+    sample()
+    await sleep(1200)
+    const reading = sample()
+    // One core pinned out of N is 1/N of the machine; allow for a noisy host.
+    assert.ok(reading.ownCpu >= 0.4 / cpus().length, `own CPU ${reading.ownCpu} for ${cpus().length} cores`)
+    assert.ok(reading.ownCpu <= reading.cpu + 0.05, 'what we use cannot exceed what the machine uses')
+  } finally {
+    busy.kill('SIGKILL')
+  }
+})

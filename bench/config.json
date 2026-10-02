@@ -1,6 +1,7 @@
 {
   "cpuPauseAt": 0.9,
   "cpuResumeAt": 0.75,
+  "cpuOwnMin": 0.1,
   "minFreeMemMb": 1024,
   "workerMemMb": 256,
   "resourceSampleMs": 1000,

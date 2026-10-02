@@ -172,6 +172,7 @@ export function loadWorkerParams(path: string): WorkerParams {
   return {
     cpuPauseAt,
     cpuResumeAt,
+    cpuOwnMin: requireFraction(raw, 'cpuOwnMin', path),
     minFreeMemMb: requireInteger(raw, 'minFreeMemMb', path, 0),
     workerMemMb: requireInteger(raw, 'workerMemMb', path, 1),
     resourceSampleMs: requireInteger(raw, 'resourceSampleMs', path, 50),
