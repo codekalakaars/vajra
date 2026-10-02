@@ -12,6 +12,7 @@
 // call site.
 
 import { fork, type ChildProcess } from 'node:child_process'
+import { freezeTree, thawTree } from './freeze.js'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -53,6 +54,14 @@ export interface Agent {
   ): LaunchHandle
   /** Drop a task's scoped permission lookup and dirty hook. */
   releaseTask: (taskId: string) => void
+  /**
+   * Freeze the worker serving `taskId`, and every command it is running, until
+   * `resumeTask`. Calls made meanwhile wait rather than fail. Returns false when
+   * no worker is serving the task yet, so there was nothing to freeze.
+   */
+  pauseTask: (taskId: string) => boolean
+  /** Undo `pauseTask`. Safe to call for a task that is not paused. */
+  resumeTask: (taskId: string) => void
   close: () => void
 }
 
@@ -72,6 +81,22 @@ export interface SpawnAgentOptions {
    * looking — for Vajra, the transcript.
    */
   onWorkerOutput?: (line: string) => void
+  /**
+   * Total Workers this run may have alive at once, primary included. Defaults to
+   * `resolveConcurrencyConfig().maxConcurrentWorkers`.
+   *
+   * The pool is the hard ceiling on real parallelism: a task that holds a slot
+   * here and no model round of its own is not running in parallel with anything,
+   * however high the scheduler's own limit is. So the number a run is arranged by
+   * has to reach the pool, not just the scheduler.
+   */
+  maxWorkers?: number
+  /**
+   * Pooled Workers kept warm between tasks, so the next task does not pay a fork.
+   * Defaults to 1 — a worker is held for a task's whole run, and one spare is
+   * enough to cover the gap. 0 pays the fork on every task.
+   */
+  maxIdleWorkers?: number
 }
 
 // The worker inherits only what it needs to find and run a Node interpreter.
@@ -209,6 +234,8 @@ export async function spawnAgent(
   let nextCallId = 1
   let activeChild: ChildProcess | null = null
   let closed = false
+  /** The worker process frozen by `pauseTask`, so close can thaw it before stopping it. */
+  let frozenPid: number | null = null
   let ready: Promise<SandboxReport>
   let restartAttempts = 0
 
@@ -464,7 +491,25 @@ export async function spawnAgent(
       taskLookups.delete(taskId)
       taskOnMutate.delete(taskId)
     },
+    // One worker process, so the task id only says which caller is asking: a
+    // single agent serves one task at a time.
+    pauseTask: () => {
+      const pid = activeChild?.pid
+      if (closed || pid === undefined) return false
+      frozenPid = pid
+      freezeTree(pid)
+      return true
+    },
+    resumeTask: () => {
+      if (frozenPid === null) return
+      thawTree(frozenPid)
+      frozenPid = null
+    },
     close: () => {
+      if (frozenPid !== null) {
+        thawTree(frozenPid)
+        frozenPid = null
+      }
       if (closed) return
       closed = true
       failPending(new Error('Sandbox session closed'))
@@ -517,13 +562,17 @@ export async function spawnAgentPool(
   const primary = await spawnAgent(projectDir, sessionId, options)
   // At least one: the primary covers the first task, but a pool of zero would
   // queue forever if a second task ever arrived.
-  const maxWorkers = Math.max(1, resolveConcurrencyConfig().maxConcurrentWorkers - 1)
+  const totalWorkers = Math.max(
+    1,
+    Math.floor(options.maxWorkers ?? resolveConcurrencyConfig().maxConcurrentWorkers),
+  )
+  const maxWorkers = Math.max(1, totalWorkers - 1)
 
   const pool = new WorkerPool<AgentWorker>({
     maxWorkers,
     // A worker is held for a task's whole run; keep one warm for the next task
     // and no more.
-    maxIdle: maxWorkers > 0 ? 1 : 0,
+    maxIdle: Math.max(0, Math.floor(options.maxIdleWorkers ?? 1)),
     launch: async () => {
       const agent = await spawnAgent(projectDir, sessionId, options)
       return {
@@ -539,6 +588,9 @@ export async function spawnAgentPool(
     /** The lease behind a pooled agent; absent for the primary. */
     lease?: WorkerLease<AgentWorker>
     released: boolean
+    /** Set while the task is paused; the agent it resolved to, once frozen. */
+    paused: boolean
+    frozen?: Agent
   }
 
   const reservations = new Map<string, Reservation>()
@@ -547,9 +599,9 @@ export async function spawnAgentPool(
   const reserve = (): Reservation => {
     if (!primaryInUse) {
       primaryInUse = true
-      return { agent: Promise.resolve(primary), released: false }
+      return { agent: Promise.resolve(primary), released: false, paused: false }
     }
-    const reservation: Reservation = { agent: null as never, released: false }
+    const reservation: Reservation = { agent: null as never, released: false, paused: false }
     reservation.agent = pool.acquire().then(lease => {
       reservation.lease = lease
       return lease.worker.agent
@@ -557,8 +609,17 @@ export async function spawnAgentPool(
     return reservation
   }
 
+  /** Thaw whatever a paused reservation froze. */
+  const thaw = (reservation: Reservation, taskId: string): void => {
+    reservation.paused = false
+    reservation.frozen?.resumeTask(taskId)
+    reservation.frozen = undefined
+  }
+
   const release = (reservation: Reservation, taskId: string): void => {
     if (reservation.released) return
+    // A frozen worker must not go back to the pool, or close, still stopped.
+    thaw(reservation, taskId)
     reservation.released = true
     void reservation.agent.then(
       agent => {
@@ -613,6 +674,28 @@ export async function spawnAgentPool(
       if (!reservation) return
       reservations.delete(taskId)
       release(reservation, taskId)
+    },
+
+    // The worker is frozen as soon as the reservation has one. A task still
+    // waiting for a worker to start has nothing to freeze yet; it is frozen the
+    // moment its worker arrives, unless it was resumed first.
+    pauseTask: taskId => {
+      const reservation = reservations.get(taskId)
+      if (!reservation || reservation.released || reservation.paused) return false
+      reservation.paused = true
+      void reservation.agent.then(
+        agent => {
+          if (!reservation.paused || reservation.released) return
+          if (agent.pauseTask(taskId)) reservation.frozen = agent
+        },
+        () => {},
+      )
+      return true
+    },
+
+    resumeTask: taskId => {
+      const reservation = reservations.get(taskId)
+      if (reservation) thaw(reservation, taskId)
     },
 
     close: () => {

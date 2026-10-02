@@ -272,6 +272,9 @@ function startSession({ projectDir, planTasks, latencyMs = LATENCY_MS, ui, signa
       projectDir,
       autoConfirm: true,
       allowUnenforced: true,
+      // An idle machine: these tests measure the scheduler, and the test run
+      // itself keeps the real CPU busy enough to hold Workers back.
+      sampler: () => ({ cpu: 0, availableMemMb: 64_000 }),
       ...(concurrency === undefined ? {} : { concurrency }),
       ...(signal ? { signal } : {}),
       onSandboxClose: close => {
@@ -317,14 +320,14 @@ function task(id, title, extra = {}) {
 
 // --- tests ----------------------------------------------------------------
 
-test('resolveMaxWorkers defaults to the config and honours the flag', () => {
-  const configured = resolveConcurrencyConfig().maxConcurrentWorkers
-  assert.equal(resolveMaxWorkers(), configured)
+test('resolveMaxWorkers sets no cap by default and honours the flag', () => {
+  // No Worker count: CPU and RAM decide unless --concurrency asks for a ceiling.
+  assert.equal(resolveMaxWorkers(), Number.POSITIVE_INFINITY)
   assert.equal(resolveMaxWorkers(7), 7)
   assert.equal(resolveMaxWorkers(0), 1)
   assert.equal(resolveMaxWorkers(-3), 1)
   assert.equal(resolveMaxWorkers(2.9), 2)
-  assert.equal(resolveMaxWorkers(Number.NaN), configured)
+  assert.equal(resolveMaxWorkers(Number.NaN), Number.POSITIVE_INFINITY)
 })
 
 test('shared command resources serialise while unrelated resources stay parallel', async () => {

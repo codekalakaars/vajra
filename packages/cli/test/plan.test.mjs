@@ -174,3 +174,72 @@ test('tasks that omit the structured fields pass through unchanged (§2)', () =>
   assert.equal(task.edits, undefined)
   assert.equal(task.verify, undefined)
 })
+
+// ---------------------------------------------------------------------------
+// K0: the fields the context pack reads, and the plan's contracts. A plan that
+// carries them and an executor that drops them is a plan silently half-read.
+// ---------------------------------------------------------------------------
+
+test('a plan\'s contracts reach the plan, not just its validator', () => {
+  const contracts = [
+    {
+      id: 'c-shape',
+      statement: 'Every Worker exports a single `run(state)` function.',
+      producedBy: 'a',
+      consumedBy: ['b'],
+    },
+  ]
+  const result = parseProposePlanArgs({
+    tasks: [
+      { id: 'a', title: 'a', description: 'd', writeFile: ['src/a.ts'] },
+      { id: 'b', title: 'b', description: 'd', dependsOn: ['a'], writeFile: ['src/b.ts'] },
+    ],
+    contracts,
+    summary: 's',
+  })
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.plan.contracts, contracts)
+})
+
+test('a plan without contracts carries none', () => {
+  const result = parseProposePlanArgs({
+    tasks: [{ id: 'a', title: 'a', description: 'd' }],
+    summary: 's',
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.plan.contracts, undefined)
+})
+
+test('successCriteria and notes survive alongside the structured fields', () => {
+  const result = parseProposePlanArgs({
+    tasks: [
+      {
+        id: 'a',
+        title: 't',
+        description: 'd',
+        context: [{ path: 'src/a.ts', reason: 'edit site' }],
+        edits: [{ path: 'src/a.ts', op: 'modify', anchor: 'const run = 1', change: 'x' }],
+        verify: [{ command: 'pnpm', args: ['test'], kind: 'proves-change' }],
+        successCriteria: ['pnpm test exits 0', 'the new export is called by main'],
+        notes: 'do not touch the generated header',
+      },
+    ],
+    summary: 's',
+  })
+
+  assert.equal(result.ok, true)
+  const task = result.plan.tasks[0]
+  assert.deepEqual(task.successCriteria, ['pnpm test exits 0', 'the new export is called by main'])
+  assert.equal(task.notes, 'do not touch the generated header')
+})
+
+test('a task with neither criteria nor notes gets neither key', () => {
+  const result = parseProposePlanArgs({
+    tasks: [{ id: 'a', title: 't', description: 'd' }],
+    summary: 's',
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.plan.tasks[0].successCriteria, undefined)
+  assert.equal(result.plan.tasks[0].notes, undefined)
+})

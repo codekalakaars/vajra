@@ -1,0 +1,12 @@
+{
+  "name": "compaction",
+  "suites": ["wide", "chain", "fan", "mixed"],
+  "repetitions": 5,
+  "base": {
+    "contextPack": true
+  },
+  "vary": {
+    "elision": [false, true],
+    "checkpoints": [false, true]
+  }
+}

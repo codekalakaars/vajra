@@ -29,7 +29,9 @@ import {
  */
 
 const executeUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'tasks', 'execute.js')).href
+const paramsUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'bench', 'params.js')).href
 const { executeTask } = await import(executeUrl)
+const { TODAYS_PARAMS } = await import(paramsUrl)
 
 const fixture = loadFixture('worker-basic')
 
@@ -66,6 +68,9 @@ async function replayTask() {
       projectDir,
       undefined,
       event => events.push(event),
+      // The knobs as they stand: the fixture pins today's behaviour, so the
+      // replay is what proves threading them through changed nothing.
+      TODAYS_PARAMS,
     )
     return { ok, events, calls: handle.calls, ui }
   } finally {

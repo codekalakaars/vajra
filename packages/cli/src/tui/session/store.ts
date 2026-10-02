@@ -397,6 +397,8 @@ export class SessionStore {
    * `taskId`, never appended as a flat log.
    */
   applyAgentEvent(event: AgentEvent): void {
+    // Context events are for the bench's metrics; nothing on screen changes.
+    if (event.type === 'context') return
     const { agent } = event
     const isDeveloper = agent.role === 'developer'
 

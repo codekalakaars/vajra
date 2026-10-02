@@ -9,8 +9,10 @@ import { scriptedProvider, noopStreamer } from './_provider.mjs'
 
 const executeUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'tasks', 'execute.js')).href
 const developerUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'agent', 'developer.js')).href
+const paramsUrl = pathToFileURL(join(import.meta.dirname, '..', 'dist', 'bench', 'params.js')).href
 const { executeTask } = await import(executeUrl)
 const { developerConversationTurn } = await import(developerUrl)
+const { TODAYS_PARAMS } = await import(paramsUrl)
 
 const READ_LATENCY = 300
 
@@ -81,6 +83,9 @@ test('the worker runs one message of read_file calls concurrently', async t => {
     'session-1',
     null,
     projectDir,
+    undefined, // signal
+    undefined, // onAgentEvent
+    TODAYS_PARAMS,
   )
   const elapsed = Date.now() - started
 
@@ -129,6 +134,9 @@ test('tool results are appended in the model order, not completion order', async
     'session-1',
     null,
     projectDir,
+    undefined, // signal
+    undefined, // onAgentEvent
+    TODAYS_PARAMS,
   )
   assert.deepEqual(seen.slice().reverse(), TASK.readFile, 'completion order was not reversed')
 })
@@ -170,6 +178,9 @@ test('mutating tools keep their original order', async t => {
     'session-1',
     null,
     projectDir,
+    undefined, // signal
+    undefined, // onAgentEvent
+    TODAYS_PARAMS,
   )
   assert.deepEqual(order, ['one.txt', 'two.txt', 'three.txt'])
 })
@@ -203,6 +214,9 @@ test('a mutating call is not overlapped with a read in the same message', async 
     'session-1',
     null,
     projectDir,
+    undefined, // signal
+    undefined, // onAgentEvent
+    TODAYS_PARAMS,
   )
   // The two reads may overlap; the write must not have joined them.
   assert.equal(log.maxActive, 2)

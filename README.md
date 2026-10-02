@@ -75,11 +75,12 @@ Requires Rust (stable) and Node 22+ with pnpm.
 A fresh clone cannot run the CLI until the native binary is built: `*.node` is
 gitignored while the generated `index.js` / `index.d.ts` loader is committed, so
 `@codekalakaars/vajra-core` throws on import until `pnpm build` has produced the
-addon.
+addon. That package lives in `packages/core`, next to the Rust crate it is built
+from.
 
 ```bash
 pnpm install
-pnpm build        # napi build --platform --release — required first
+pnpm build        # builds packages/core (napi build --platform --release) — required first
 pnpm test         # Node smoke tests against the built addon
 cargo test --manifest-path packages/core/Cargo.toml
 cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnings

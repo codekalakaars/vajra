@@ -1,0 +1,13 @@
+{
+  "name": "worker-model",
+  "suites": ["wide", "chain", "fan", "mixed"],
+  "repetitions": 5,
+  "vary": {
+    "workerModel": [
+      "zen/space-bunny-free",
+      "zen/mimo-v2.6-flash-free",
+      "zen/deepseek-v4-flash-free",
+      "zen/nemotron-3-ultra-free"
+    ]
+  }
+}

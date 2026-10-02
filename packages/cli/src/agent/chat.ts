@@ -395,6 +395,11 @@ export async function streamChatCompletion(
     // The gateway reports totals on a final chunk with an empty `choices`
     // array — without this the meter would never see a number.
     stream_options: { include_usage: true },
+  }
+  // Request options, not body fields: the SDK reads `signal` and `timeout` only
+  // from its second argument. In the body they were serialized and sent to the
+  // gateway, and a round that never answered could be stopped by neither.
+  const requestOptions = {
     timeout: REQUEST_TIMEOUT_MS,
     ...(request.signal ? { signal: request.signal } : {}),
   }
@@ -409,7 +414,7 @@ export async function streamChatCompletion(
     for (let attempt = 0; ; attempt++) {
       throwIfAborted(request.signal)
       try {
-        const stream = await client.chat.completions.create(params) as AsyncIterable<ChatCompletionChunk>
+        const stream = await client.chat.completions.create(params, requestOptions) as AsyncIterable<ChatCompletionChunk>
 
         content = ''
         let finishReason: string | null = null
@@ -480,6 +485,10 @@ export async function streamChatCompletion(
         }
       } catch (err) {
         if (isAbortError(err)) throw err
+        // Now that the signal reaches the SDK, an abort mid-request surfaces as
+        // the SDK's own error type. Callers know an abort by AbortError, so it
+        // is re-thrown as one rather than retried or reworded.
+        throwIfAborted(request.signal)
         if (isRetryable(err) && attempt < MAX_RETRIES) {
           // Partial content from the failed attempt is discarded; only emit
           // text that was already shown (emitted) is never re-sent.

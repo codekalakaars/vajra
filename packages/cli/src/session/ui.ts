@@ -26,13 +26,17 @@ export interface SessionStreamer {
 }
 
 /** Structured execution progress so frontends can render a task list. */
+/**
+ * `taskId` is what identifies the task; `title` is what a person reads. Two
+ * tasks may share a title, so anything that keeps per-task state keys on the id.
+ */
 export type TaskEvent =
-  | { type: 'start'; index: number; total: number; title: string }
-  | { type: 'done'; title: string }
-  | { type: 'failed'; title: string }
-  | { type: 'skipped'; title: string }
-  | { type: 'retry'; title: string; attempt: number; max: number }
-  | { type: 'no-changes'; title: string }
+  | { type: 'start'; taskId: string; index: number; total: number; title: string }
+  | { type: 'done'; taskId: string; title: string }
+  | { type: 'failed'; taskId: string; title: string }
+  | { type: 'skipped'; taskId: string; title: string }
+  | { type: 'retry'; taskId: string; title: string; attempt: number; max: number }
+  | { type: 'no-changes'; taskId: string; title: string }
 
 /**
  * Port implemented by frontends (CLI readline adapter, TUI). runSession talks
@@ -79,7 +83,8 @@ export interface AgentLabel {
   title?: string
 }
 
-export type AgentPhase = 'scanning' | 'indexing' | 'planning' | 'validating' | 'executing'
+/** `paused`: a Worker frozen because the machine's CPU is saturated; it resumes where it stopped. */
+export type AgentPhase = 'scanning' | 'indexing' | 'planning' | 'validating' | 'executing' | 'paused'
 
 export type AgentEvent =
   /** A provider round-trip began. */
@@ -112,6 +117,21 @@ export type AgentEvent =
   | { type: 'heartbeat'; agent: AgentLabel; elapsedMs: number }
   /** Something the user should see (compaction, dropped deps) — not progress. */
   | { type: 'warning'; agent: AgentLabel; text: string }
+  /**
+   * Context management, for metrics rather than the screen: the pack a Worker
+   * started from, an elision, a compaction, or the attempt ending stuck.
+   */
+  | {
+      type: 'context'
+      agent: AgentLabel
+      kind: 'pack' | 'elided' | 'compacted' | 'stuck'
+      /** For `pack`: its size and what it holds. */
+      pack?: { tokens: number; hash: string; paths: string[]; omitted: number; stale: number; relocated: number }
+      /** Window share before and after, for `elided` and `compacted`. */
+      before?: number
+      after?: number
+      detail?: string
+    }
 
 const MASKED_STUB = '[REDACTED: masked file — contents withheld]'
 const SUMMARY_MAX = 60

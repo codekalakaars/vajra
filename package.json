@@ -1,9 +1,8 @@
 {
-  "name": "@codekalakaars/vajra-core",
+  "name": "vajra-monorepo",
+  "private": true,
   "version": "0.0.1",
-  "description": "Linux native operations for Vajra",
-  "main": "index.js",
-  "types": "index.d.ts",
+  "description": "Vajra: a Developer, a Manager and parallel Workers that finish the plan",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -12,23 +11,9 @@
   "bugs": {
     "url": "https://github.com/codekalakaars/vajra/issues"
   },
-  "napi": {
-    "name": "vajra-core",
-    "triples": {
-      "defaults": false,
-      "additional": [
-        "aarch64-unknown-linux-gnu",
-        "aarch64-unknown-linux-musl",
-        "x86_64-unknown-linux-gnu",
-        "x86_64-unknown-linux-musl"
-      ]
-    }
-  },
   "scripts": {
-    "build": "napi build --platform --release --cargo-cwd packages/core",
-    "build:debug": "napi build --platform --cargo-cwd packages/core",
-    "prepublishOnly": "napi prepublish -t npm",
-    "universal": "napi universal",
+    "build": "pnpm --filter @codekalakaars/vajra-core run build",
+    "build:debug": "pnpm --filter @codekalakaars/vajra-core run build:debug",
     "test": "node --test \"test/*.test.mjs\"",
     "test:rust": "cargo test --manifest-path packages/core/Cargo.toml",
     "lint": "cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnings",
@@ -38,19 +23,11 @@
     "build:all": "turbo run build",
     "test:all": "turbo run test"
   },
-  "files": [
-    "index.js",
-    "index.d.ts",
-    "*.node"
-  ],
   "devDependencies": {
-    "@napi-rs/cli": "^2.14.0",
+    "@codekalakaars/vajra-core": "workspace:*",
     "turbo": "^2.10.12"
   },
   "packageManager": "pnpm@11.9.0",
-  "os": [
-    "linux"
-  ],
   "engines": {
     "node": ">= 18"
   }

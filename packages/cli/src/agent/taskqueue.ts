@@ -1,4 +1,9 @@
-import type { PlannedTask as ProtocolPlannedTask } from '@codekalakaars/vajra-protocol'
+import type {
+  ContextRef,
+  EditSpec,
+  PlannedTask as ProtocolPlannedTask,
+  VerifySpec,
+} from '@codekalakaars/vajra-protocol'
 
 export type TaskStatus = 'pending' | 'assigned' | 'running' | 'done' | 'failed' | 'skipped'
 
@@ -27,6 +32,16 @@ export interface TaskState {
   timeoutSeconds: number
   rollback: string[]
   skipIf: string[]
+  /**
+   * The plan's structured fields, kept so the Worker's context pack can show
+   * anchors, reasons and verify commands rather than the flat lists lowered
+   * from them.
+   */
+  context?: ContextRef[]
+  edits?: EditSpec[]
+  verify?: VerifySpec[]
+  successCriteria?: string[]
+  notes?: string
   createdAt: number
   startedAt: number | null
   completedAt: number | null
@@ -89,6 +104,11 @@ export class TaskQueue {
       timeoutSeconds,
       rollback: task.rollback ?? [],
       skipIf: task.skipIf ?? [],
+      ...(task.context ? { context: task.context } : {}),
+      ...(task.edits ? { edits: task.edits } : {}),
+      ...(task.verify ? { verify: task.verify } : {}),
+      ...(task.successCriteria ? { successCriteria: task.successCriteria } : {}),
+      ...(task.notes ? { notes: task.notes } : {}),
       validationPassed: null,
       createdAt: now,
       startedAt: null,

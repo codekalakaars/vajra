@@ -1,6 +1,7 @@
 import type {
   DeveloperPlan,
   EditSpec,
+  PlanContract,
   PlanEvidence,
   PlannedTask,
   PlannedTaskInput,
@@ -81,20 +82,33 @@ function estimateTokens(message: ChatMessage): number {
  * tool result never leaves its parent assistant dangling, and vice versa.
  * Incomplete units (assistant tool_calls with missing results) are always
  * dropped, even when the history fits without compression.
+ *
+ * `pinned` leading messages are kept like the system prompt, whatever their
+ * role: a Worker's first user message is its task, and dropping it to make
+ * room would leave the Worker working on nothing it can see.
  */
 export function compressMessages(
   messages: ChatMessage[],
   model: string,
   reserveTokens: number = 2000,
+  pinned: number = 0,
 ): ChatMessage[] {
   const maxTokens = getModelLimit(model) - reserveTokens
 
   // Split into units: system alone; assistant with tool_calls + its tool results;
   // other messages as single-message units. Incomplete units are dropped here.
   const units: ChatMessage[][] = []
+  const pinnedUnits = new Set<ChatMessage[]>()
   let i = 0
   while (i < messages.length) {
     const msg = messages[i]
+    if (i < pinned) {
+      const unit = [msg]
+      pinnedUnits.add(unit)
+      units.push(unit)
+      i++
+      continue
+    }
     if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
       const unit: ChatMessage[] = [msg]
       const toolIds = new Set(msg.tool_calls.map(tc => tc.id))
@@ -118,8 +132,9 @@ export function compressMessages(
     i++
   }
 
-  const systemUnits = units.filter(u => u[0]?.role === 'system')
-  const rest = units.filter(u => u[0]?.role !== 'system')
+  const isKept = (u: ChatMessage[]): boolean => pinnedUnits.has(u) || u[0]?.role === 'system'
+  const systemUnits = units.filter(isKept)
+  const rest = units.filter(u => !isKept(u))
 
   const all: ChatMessage[] = [...systemUnits, ...rest].flat()
   const totalTokens = all.reduce((sum, msg) => sum + estimateTokens(msg), 0)
@@ -419,8 +434,11 @@ export function parseProposePlanArgs(raw: unknown, projectDir?: string): ParsePl
       retries?: number
       rollback?: string[]
       skipIf?: string[]
+      successCriteria?: string[]
+      notes?: string
     }>
     summary: string
+    contracts?: PlanContract[]
   }
 
   if (!Array.isArray(args?.tasks) || args.tasks.length === 0) {
@@ -453,6 +471,8 @@ export function parseProposePlanArgs(raw: unknown, projectDir?: string): ParsePl
     retries: t.retries,
     rollback: t.rollback,
     skipIf: t.skipIf,
+    ...(Array.isArray(t.successCriteria) ? { successCriteria: t.successCriteria.map(String) } : {}),
+    ...(typeof t.notes === 'string' && t.notes.trim() ? { notes: t.notes.trim() } : {}),
   }))
 
   const seen = new Set<string>()
@@ -488,6 +508,9 @@ export function parseProposePlanArgs(raw: unknown, projectDir?: string): ParsePl
       tasks,
       independentGroups: parallel.waves,
       estimatedWorkers: Math.max(1, ...parallel.waves.map(g => g.length)),
+      // Carried, not just validated: a contract only helps if the tasks it
+      // names see it.
+      ...(Array.isArray(args.contracts) && args.contracts.length > 0 ? { contracts: args.contracts } : {}),
     },
   }
 }

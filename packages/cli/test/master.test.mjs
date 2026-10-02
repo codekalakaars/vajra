@@ -11,10 +11,17 @@ const {
   decideFailure,
   masterDecide,
   masterLoop,
+  orderReadyTasks,
   runRollbackCommands,
   shouldReplan,
 } = await import(pathToFileURL(join(root, 'agent', 'master.js')).href)
 const { TaskQueue } = await import(pathToFileURL(join(root, 'agent', 'taskqueue.js')).href)
+const { TODAYS_PARAMS } = await import(pathToFileURL(join(root, 'bench', 'params.js')).href)
+
+/** The knobs the scheduler reads, with today's values. */
+function paramsWith(over = {}) {
+  return { ...TODAYS_PARAMS, ...over }
+}
 
 function plannedTask(id, over = {}) {
   return {
@@ -213,7 +220,7 @@ test('a leaf failure blocks nobody', () => {
 
 // --- the loop -------------------------------------------------------------
 
-function harness(specs, { succeed, onRun, workers = 2, interrupted = () => false }) {
+function harness(specs, { succeed, onRun, workers = 2, interrupted = () => false, params = paramsWith() }) {
   const queue = queueWith(specs)
   const calls = []
   const events = []
@@ -226,6 +233,7 @@ function harness(specs, { succeed, onRun, workers = 2, interrupted = () => false
     queue,
     maxWorkers: workers,
     isInterrupted: interrupted,
+    params,
     runTask: async task => {
       calls.push(task.id)
       onRun?.(task)
@@ -315,6 +323,7 @@ test('the Manager runs independent tasks concurrently and tops the pool back up'
   const outcome = await masterLoop({
     queue,
     maxWorkers: 4,
+    params: paramsWith(),
     isInterrupted: () => false,
     runTask: async task => {
       started.push(task.id)
@@ -350,6 +359,7 @@ test('the Manager skips tasks whose resources are locked and admits independent 
   await masterLoop({
     queue,
     maxWorkers: 2,
+    params: paramsWith(),
     isInterrupted: () => false,
     canAdmitTask: task => task.writeFile.every(path => !held.has(path)),
     runTask: async task => {
@@ -378,6 +388,7 @@ test('the Manager stops scheduling once the plan is aborted', async () => {
   const outcome = await masterLoop({
     queue,
     maxWorkers: 1,
+    params: paramsWith(),
     isInterrupted: () => false,
     runTask: async task => {
       started.push(task.id)
@@ -412,6 +423,7 @@ test('an interrupted run parks in-flight work instead of failing it', async () =
   await masterLoop({
     queue,
     maxWorkers: 1,
+    params: paramsWith(),
     isInterrupted: () => interrupted,
     runTask: async task => {
       queue.startTask(task.id)
@@ -461,4 +473,191 @@ test('the LLM decision loop is opt-in and maps tools to actions', async () => {
     await masterDecide({ queue, ask: async () => [] }, task, context),
     'skip',
   )
+})
+
+// --- scheduleOrder ---------------------------------------------------------
+//
+// One fixed queue, three answers. Nothing is ready but the first four tasks, and
+// each has a different claim on being next:
+//
+//   stub    a leaf, holding up nothing
+//   fan     unblocks three dependents, but none of them waits on another
+//   chain1  the head of a three-task dependency chain
+//   solo    a leaf with a file of its own
+//
+//   f1 f2 f3  depend on fan
+//   chain2 chain3  depend on chain1, then on each other
+
+function orderQueue() {
+  return queueWith([
+    plannedTask('stub'),
+    plannedTask('fan'),
+    plannedTask('chain1'),
+    plannedTask('solo'),
+    plannedTask('f1', { dependsOn: ['fan'] }),
+    plannedTask('f2', { dependsOn: ['fan'] }),
+    plannedTask('f3', { dependsOn: ['fan'] }),
+    plannedTask('chain2', { dependsOn: ['chain1'] }),
+    plannedTask('chain3', { dependsOn: ['chain2'] }),
+  ])
+}
+
+const readyIds = (queue, order, readLocks = 'exclusive') =>
+  orderReadyTasks(queue, order, readLocks).map(task => task.id)
+
+test("scheduleOrder 'plan' leaves the ready tasks in plan order", () => {
+  const queue = orderQueue()
+  assert.deepEqual(readyIds(queue, 'plan'), ['stub', 'fan', 'chain1', 'solo'])
+})
+
+test("scheduleOrder 'critical-path' starts the longest chain, not the first task", () => {
+  const queue = orderQueue()
+  // chain1 -> chain2 -> chain3 is the only chain deeper than two.
+  assert.equal(readyIds(queue, 'critical-path')[0], 'chain1')
+  // fan -> f* is two deep, so it follows the chain; the leaves keep plan order.
+  assert.deepEqual(readyIds(queue, 'critical-path'), ['chain1', 'fan', 'stub', 'solo'])
+})
+
+test("scheduleOrder 'most-dependents' unblocks the most work first", () => {
+  const queue = orderQueue()
+  // fan holds up three tasks, chain1 two — however short each of those chains is.
+  assert.deepEqual(readyIds(queue, 'most-dependents'), ['fan', 'chain1', 'stub', 'solo'])
+})
+
+test('equal scores keep plan order, so a run is reproducible', () => {
+  const queue = queueWith([
+    plannedTask('one'),
+    plannedTask('two'),
+    plannedTask('three'),
+    plannedTask('tail-a', { dependsOn: ['one'] }),
+    plannedTask('tail-b', { dependsOn: ['two'] }),
+    plannedTask('tail-c', { dependsOn: ['three'] }),
+  ])
+  // Every leaf carries a chain of the same length; nothing may reorder them.
+  assert.deepEqual(readyIds(queue, 'critical-path'), ['one', 'two', 'three'])
+  assert.deepEqual(readyIds(queue, 'most-dependents'), ['one', 'two', 'three'])
+})
+
+test('a same-file task counts as part of the chain', () => {
+  const build = () =>
+    queueWith([
+      plannedTask('other', { writeFile: ['unrelated.txt'] }),
+      plannedTask('reader', { writeFile: [], readFile: ['shared.txt'] }),
+      plannedTask('writer', { writeFile: ['shared.txt'] }),
+    ])
+
+  // `reader` reads shared.txt and `writer` writes it, so the two cannot be in
+  // flight together: a chain of two, where the plan gives each its own turn.
+  assert.equal(readyIds(build(), 'critical-path', 'exclusive')[0], 'reader')
+  // And shared locks do not help there: a reader still waits on a writer.
+  assert.equal(readyIds(build(), 'critical-path', 'shared')[0], 'reader')
+  // Plan order is untouched, whatever the contention.
+  assert.equal(readyIds(build(), 'plan')[0], 'other')
+})
+
+test('shared read locks break the chain between two readers', () => {
+  const build = () =>
+    queueWith([
+      plannedTask('r1', { writeFile: [], readFile: ['common.js'] }),
+      plannedTask('r2', { writeFile: [], readFile: ['common.js'] }),
+      plannedTask('tail', { dependsOn: ['r2'] }),
+    ])
+
+  // Exclusive: r1 holds r2 up by lock contention, so r1 carries a three-task
+  // chain and goes first.
+  assert.equal(readyIds(build(), 'critical-path', 'exclusive')[0], 'r1')
+  // Shared: both readers may run together, so neither holds the other up and the
+  // only chain left is r2 -> tail.
+  assert.equal(readyIds(build(), 'critical-path', 'shared')[0], 'r2')
+})
+
+test('a settled chain stops counting', () => {
+  const queue = orderQueue()
+  queue.completeTask('chain1')
+  // chain1 is done, so only the two-deep `fan` and `chain2` chains are left and
+  // plan order breaks the tie.
+  assert.equal(readyIds(queue, 'critical-path')[0], 'fan')
+
+  queue.completeTask('fan')
+  // fan is done too: chain2 still carries chain3, so it leads the leaves.
+  assert.equal(readyIds(queue, 'critical-path')[0], 'chain2')
+
+  queue.completeTask('chain2')
+  // Nothing is left to wait for; every ready task is a single-task chain.
+  assert.deepEqual(readyIds(queue, 'critical-path'), [
+    'stub',
+    'solo',
+    'f1',
+    'f2',
+    'f3',
+    'chain3',
+  ])
+})
+
+test('the loop starts tasks in the order scheduleOrder picks', async () => {
+  for (const [order, first, second] of [
+    ['plan', 'stub', 'fan'],
+    ['critical-path', 'chain1', 'fan'],
+    ['most-dependents', 'fan', 'chain1'],
+  ]) {
+    const queue = orderQueue()
+    const started = []
+
+    await masterLoop({
+      queue,
+      maxWorkers: 1,
+      params: paramsWith({ scheduleOrder: order }),
+      isInterrupted: () => false,
+      runTask: async task => {
+        started.push(task.id)
+        queue.completeTask(task.id, true)
+        return true
+      },
+      taskWasNoOp: () => false,
+      rollbackTask: async () => {},
+      failTask: () => {},
+      parkTask: () => {},
+      rebaselineTask: async () => {},
+      onTaskEvent: () => {},
+    })
+
+    assert.deepEqual(
+      started.slice(0, 2),
+      [first, second],
+      `${order} should start ${first}, then ${second}: ${started.join(', ')}`,
+    )
+    assert.equal(queue.getStatus().done, 9, `${order} must still drain the whole plan`)
+  }
+})
+
+test("scheduleOrder does not reorder work that cannot start yet", async () => {
+  // Only one task is ready whatever the order says; the loop must not reach
+  // past it for the ones still waiting on a dependency.
+  const queue = queueWith([
+    plannedTask('gate'),
+    plannedTask('later-a', { dependsOn: ['gate'] }),
+    plannedTask('later-b', { dependsOn: ['gate'] }),
+  ])
+  const started = []
+
+  await masterLoop({
+    queue,
+    maxWorkers: 1,
+    params: paramsWith({ scheduleOrder: 'critical-path' }),
+    isInterrupted: () => false,
+    runTask: async task => {
+      started.push(task.id)
+      queue.completeTask(task.id, true)
+      return true
+    },
+    taskWasNoOp: () => false,
+    rollbackTask: async () => {},
+    failTask: () => {},
+    parkTask: () => {},
+    rebaselineTask: async () => {},
+    onTaskEvent: () => {},
+  })
+
+  assert.equal(started[0], 'gate')
+  assert.equal(started.length, 3)
 })

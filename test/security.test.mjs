@@ -15,7 +15,9 @@ import { join } from 'node:path'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const native = require('../index.js')
+// The package, not a path to a generated file: this is the same resolution the
+// packages get, and it survives the bindings moving.
+const native = require('@codekalakaars/vajra-core')
 
 function scratch() {
   return mkdtempSync(join(tmpdir(), 'vajra-sec-'))

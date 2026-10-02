@@ -49,12 +49,13 @@ When a Worker reports completion, the task moves to `verifying`.
 | Verdict | What happens |
 |---------|--------------|
 | `accepted` | Task becomes `completed`. The Worker is killed, its files are released, and dependent tasks are released |
-| `changes_requested` | Findings go to the same Worker, which keeps its context. Task returns to `in_progress` and its review round goes up by one |
+| `changes_requested` | The Worker is killed and the task is respawned with a fresh Worker, which gets the task unchanged, the last checkpoint, and the findings. Task returns to `in_progress` and its respawn count goes up by one. See [ADR-0016](../adr/0016-failed-attempts-are-respawned.md) and [ADR-0019](../adr/0019-a-retry-is-told-what-failed-and-a-finished-task-hands-off.md) |
 | `rejected` | Task becomes `rejected`. The Worker is killed and the task is escalated to the Developer |
 
 - **Mechanical floor.** The Manager agent may reject work the ladder passed. It may never accept work the ladder failed.
-- **Bounded rounds.** Each task allows `maxReviewRounds` rounds of `changes_requested`. When they run out, the next non-accepting verdict is `rejected`. **Assumption:** the default is two rounds, so three attempts in total.
+- **Bounded respawns.** Each task allows 2 respawns, so three Workers in total. When they run out, the next non-accepting verdict is `rejected`.
 - **Findings, not fixes.** Findings state what is wrong. They do not contain a fix to apply.
+- **The respawn gets the evidence, not the reasoning.** The failed attempt's conversation is never passed on. What is passed is its outcome, the command that failed with its output, its last checkpoint, and the diff of what it tried — the record the runtime kept, not the reasoning the model produced. A Worker shown its own mistake in context defends it; a Worker shown the evidence of it can reconsider.
 
 **Assumption:** the mechanical part provisions service stubs and runs health checks for the dependencies rung. Workers do not write service stubs unless the Developer planned that as a task.
 

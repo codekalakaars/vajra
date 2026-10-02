@@ -2,6 +2,9 @@ import type { TaskQueue, TaskState } from './taskqueue.js'
 import type { ChangeHistory } from '@codekalakaars/vajra-sandbox'
 import type { TaskEvent } from '../session/ui.js'
 import type { LaunchHandle } from './developer.js'
+import type { ReadLockMode, ScheduleOrder, WorkerParams } from '../bench/params.js'
+import { tasksConflict } from './leases.js'
+import type { Governor } from './governor.js'
 
 /**
  * The Manager.
@@ -138,9 +141,163 @@ export function shouldReplan(queue: TaskQueue, taskId: string): boolean {
   return blockedDependents(queue, taskId).length > 0
 }
 
+// --- choosing the next task ------------------------------------------------
+
+/**
+ * The ready tasks, in the order `scheduleOrder` asks for. The first one the
+ * pool can admit is the one that starts.
+ *
+ * - `plan`: the order the plan lists them, which is today's behaviour.
+ * - `critical-path`: the task that starts the longest chain of work still
+ *   outstanding, so the chain that decides when the run ends starts first.
+ * - `most-dependents`: the task holding up the most other tasks, so the run
+ *   unblocks the widest set of work before it spends a Worker on a leaf.
+ *
+ * Ties keep plan order: the sort is stable, so an arrangement never changes
+ * between two runs of the same plan on the same queue state.
+ */
+export function orderReadyTasks(
+  queue: TaskQueue,
+  order: ScheduleOrder,
+  readLocks: ReadLockMode,
+): TaskState[] {
+  const ready = queue.getReadyTasks()
+  if (order === 'plan' || ready.length < 2) return ready
+
+  const graph = orderingGraph(queue, readLocks)
+  const score = order === 'critical-path' ? heldUpLongestChain(graph) : heldUpCount(graph)
+  return [...ready].sort((a, b) => score(b.id) - score(a.id))
+}
+
+/** Tasks that have not settled yet; a chain can still run through them. */
+function unsettledTasks(queue: TaskQueue): TaskState[] {
+  return queue
+    .getAllTasks()
+    .filter(task => task.status === 'pending' || task.status === 'assigned' || task.status === 'running')
+}
+
+/**
+ * The edges a schedule has to respect, as `task -> tasks that cannot start
+ * until it settles`: a declared dependency, or two tasks that share a file and
+ * so cannot be in flight together.
+ *
+ * A dependency edge always points at the dependent task. A shared-file pair has
+ * no declared direction, so it is chained in plan order — unless the plan
+ * already puts one before the other by dependency, in which case only that
+ * edge exists. That keeps the graph acyclic for a plan whose dependencies are,
+ * so the scores below are a longest path rather than a walk with a cutoff.
+ */
+function orderingGraph(queue: TaskQueue, readLocks: ReadLockMode): Map<string, string[]> {
+  const unsettled = unsettledTasks(queue)
+  const byId = new Map(unsettled.map(task => [task.id, task]))
+  const edges = new Map<string, string[]>(unsettled.map(task => [task.id, []]))
+  const add = (from: string, to: string): void => {
+    edges.get(from)?.push(to)
+  }
+
+  for (const task of unsettled) {
+    for (const dep of task.dependsOn) {
+      if (byId.has(dep)) add(dep, task.id)
+    }
+  }
+
+  const ancestors = new Map<string, Set<string>>()
+  for (const task of unsettled) {
+    // Every id `dependsOn` reaches, directly or through others.
+    const seen = new Set<string>()
+    const stack = [...task.dependsOn]
+    while (stack.length > 0) {
+      const id = stack.pop()!
+      if (seen.has(id) || !byId.has(id)) continue
+      seen.add(id)
+      stack.push(...(byId.get(id)?.dependsOn ?? []))
+    }
+    ancestors.set(task.id, seen)
+  }
+
+  for (let i = 0; i < unsettled.length; i++) {
+    for (let j = i + 1; j < unsettled.length; j++) {
+      const earlier = unsettled[i]
+      const later = unsettled[j]
+      if (ancestors.get(later.id)?.has(earlier.id)) continue
+      if (tasksConflict(earlier, later, readLocks)) add(earlier.id, later.id)
+    }
+  }
+
+  return edges
+}
+
+/**
+ * Longest chain of unsettled tasks starting at each task, itself counted: the
+ * floor a schedule has to reach, so the task carrying the most of it goes first.
+ */
+function heldUpLongestChain(graph: Map<string, string[]>): (id: string) => number {
+  const memo = new Map<string, number>()
+  const walk = (id: string, visiting: Set<string>): number => {
+    const cached = memo.get(id)
+    if (cached !== undefined) return cached
+    // A plan whose dependencies contradict itself can still produce a loop the
+    // orientation above did not remove; stop at it instead of recursing forever.
+    if (visiting.has(id)) return 0
+    visiting.add(id)
+    let longest = 0
+    for (const next of graph.get(id) ?? []) {
+      longest = Math.max(longest, walk(next, visiting))
+    }
+    visiting.delete(id)
+    const length = 1 + longest
+    memo.set(id, length)
+    return length
+  }
+  return id => walk(id, new Set())
+}
+
+/**
+ * Each task's priority: how long a chain of outstanding work waits on it, so a
+ * leaf nobody waits on is the lowest. Ties go to plan order — the earlier task
+ * ranks higher. The scheduler pauses the lowest-priority Worker when the CPU is
+ * saturated and resumes the highest first.
+ */
+export function taskPriorities(queue: TaskQueue, readLocks: ReadLockMode): (task: TaskState) => number {
+  const chain = heldUpLongestChain(orderingGraph(queue, readLocks))
+  const all = queue.getAllTasks()
+  const index = new Map(all.map((task, i) => [task.id, i]))
+  // The plan position is folded in below one chain step, so it only breaks ties.
+  return task => chain(task.id) - (index.get(task.id) ?? all.length) / (all.length + 1)
+}
+
+/** How many unsettled tasks each task holds up, transitively. */
+function heldUpCount(graph: Map<string, string[]>): (id: string) => number {
+  return id => reachable(id, graph, new Set([id])).size
+}
+
+/** Every task `id` holds up, following `graph` edges once each. */
+function reachable(id: string, graph: Map<string, string[]>, seen: Set<string>): Set<string> {
+  for (const next of graph.get(id) ?? []) {
+    if (seen.has(next)) continue
+    seen.add(next)
+    reachable(next, graph, seen)
+  }
+  return seen
+}
+
+/**
+ * How the scheduler reaches the machine: the governor that reads CPU and RAM,
+ * and the two halves of pausing a Worker, which only the host can do.
+ */
+export interface MasterResources {
+  governor: Governor
+  /** Pause a running task's Worker. False when it has nothing to pause yet. */
+  pauseTask: (task: TaskState) => boolean
+  resumeTask: (task: TaskState) => void
+}
+
 export interface MasterLoopDeps<T> {
   queue: TaskQueue
+  /** A hard ceiling on Workers at once; `Infinity` leaves it to `resources`. */
   maxWorkers: number
+  /** Admission and pausing by CPU and RAM. Absent: only `maxWorkers` bounds the run. */
+  resources?: MasterResources
   isInterrupted: () => boolean
   /** Run one task end to end. Resolves true on success. */
   runTask: (task: TaskState) => Promise<boolean>
@@ -173,6 +330,8 @@ export interface MasterLoopDeps<T> {
   /** The LLM decision loop, when enabled. */
   decide?: (task: TaskState, context: MasterFailureContext) => Promise<FailureAction>
   signal?: AbortSignal
+  /** The run's arrangement. The scheduler reads `scheduleOrder` and `readLocks` from it. */
+  params: WorkerParams
 }
 
 export interface MasterFailureContext {
@@ -217,6 +376,7 @@ export async function masterLoop(deps: MasterLoopDeps<TaskState>): Promise<Maste
     decide,
     abortAfterFailures,
   } = deps
+  const { scheduleOrder, readLocks } = deps.params
 
   const outcome: MasterOutcome<TaskState> = {
     aborted: false,
@@ -226,23 +386,82 @@ export async function masterLoop(deps: MasterLoopDeps<TaskState>): Promise<Maste
   }
   let failureCount = 0
   const running = new Map<string, Promise<void>>()
+  const runningTasks = new Map<string, TaskState>()
+  /** Tasks whose Worker the scheduler paused, by id. */
+  const paused = new Set<string>()
+  const resources = deps.resources
+
+  /**
+   * Whether the machine has room for one more Worker. The first task always
+   * starts — a machine busy with something else must slow the run, not stall it
+   * — and nothing new starts while a paused Worker is waiting to resume.
+   */
+  const machineHasRoom = (): boolean => {
+    if (!resources || running.size === 0) return true
+    return paused.size === 0 && resources.governor.canAdmit()
+  }
+
+  /**
+   * One step per reading: pause one Worker while the CPU is saturated, resume
+   * one once it has room again. One at a time, so each step's effect shows up
+   * in the next reading before another is taken. The last unpaused Worker is
+   * never paused, so the run always moves.
+   */
+  const onSample = (): void => {
+    if (!resources || isInterrupted() || outcome.aborted) return
+    const { governor } = resources
+    if (governor.choking()) {
+      const active = [...runningTasks.values()].filter(task => !paused.has(task.id))
+      if (active.length <= 1) return
+      const priority = taskPriorities(queue, readLocks)
+      for (const task of active.sort((a, b) => priority(a) - priority(b))) {
+        if (resources.pauseTask(task)) {
+          paused.add(task.id)
+          return
+        }
+      }
+    } else if (governor.relieved() && paused.size > 0) {
+      const priority = taskPriorities(queue, readLocks)
+      const next = [...paused]
+        .map(id => runningTasks.get(id))
+        .filter((task): task is TaskState => task !== undefined)
+        .sort((a, b) => priority(b) - priority(a))[0]
+      if (!next) return
+      paused.delete(next.id)
+      resources.resumeTask(next)
+    }
+  }
+
+  const resumeAll = (): void => {
+    if (!resources) return
+    for (const id of paused) {
+      const task = runningTasks.get(id)
+      if (task) resources.resumeTask(task)
+    }
+    paused.clear()
+  }
 
   const scheduleReady = (): void => {
-    while (!isInterrupted() && !outcome.aborted && running.size < maxWorkers) {
+    while (!isInterrupted() && !outcome.aborted && running.size < maxWorkers && machineHasRoom()) {
+      // Reordered per the run's arrangement, and rebuilt on every pass: what is
+      // ready and what is admissible both change as slots free up.
+      const ready = orderReadyTasks(queue, scheduleOrder, readLocks)
       // An in-flight task is still 'pending' until it clears its own setup, so
       // the in-flight map is the real filter.
-      const next = queue.getReadyTasks().find(
-        t => !running.has(t.id) && (deps.canAdmitTask?.(t) ?? true),
-      )
+      const next = ready.find(t => !running.has(t.id) && (deps.canAdmitTask?.(t) ?? true))
       if (!next) return
+      resources?.governor.noteAdmitted()
       const tracked = runOne(next)
         .catch(() => {
           // runOne handles its own failures; this only guards the pool.
         })
         .finally(() => {
           running.delete(next.id)
+          runningTasks.delete(next.id)
+          paused.delete(next.id)
         })
       running.set(next.id, tracked)
+      runningTasks.set(next.id, next)
     }
   }
 
@@ -295,6 +514,7 @@ export async function masterLoop(deps: MasterLoopDeps<TaskState>): Promise<Maste
       await rebaselineTask(task)
       onTaskEvent({
         type: 'retry',
+        taskId: task.id,
         title: task.title,
         attempt: attempts,
         max: maxRetries,
@@ -302,6 +522,8 @@ export async function masterLoop(deps: MasterLoopDeps<TaskState>): Promise<Maste
       outcome.retried.push(task.id)
     }
   }
+
+  resources?.governor.start(onSample)
 
   while (true) {
     if (isInterrupted()) break
@@ -315,12 +537,20 @@ export async function masterLoop(deps: MasterLoopDeps<TaskState>): Promise<Maste
     // blocked on unresolvable dependencies — stop so the report surfaces them.
     if (running.size === 0) break
 
-    await Promise.race([...running.values()])
+    // A reading can make room as surely as a task finishing can, so the loop
+    // wakes on either.
+    await Promise.race([
+      ...running.values(),
+      ...(resources ? [resources.governor.nextSample()] : []),
+    ])
   }
 
-  // Let whatever is in flight settle; an interrupted run still owes the user
-  // a truthful record of what landed.
+  // A paused Worker cannot notice the run ending, so every one is resumed
+  // before waiting on them; an interrupted run still owes the user a truthful
+  // record of what landed.
+  resumeAll()
   await Promise.allSettled([...running.values()])
+  resources?.governor.stop()
 
   for (const task of queue.getAllTasks()) {
     if (task.status === 'skipped') outcome.skipped.push(task.id)

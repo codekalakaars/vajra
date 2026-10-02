@@ -37,6 +37,7 @@ import {
   type PersistedSession,
 } from './persist/index.js'
 import { assessStaleness, describeVerdict } from './session/resume.js'
+import { benchCommand } from './bench/run.js'
 
 function formatAge(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return 'unknown'
@@ -126,7 +127,7 @@ program
   )
   .option('-y, --yes', 'Auto-confirm all plans without prompting')
   .option('-t, --timeout <seconds>', 'Per-task timeout in seconds', '300')
-  .option('-c, --concurrency <n>', 'Max tasks to run at once', '')
+  .option('-c, --concurrency <n>', 'Optional cap on tasks at once (default: none; CPU and RAM decide)', '')
   .option('--allow-unenforced', 'Allow tools to run without OS sandbox enforcement (not recommended)')
   .addHelpText('after', `
 Model recommendations (only models with a configured key are offered in the TUI):
@@ -460,6 +461,10 @@ program
 
 // Add video command
 program.addCommand(videoCommand)
+
+// `vajra bench <suite>` — the arrangement in bench/config.json, run against a
+// predefined plan with no Developer and no input.
+program.addCommand(benchCommand())
 
 // If no command provided, launch TUI
 const args = process.argv.slice(2)

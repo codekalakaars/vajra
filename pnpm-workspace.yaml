@@ -1,5 +1,4 @@
 packages:
-  - "."
   - "packages/*"
 
 # Which dependencies may run install scripts. The three below are transitive

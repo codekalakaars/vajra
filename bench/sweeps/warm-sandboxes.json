@@ -1,0 +1,8 @@
+{
+  "name": "warm-sandboxes",
+  "suites": ["wide", "chain", "fan", "mixed"],
+  "repetitions": 5,
+  "vary": {
+    "warmSandboxes": [0, 1, 4]
+  }
+}

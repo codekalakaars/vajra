@@ -1,0 +1,6 @@
+{
+  "name": "baseline",
+  "suites": ["wide", "chain", "fan", "mixed"],
+  "repetitions": 5,
+  "vary": {}
+}

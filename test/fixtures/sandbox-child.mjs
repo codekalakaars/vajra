@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const native = require('../../index.js')
+const native = require('@codekalakaars/vajra-core')
 
 const job = JSON.parse(process.argv[2])
 

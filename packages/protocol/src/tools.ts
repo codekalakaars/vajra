@@ -382,6 +382,10 @@ export interface PlannedTaskInput {
   rollback?: string[]
   /** Condition to skip this task (e.g. "file exists: src/config.json" or "command passes: npm test"). */
   skipIf?: string[]
+  /** What "done" means, in words the Worker can check against. */
+  successCriteria?: string[]
+  /** Short notes no file shows: a gotcha, an approach to avoid. */
+  notes?: string
 }
 
 export interface ProposePlanArgs {
@@ -464,6 +468,8 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
       retries: z.number().optional(),
       rollback: z.array(z.string()).optional(),
       skipIf: z.array(z.string()).optional(),
+      successCriteria: z.array(z.string()).optional(),
+      notes: z.string().optional(),
     })),
     contracts: z.array(planContractSchema).optional(),
     summary: z.string(),
@@ -601,6 +607,15 @@ export const proposePlanTool = defineTool<ProposePlanArgs>({
               type: 'array',
               items: { type: 'string' },
               description: 'Conditions to skip this task. Example: ["file exists: src/config.json", "command passes: npm test"].',
+            },
+            successCriteria: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'What "done" means for this task, one checkable statement each. Shown to the worker next to the verify commands.',
+            },
+            notes: {
+              type: 'string',
+              description: 'Short notes the worker needs that no file shows: a gotcha, an approach to avoid. Optional.',
             },
           },
           required: ['id', 'title', 'description'],

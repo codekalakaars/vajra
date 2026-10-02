@@ -16,7 +16,9 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
-const native = require('../index.js')
+// The package, not a path to a generated file: this is the same resolution the
+// packages get, and it survives the bindings moving.
+const native = require('@codekalakaars/vajra-core')
 
 const here = dirname(fileURLToPath(import.meta.url))
 const CHILD = join(here, 'fixtures', 'sandbox-child.mjs')

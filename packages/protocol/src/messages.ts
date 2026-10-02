@@ -2,7 +2,7 @@
 // Shapes mirroring vajra-core types are hand-duplicated — this package
 // must stay loadable in a browser bundle.
 
-import type { ContextRef, EditSpec, VerifySpec } from './tools.js'
+import type { ContextRef, EditSpec, PlanContract, VerifySpec } from './tools.js'
 
 export interface FilePermissions {
   read: boolean
@@ -54,6 +54,10 @@ export interface PlannedTask {
   validation: string[]
   /** Task IDs this depends on (must complete before this runs). */
   dependsOn: string[]
+  /** What "done" means, in words the Worker can check against. */
+  successCriteria?: string[]
+  /** Short notes no file shows: a gotcha, an approach to avoid. */
+  notes?: string
   /** Task type: create, modify, delete, or refactor. */
   type: TaskType
   /** Tools this worker can use. If omitted, defaults to task-type defaults. */
@@ -80,6 +84,8 @@ export interface DeveloperPlan {
   tasks: PlannedTask[]
   independentGroups: string[][]
   estimatedWorkers: number
+  /** Decisions tasks must agree on; each reaches the tasks it names. */
+  contracts?: PlanContract[]
 }
 
 export interface ConflictPayload {

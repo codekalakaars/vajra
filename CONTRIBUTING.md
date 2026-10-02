@@ -26,8 +26,9 @@ cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnin
 cargo fmt
 ```
 
-`pnpm build` regenerates `index.js` and `index.d.ts`. Both are committed — do
-not hand-edit them, the next build overwrites your changes.
+`pnpm build` regenerates `packages/core/index.js` and `packages/core/index.d.ts`.
+Both are committed — do not hand-edit them, the next build overwrites your
+changes. The `*.node` binary they load is gitignored and built locally.
 
 ## Development Workflow
 

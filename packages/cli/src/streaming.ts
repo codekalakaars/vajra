@@ -246,6 +246,8 @@ export class TerminalStreamer {
         return 'validating'
       case 'executing':
         return 'executing'
+      case 'paused':
+        return 'paused (CPU busy)'
       default:
         return phase
     }

@@ -16,6 +16,8 @@
 // useful and separately testable: the tool surface a worker exposes, the
 // summary-index I/O those tools read, and the per-task permission maths.
 
+export { descendants, freezeTree, thawTree } from './freeze.js'
+
 export {
   spawnAgent,
   spawnAgentPool,

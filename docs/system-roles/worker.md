@@ -24,7 +24,17 @@ A Worker executes **one task at a time**. This principle exists because:
 - It ensures focused, end-to-end completion before moving on.
 - It gives the Manager full control over assignment and scheduling.
 
-On a `changes_requested` verdict, the same Worker receives the Manager's findings and tries again, keeping its context. Freezing and continuing after an access request also happen inside the Worker's own task. See [ADR-0002](../adr/0002-single-task-workers.md).
+On a `changes_requested` verdict, the Worker is killed and the task is respawned with a fresh Worker: the task unchanged, the last checkpoint, and the Manager's findings. The failed attempt's conversation is never handed over. Freezing and continuing after an access request do happen inside the Worker's own task. See [ADR-0002](../adr/0002-single-task-workers.md), [ADR-0016](../adr/0016-failed-attempts-are-respawned.md) and [ADR-0019](../adr/0019-a-retry-is-told-what-failed-and-a-finished-task-hands-off.md).
+
+## Its Own Context
+
+A Worker's conversation is its own to manage, and the runtime manages the parts it can measure:
+
+- **Before the first round**, the Worker is given a compiled context pack: its task, what "done" means, the code it will change with its anchors in the current file, the contracts it produces or consumes, its scope, its dependencies' handoffs, its context excerpts and the project's build and test commands. Compiled by the runtime, not written by a model. See [ADR-0017](../adr/0017-the-manager-compiles-a-context-pack-per-task.md).
+- **As its context fills**, the runtime first rewrites the tool results that are stale — a read it has since edited, a command it has since re-run, a search it has already read — and then, if that is not enough, compacts the conversation into a checkpoint the Worker writes. The Worker does not choose to compact, and it cannot compact instead of working. See [ADR-0018](../adr/0018-compaction-is-a-ladder.md).
+- **When neither is enough**, the Worker ends its attempt as `stuck` and the Manager respawns it.
+
+Every attempt ends as one of `done`, `failed_verification`, `stuck`, `error`, `timeout`, `budget` or `interrupted`, with what it wrote, what failed and its closing words. The file list and the commands come from the harness, not from the Worker.
 
 ## Peer Awareness
 

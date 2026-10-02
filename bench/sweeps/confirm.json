@@ -1,0 +1,7 @@
+{
+  "name": "confirm",
+  "suites": ["wide", "chain", "fan", "mixed"],
+  "repetitions": 10,
+  "base": {},
+  "vary": {}
+}
