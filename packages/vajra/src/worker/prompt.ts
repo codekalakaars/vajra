@@ -66,7 +66,11 @@ const PACK_RULES = [
   '- Make precise edits using edit_file (not write_file for existing files); copy anchors from the text shown',
   '- Use write_file only for new files',
   '- Touch only the files under SCOPE',
-  '- Run the commands under DONE MEANS before you finish, and fix what fails',
+  // Each reply is a full model round, the slowest thing a Worker does. Batching
+  // the edit and its check into one reply saves a round on nearly every task.
+  '- Make all your edits AND run the commands under DONE MEANS in the same reply: tool calls in one reply run in order',
+  '- Run only the commands under DONE MEANS. Other tests in the project may belong to tasks that have not run yet and are expected to fail',
+  '- If a command fails, fix it and run it again in the same reply',
   '- When finished, reply with a short summary of what you changed and anything a task building on yours must know',
 ].join('\n')
 
