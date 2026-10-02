@@ -27,17 +27,12 @@ export function benchUi(recorder: BenchRecorder, options: BenchOptions): Session
         return `  no changes: ${event.title}`
     }
   }
-  const noPrompt = async (what: string): Promise<never> => {
-    throw new Error(`A bench run takes no input, but something asked for ${what}`)
-  }
   return {
-    banner: () => {},
     info: message => write(message),
     success: message => write(message),
     error: message => write(`error: ${message}`),
     warning: message => write(`warning: ${message}`),
     newline: () => {},
-    restoredTurn: () => {},
     onTextDelta: text => {
       if (options.verbose) write(text)
     },
@@ -46,11 +41,6 @@ export function benchUi(recorder: BenchRecorder, options: BenchOptions): Session
     },
     finishLine: () => {},
     discardBuffer: () => {},
-    askInitialTask: () => noPrompt('an initial task'),
-    askUserMessage: () => noPrompt('a message'),
-    showPlan: () => {},
-    askConfirmPlan: () => noPrompt('plan confirmation'),
-    askRejectFeedback: () => noPrompt('rejection feedback'),
     onTaskEvent: event => {
       recorder.taskEvent(event)
       write(describe(event))

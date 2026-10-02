@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs'
 import { readAuth, writeAuth, clearAuth } from '../model/auth.js'
 import { authPath } from '../model/home.js'
 import { benchCommand } from '../bench/run.js'
+import { runCommand } from './run.js'
 
 function readPackageVersion(): string {
   try {
@@ -82,6 +83,8 @@ program
     console.error(`Unknown subcommand '${action}'. Usage: vajra auth [login <key>|status|logout]`)
     process.exit(1)
   })
+
+program.addCommand(runCommand())
 
 // `vajra bench <suite>`: the arrangement in bench/config.json, run against a
 // predefined plan with no Developer and no input.

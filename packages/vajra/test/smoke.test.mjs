@@ -28,6 +28,7 @@ test('vajra --help lists the commands that exist', async () => {
   const { stdout } = await execFileAsync(process.execPath, [cliEntry, '--help'], {
     timeout: 10000,
   })
+  assert.match(stdout, /\brun\b/)
   assert.match(stdout, /bench/)
   assert.match(stdout, /auth/)
   assert.doesNotMatch(stdout, /sessions|resume|video/)

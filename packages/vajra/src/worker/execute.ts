@@ -98,11 +98,6 @@ function reasoningFor(model: string, level: ReasoningEffort): ReasoningEffort {
  */
 const WORKER_REPLY_RESERVE = 8000
 
-/** A tool handle answers with a string or a structured value; a pack reads text. */
-function asText(result: unknown): string {
-  return typeof result === 'string' ? result : JSON.stringify(result ?? '')
-}
-
 export async function executeTask(
   agentId: string,
   task: ExecuteTaskInput['task'],
@@ -145,7 +140,7 @@ export async function executeTask(
   /** What the harness saw this attempt do. The half no model can misreport. */
   const ledger = new WorkLedger()
 
-  const { preloaded, pack, messages: openingMessages, previousAttempt } = await buildOpening({
+  const { messages: openingMessages } = await buildOpening({
     task, params, model, handle, context, streamer, emit, agent,
   })
   let messages: ChatMessage[] = openingMessages

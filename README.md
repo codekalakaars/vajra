@@ -3,7 +3,7 @@
 Vajra runs a plan of tasks on parallel, sandboxed Workers, under a Manager. Each Worker is one model loop that can only touch the files its task names, enforced by the kernel (Landlock), not by the prompt.
 
 ```
-Developer ──plan──▶ Manager ──task──▶ Worker ──▶ confined process
+you ──task──▶ Developer ──plan──▶ Manager ──task──▶ Worker ──▶ confined process
 ```
 
 ## Status
@@ -14,7 +14,8 @@ Developer ──plan──▶ Manager ──task──▶ Worker ──▶ confi
 | Worker: context pack, output cap, elision, checkpoints | Built, tested. The pack is on in `bench/config.json` |
 | Sandbox: Landlock confinement, file rules, locks, rollback | Built, tested |
 | `vajra bench <suite>`: run a predefined plan and score it | Built. Four suites in `bench/suites/` |
-| Developer: creates the plan from a conversation | Built and tested, **not wired in yet** |
+| Developer: creates the plan from a conversation | Built, tested. `vajra run` drives it |
+| `vajra run "<what you want>"`: Developer plans, you review, the Manager runs it | Built, tested end to end with a scripted model |
 
 Provider: OpenCode Zen only (`zen/*` and `go/*` model ids, one `OPENCODE_API_KEY`). Platform: **Linux only**, kernel 5.13+.
 
@@ -26,10 +27,11 @@ pnpm build:all
 pnpm test:all
 
 node packages/vajra/dist/cli/index.js auth login <key>
+node packages/vajra/dist/cli/index.js run -d path/to/project "add a hello module"
 node packages/vajra/dist/cli/index.js bench bench/suites/wide
 ```
 
-`bench` calls a real model and costs money.
+`run` and `bench` call a real model and cost money. `run` asks you to review the plan before anything is written; `--yes` skips that.
 
 ## Where to read next
 

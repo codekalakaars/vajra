@@ -10,16 +10,14 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
-import { validatePlan, type PlanEvidence
-} from '@codekalakaars/vajra-protocol'
+import { validatePlan, type PlanEvidence } from '@codekalakaars/vajra-protocol'
 import { spawnAgentPool, type Agent } from '@codekalakaars/vajra-sandbox'
 import { Command } from 'commander'
 import { parseProposePlanArgs } from '../developer/plan.js'
 import { executePlan } from '../manager/execute-plan.js'
 import { storedOpenCodeKey } from '../model/auth.js'
 import { loadWorkerParams, WorkerParamsError } from './config.js'
-import { createBenchRecorder
-} from './metrics.js'
+import { createBenchRecorder } from './metrics.js'
 import type { BenchResult } from './result.js'
 import type { WorkerParams } from './params.js'
 import { assertPacksFit, measureBaselines } from './checks.js'

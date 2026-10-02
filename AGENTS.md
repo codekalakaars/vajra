@@ -6,12 +6,12 @@ Vajra runs a plan of tasks on parallel, sandboxed Workers under a Manager. Read 
 
 | You want to change | Look in |
 |--------------------|---------|
-| How a plan is created (not wired in yet) | `packages/vajra/src/developer/` |
+| How a plan is created from a conversation | `packages/vajra/src/developer/` |
 | Scheduling, retries, CPU/RAM admission, pausing, file leases | `packages/vajra/src/manager/` |
 | What a Worker sees and does: prompt, context pack, compaction, checkpoints | `packages/vajra/src/worker/` |
 | The model client, the model catalog, token budget, tool dispatch | `packages/vajra/src/model/` |
 | The bench runner, run parameters, metrics | `packages/vajra/src/bench/` |
-| The `vajra` command | `packages/vajra/src/cli/` |
+| The `vajra` command (`run`, `bench`, `auth`) | `packages/vajra/src/cli/` |
 | File rules, locks, change history, the confined worker process, the repo index | `packages/sandbox/src/` |
 | Shared types, tool definitions, plan validation | `packages/protocol/src/` |
 | Landlock, process control (Rust) | `packages/native/src/` |
@@ -29,7 +29,7 @@ pnpm test:all      # every package's tests, then the bench tooling tests
 
 Tests import from `dist/`, so **build before testing**. To run one package: `pnpm --filter @codekalakaars/vajra test`. To run one file: `node --test packages/vajra/test/<name>.test.mjs`.
 
-`vajra bench <suite>` runs a suite against a real model and costs money. Do not run it, or `bench/tune.mjs`, without being asked.
+`vajra run` and `vajra bench <suite>` call a real model and cost money. Do not run them, or `bench/tune.mjs`, without being asked.
 
 ## Rules
 

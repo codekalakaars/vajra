@@ -5,7 +5,7 @@ Vajra turns a **plan** (a list of tasks with dependencies) into finished work by
 ```
 Developer ──plan──▶ Manager ──task──▶ Worker ──tool calls──▶ confined process
  (creates tasks)    (schedules,        (one model loop        (Landlock; only the
-  not wired yet)     retries,           per task attempt)       task's files)
+                     retries,           per task attempt)       task's files)
                      hands off)
 ```
 
@@ -13,11 +13,11 @@ Developer ──plan──▶ Manager ──task──▶ Worker ──tool call
 
 | Role | What it does | Code |
 |------|--------------|------|
-| **Developer** | Talks to a model and produces the plan: tasks, their files, dependencies, and the commands that verify each one. **Built and tested, not yet wired in**: nothing starts it. | `packages/vajra/src/developer/` |
+| **Developer** | Talks to a model and produces the plan: tasks, their files, dependencies, and the commands that verify each one. `vajra run` drives it (`developer/conversation.ts`): it can ask you a question, and a plan it proposes waits for your review. | `packages/vajra/src/developer/` |
 | **Manager** | Takes a plan and runs it. Decides which task starts next, how many run at once, which to pause when the CPU is busy, and what to do when one fails. Never edits code itself. | `packages/vajra/src/manager/` |
 | **Worker** | One model loop per task attempt. Starts from a compiled context pack, edits files through tools, runs the task's verify commands, and reports a summary. | `packages/vajra/src/worker/` |
 
-Today a plan comes from a file: `vajra bench <suite>` loads `bench/suites/<suite>/plan.json` and hands it to the Manager (`packages/vajra/src/bench/`).
+A plan comes from one of two places. `vajra run "<task>"` (`cli/run.ts`) has the Developer plan it with you, then hands the accepted plan to the Manager. `vajra bench <suite>` loads `bench/suites/<suite>/plan.json` and hands it to the Manager, with no Developer (`packages/vajra/src/bench/`).
 
 ## The packages
 
@@ -55,4 +55,4 @@ Every run parameter lives in `bench/config.json` and is validated by `packages/v
 
 ## What was removed, and why
 
-The repository used to include an interactive terminal UI, saved sessions and resume, a `vajra run` conversation, a standalone sandbox CLI, a test-running framework (`packages/tester`) and a `video` command. None of it was on the Manager/Worker path, and the Developer is not wired in yet, so it was removed. The ADRs marked *Not implemented* describe designs (a verification ladder, Manager review, mutation testing, peer-aware Workers) that were never built.
+The repository used to include an interactive terminal UI, saved sessions and resume, an interactive `vajra run` conversation with saved history, a standalone sandbox CLI, a test-running framework (`packages/tester`) and a `video` command. None of it was on the Manager/Worker path, so it was removed. `vajra run` is a plain terminal command that replaces the conversation part. The ADRs marked *Not implemented* describe designs (a verification ladder, Manager review, mutation testing, peer-aware Workers) that were never built.

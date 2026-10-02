@@ -1,7 +1,6 @@
-import type { DeveloperPlan } from '@codekalakaars/vajra-protocol'
 import { isAbsolute, relative, basename, sep } from 'node:path'
 
-/** Streaming/output methods shared by runSession and executeTask. */
+/** Streaming/output methods shared by the Developer and the Worker. */
 export interface SessionStreamer {
   onTextDelta(text: string): void
   onThinkingDelta(text: string): void
@@ -15,14 +14,6 @@ export interface SessionStreamer {
   warning(message: string): void
   /** Blank line (report separators). */
   newline(): void
-  /**
-   * A turn replayed from a resumed session's history, not something said now.
-   *
-   * Separate from `info` because a resumed conversation is not a log line: it
-   * is the two sides of a conversation the user is looking at again, and it has
-   * to look like the transcript they left rather than like a report about it.
-   */
-  restoredTurn(turn: { role: 'user' | 'assistant'; text: string }): void
 }
 
 /** Structured execution progress so frontends can render a task list. */
@@ -39,25 +30,10 @@ export type TaskEvent =
   | { type: 'no-changes'; taskId: string; title: string }
 
 /**
- * Port implemented by frontends (CLI readline adapter, TUI). runSession talks
- * to the UI only through this interface — no readline, no console, no Ink.
+ * What the Developer and the Manager report to. They talk to a UI only through
+ * this interface, so the same run can print to a terminal or be measured.
  */
 export interface SessionUI extends SessionStreamer {
-  banner(): void
-  /**
-   * Initial task prompt when none was passed on the command line.
-   * 'first' = "What would you like me to work on?",
-   * 'reentry' = empty answer loop: "Please enter a task (or type "exit")".
-   */
-  askInitialTask(kind: 'first' | 'reentry'): Promise<string>
-  /** Follow-up user turn during the conversation loop. */
-  askUserMessage(): Promise<string>
-  /** Render the proposed plan before confirmation. */
-  showPlan(plan: DeveloperPlan): void
-  /** Ask [y/N] for the plan. Anything but y/yes must come back as 'n'. */
-  askConfirmPlan(): Promise<'y' | 'n'>
-  /** Ask for feedback after a rejected plan. */
-  askRejectFeedback(): Promise<string>
   /** Task execution progress (CLI maps this back to log lines). */
   onTaskEvent(event: TaskEvent): void
   /**
