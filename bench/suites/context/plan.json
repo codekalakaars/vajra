@@ -1,0 +1,248 @@
+{
+  "summary": "Three tasks that put increasing pressure on the Worker's context: a small toolkit, a consumer of it, and a lookup across five large reference files.",
+  "acceptance": {
+    "command": "node",
+    "args": [
+      "--test",
+      "accept/context.test.mjs"
+    ],
+    "timeoutMs": 120000
+  },
+  "tasks": [
+    {
+      "id": "context-library",
+      "title": "Implement helpers in src/library.js",
+      "description": "A small toolkit the next task builds on.",
+      "type": "modify",
+      "dependsOn": [],
+      "context": [
+        {
+          "path": "tests/task-context-library.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        },
+        {
+          "path": "src/library.js",
+          "reason": "the file this task changes"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/library.js",
+          "op": "modify",
+          "change": "Implement all eight exported functions. add(a, b) returns a + b. sub(a, b) returns a - b. mul(a, b) returns a * b. div(a, b) returns a / b. clamp(n, min, max) returns min when n is below min, max when n is above max, and n otherwise. round2(n) returns Math.round(n * 100) / 100. sum(values) returns the total of the array, or 0 when empty. average(values) returns sum(values) / values.length, or 0 when empty.",
+          "anchor": "export function add(a, b) { throw new Error('add is not implemented') }"
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-context-library.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/library.js, at the text `export function add(a, b) { throw new Error('add is not implemented') }`: Implement all eight exported functions. add(a, b) returns a + b. sub(a, b) returns a - b. mul(a, b) returns a * b. div(a, b) returns a / b. clamp(n, min, max) returns min when n is below min, max when n is above max, and n otherwise. round2(n) returns Math.round(n * 100) / 100. sum(values) returns the total of the array, or 0 when empty. average(values) returns sum(values) / values.length, or 0 when empty."
+      ],
+      "readFile": [
+        "tests/task-context-library.test.mjs",
+        "src/library.js"
+      ],
+      "writeFile": [
+        "src/library.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-context-library.test.mjs"
+      ]
+    },
+    {
+      "id": "context-consumer",
+      "title": "Implement pipeline in src/consumer.js",
+      "description": "Use the library helpers to process a list of numbers.",
+      "type": "modify",
+      "dependsOn": [
+        "context-library"
+      ],
+      "context": [
+        {
+          "path": "tests/task-context-consumer.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        },
+        {
+          "path": "src/library.js",
+          "reason": "the helpers this task imports"
+        },
+        {
+          "path": "src/consumer.js",
+          "reason": "the file this task changes"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/consumer.js",
+          "op": "modify",
+          "change": "Implement pipeline(values): for each value multiply it by 2, clamp the result to the range [-5, 5], round to two decimals, then return the average of the transformed values. An empty array returns 0. Import the helpers from './library.js'.",
+          "anchor": "export function pipeline(values) { throw new Error('pipeline is not implemented') }"
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-context-consumer.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/consumer.js, at the text `export function pipeline(values) { throw new Error('pipeline is not implemented') }`: Implement pipeline(values): for each value multiply it by 2, clamp the result to the range [-5, 5], round to two decimals, then return the average of the transformed values. An empty array returns 0. Import the helpers from './library.js'."
+      ],
+      "readFile": [
+        "tests/task-context-consumer.test.mjs",
+        "src/library.js",
+        "src/consumer.js"
+      ],
+      "writeFile": [
+        "src/consumer.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-context-consumer.test.mjs"
+      ]
+    },
+    {
+      "id": "context-lookup",
+      "title": "Implement lookup in src/lookup.js",
+      "description": "Read the large reference files and return the value for a given id.",
+      "type": "modify",
+      "dependsOn": [
+        "context-consumer"
+      ],
+      "context": [
+        {
+          "path": "tests/task-context-lookup.test.mjs",
+          "reason": "the test that decides whether this task worked"
+        },
+        {
+          "path": "src/lookup.js",
+          "reason": "the file this task changes"
+        },
+        {
+          "path": "src/library.js",
+          "reason": "a file the upstream tasks changed"
+        },
+        {
+          "path": "src/consumer.js",
+          "reason": "a file the upstream tasks changed"
+        },
+        {
+          "path": "src/reference/items-01.json",
+          "reason": "reference data for the lookup"
+        },
+        {
+          "path": "src/reference/items-02.json",
+          "reason": "reference data for the lookup"
+        },
+        {
+          "path": "src/reference/items-03.json",
+          "reason": "reference data for the lookup"
+        },
+        {
+          "path": "src/reference/items-04.json",
+          "reason": "reference data for the lookup"
+        },
+        {
+          "path": "src/reference/items-05.json",
+          "reason": "reference data for the lookup"
+        },
+        {
+          "path": "src/reference/items-06.json",
+          "reason": "reference data for the lookup"
+        },
+        {
+          "path": "src/reference/items-07.json",
+          "reason": "reference data for the lookup"
+        },
+        {
+          "path": "src/reference/items-08.json",
+          "reason": "reference data for the lookup"
+        },
+        {
+          "path": "src/reference/items-09.json",
+          "reason": "reference data for the lookup"
+        },
+        {
+          "path": "src/reference/items-10.json",
+          "reason": "reference data for the lookup"
+        },
+        {
+          "path": "src/reference/items-11.json",
+          "reason": "reference data for the lookup"
+        },
+        {
+          "path": "src/reference/items-12.json",
+          "reason": "reference data for the lookup"
+        }
+      ],
+      "edits": [
+        {
+          "path": "src/lookup.js",
+          "op": "modify",
+          "change": "Implement lookup(id): read each of the files src/reference/items-01.json through src/reference/items-12.json, parse them as JSON arrays, and return the value of the first object whose id equals the given id. Return undefined when no object matches. The objects have shape { id: string, value: string, tags: string[] }.",
+          "anchor": "export function lookup(id) { throw new Error('lookup is not implemented') }"
+        }
+      ],
+      "verify": [
+        {
+          "command": "node",
+          "args": [
+            "--test",
+            "tests/task-context-lookup.test.mjs"
+          ],
+          "expectExit": 0,
+          "timeoutSeconds": 120,
+          "kind": "proves-change"
+        }
+      ],
+      "instructions": [
+        "In src/lookup.js, at the text `export function lookup(id) { throw new Error('lookup is not implemented') }`: Implement lookup(id): read each of the files src/reference/items-01.json through src/reference/items-12.json, parse them as JSON arrays, and return the value of the first object whose id equals the given id. Return undefined when no object matches. The objects have shape { id: string, value: string, tags: string[] }."
+      ],
+      "readFile": [
+        "tests/task-context-lookup.test.mjs",
+        "src/lookup.js",
+        "src/library.js",
+        "src/consumer.js",
+        "src/reference/items-01.json",
+        "src/reference/items-02.json",
+        "src/reference/items-03.json",
+        "src/reference/items-04.json",
+        "src/reference/items-05.json",
+        "src/reference/items-06.json",
+        "src/reference/items-07.json",
+        "src/reference/items-08.json",
+        "src/reference/items-09.json",
+        "src/reference/items-10.json",
+        "src/reference/items-11.json",
+        "src/reference/items-12.json"
+      ],
+      "writeFile": [
+        "src/lookup.js"
+      ],
+      "deleteFile": [],
+      "createDir": [],
+      "validation": [
+        "node --test tests/task-context-lookup.test.mjs"
+      ]
+    }
+  ]
+}

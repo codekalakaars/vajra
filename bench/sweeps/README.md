@@ -116,6 +116,7 @@ per-Worker win is not measured on top of a losing arrangement.
 | `context-pack.json` | `contextPack` | Whether starting a Worker from a compiled context pack beats starting it from a list of paths, and what it does to the seek ratio |
 | `compaction.json` | `elision`, `checkpoints` | Whether the compaction ladder helps at all on these suites. Run it only when `peak ctx` says the tasks are near the window: both rungs off is the baseline, and a suite that never approaches the window will show them costing rounds for nothing |
 | `respawn.json` | `respawnContext` | Whether telling a retry what the last attempt did is worth the prompt it costs. Run it after the baseline, because it only pays when something is actually failing |
+| `context-management.json` | `packWindowShare`, `elision`, `checkpoints` | Runs the `context` suite alone to tune pack sizing and the compaction ladder under real window pressure. The `context` task's pack includes ~1.3 MB of reference files; at `packWindowShare=0.5` it crosses `elideAt`, and at `0.8` it crosses `compactAt` |
 | `confirm.json` | nothing, `base` holds the winner | Does the combined winner hold at ten out of ten on every suite |
 
 Keep each winner: put it in the next sweep's `base`, or in `bench/config.json`,

@@ -1,6 +1,6 @@
 # Bench suites
 
-Four fixed projects. `vajra bench <suite>` copies a suite's `fixture/` into a
+Fixed projects. `vajra bench <suite>` copies a suite's `fixture/` into a
 temporary directory, runs the suite's `plan.json` over it with the Workers
 arranged as `bench/config.json` says, copies `accept/` in afterwards and runs
 those tests over whatever the tasks left behind. A run passes when every task
@@ -84,7 +84,7 @@ Two things follow from that and are worth knowing before changing a plan:
   exists to measure: `mixed-format-wrap` and `mixed-validate-check` write
   different files and both read `src/parse.js`.
 
-## The four suites
+## The suites
 
 | Suite | Tasks | Files | What it measures |
 |-------|-------|-------|-------------------|
@@ -92,6 +92,7 @@ Two things follow from that and are worth knowing before changing a plan:
 | `chain` | 4, each waiting for the last, four waves | 1 module | per-task speed: nothing to overlap |
 | `fan` | 1, then 6, then 1 that waits for all six | 8 modules | scheduling around a bottleneck |
 | `mixed` | 10 over 4 modules, six waves | 4 modules | `scheduleOrder`, `readLocks`, `concurrency` |
+| `context` | 3 in a chain, the last with a large pack | 3 modules + 12 reference files | `contextPack`, `packWindowShare`, elision, checkpoints |
 
 ## Adding one
 

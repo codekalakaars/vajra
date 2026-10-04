@@ -117,8 +117,8 @@ async function runAll(checks, limit = 8) {
   return results
 }
 
-test('there are the four suites the plan names', () => {
-  assert.deepEqual(suiteNames, ['chain', 'fan', 'mixed', 'wide'])
+test('there are the suites the plan names', () => {
+  assert.deepEqual(suiteNames, ['chain', 'context', 'fan', 'mixed', 'wide'])
 })
 
 for (const name of suiteNames) {
