@@ -1,0 +1,455 @@
+{
+  "case": "todo-basic",
+  "model": "zen/space-bunny-free",
+  "log": "/mnt/drive/Repo/vajra/bench/developer/todo-basic/runs/2026-10-04T22-10-18-556Z.log",
+  "success": false,
+  "failureReason": "failed: no-forbidden-text",
+  "wallMs": 267131,
+  "questions": 1,
+  "checks": [
+    {
+      "name": "size",
+      "ok": true,
+      "detail": "4 tasks"
+    },
+    {
+      "name": "scope",
+      "ok": true,
+      "detail": "every path is inside the project"
+    },
+    {
+      "name": "no-forbidden-text",
+      "ok": false,
+      "detail": "a Worker is told something out of scope: todo-store: //tmp//, todo-cli: //tmp//, todo-readme: //tmp//"
+    },
+    {
+      "name": "coverage",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "grounding",
+      "ok": true,
+      "detail": "every edited file was read and its anchor found once"
+    },
+    {
+      "name": "verify",
+      "ok": true,
+      "detail": "7 commands, all measured"
+    },
+    {
+      "name": "dependencies",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "questions",
+      "ok": true,
+      "detail": "1 asked"
+    }
+  ],
+  "plan": {
+    "tasks": [
+      {
+        "id": "todo-store",
+        "title": "Create the JSON-backed todo store with tests",
+        "description": "Create src/todo-store.js holding all file I/O and all formatting of a todo, so the CLI layer in src/todo.js stays side-effect free. Storage format: `.todos.json` at a directory root, holding an array of `{ id, text, done }` objects. A missing file reads as an empty list; ids are per-file 1-based and never reused.",
+        "context": [
+          {
+            "path": "package.json",
+            "reason": "shows \"type\": \"module\" and the `node --test` test script the new test must match"
+          },
+          {
+            "path": "src/greeting.js",
+            "reason": "shows the project module style to mirror in the new module"
+          },
+          {
+            "path": "test/greeting.test.js",
+            "reason": "shows the node:test + node:assert/strict style to mirror in the new test"
+          }
+        ],
+        "edits": [
+          {
+            "change": "Write an ES module that imports `readFile`/`writeFile`/`mkdir` from `node:fs/promises` and `join` from `node:path`.\n\nExport `export const CHECK_MARK = '✓'`.\n\nExport `export function storePath(dir) { return join(dir, '.todos.json') }`.\n\nExport `export async function readTodos(dir)`: read `storePath(dir)`; if the call rejects with `err.code === 'ENOENT'` return `[]`; otherwise parse the JSON and return the parsed array (on unreadable/corrupt JSON throw an Error whose message mentions the file path).\n\nExport `export async function writeTodos(dir, todos)`: `await mkdir(dir, { recursive: true })` then `await writeFile(storePath(dir), JSON.stringify(todos, null, 2) + '\\n', 'utf8')`.\n\nExport `export async function addTodo(dir, text)`: read, compute `nextId` as the maximum existing numeric `id` plus 1 (or 1 when the list is empty), push `{ id: nextId, text, done: false }`, write, and return the new todo object.\n\nExport `export async function completeTodo(dir, id)`: read; find the entry with that `id`; if not found return `null` without writing; otherwise set `done = true`, write, and return the updated todo object.\n\nExport `export async function deleteTodo(dir, id)`: read; if no entry has that id return `null` without writing; otherwise splice it out, write, and return the deleted todo object.\n\nExport `export function formatTodo(todo)`: return `` `${todo.done ? CHECK_MARK : ' '} ${todo.id}. ${todo.text}` `` (done items get the ✓ prefix, pending items get a single space).\n\nExport `export function renderList(todos, { pendingOnly = false } = {})`: return the string produced by filtering out done todos when `pendingOnly` is true and then `todos.map(formatTodo).join('\\n')`, which is `''` for an empty list.",
+            "op": "create",
+            "path": "src/todo-store.js"
+          },
+          {
+            "change": "node:test file using `import { test } from 'node:test'`, `import assert from 'node:assert/strict'`, `import { mkdtemp, readFile, rm } from 'node:fs/promises'`, and `pathToFileURL` from `node:url`. Build every temp dir with a helper `makeTempDir()` = `(await mkdtemp(pathToFileURL(import.meta.dirname + '/tmp/todo-store-'))).pathname`, register cleanup with `t.after(() => rm(dir, { recursive: true, force: true }))`, and never touch the project-root `.todos.json`.\n\nCover, each with its own temp dir and passing that dir to every function:\n1. `readTodos` on a directory with no `.todos.json` resolves to `[]` (no throw).\n2. `addTodo` returns `{ id: 1, text: 'write docs', done: false }` and `readTodos` then returns that same array.\n3. `addTodo` twice yields ids 1 then 2, each with `done === false`.\n4. after `completeTodo(dir, 1)` the stored todo has `done === true` and the returned value is that todo.\n5. `completeTodo` on an unknown id 999 returns `null` and leaves the stored array unchanged.\n6. `deleteTodo(dir, 1)` returns the deleted todo and leaves only the second todo in the store.\n7. `deleteTodo` on an unknown id 999 returns `null` and leaves the stored array unchanged.\n8. `writeTodos` then `readTodos` round-trips, and reading the raw file with `readFile(join(dir, '.todos.json'), 'utf8')` shows JSON containing `\"done\": false`.\n9. `formatTodo({ id: 1, text: 'buy milk', done: true })` starts with '✓' while the pending form starts with a space and contains '1. buy milk'.\n10. `renderList([{ id: 1, text: 'a', done: false }, { id: 2, text: 'b', done: true }])` contains both '1. a' and '✓ 2. b'; the same call with `{ pendingOnly: true }` contains '1. a' but not 'b' and not '✓'.\n11. `renderList([], { pendingOnly: true })` returns the empty string.",
+            "op": "create",
+            "path": "test/todo-store.test.js"
+          }
+        ],
+        "verify": [
+          {
+            "args": [
+              "--test",
+              "test/todo-store.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "kind": "proves-change",
+            "timeoutSeconds": 60,
+            "baselineExit": 1
+          }
+        ],
+        "instructions": [
+          "Create src/todo-store.js: Write an ES module that imports `readFile`/`writeFile`/`mkdir` from `node:fs/promises` and `join` from `node:path`.\n\nExport `export const CHECK_MARK = '✓'`.\n\nExport `export function storePath(dir) { return join(dir, '.todos.json') }`.\n\nExport `export async function readTodos(dir)`: read `storePath(dir)`; if the call rejects with `err.code === 'ENOENT'` return `[]`; otherwise parse the JSON and return the parsed array (on unreadable/corrupt JSON throw an Error whose message mentions the file path).\n\nExport `export async function writeTodos(dir, todos)`: `await mkdir(dir, { recursive: true })` then `await writeFile(storePath(dir), JSON.stringify(todos, null, 2) + '\\n', 'utf8')`.\n\nExport `export async function addTodo(dir, text)`: read, compute `nextId` as the maximum existing numeric `id` plus 1 (or 1 when the list is empty), push `{ id: nextId, text, done: false }`, write, and return the new todo object.\n\nExport `export async function completeTodo(dir, id)`: read; find the entry with that `id`; if not found return `null` without writing; otherwise set `done = true`, write, and return the updated todo object.\n\nExport `export async function deleteTodo(dir, id)`: read; if no entry has that id return `null` without writing; otherwise splice it out, write, and return the deleted todo object.\n\nExport `export function formatTodo(todo)`: return `` `${todo.done ? CHECK_MARK : ' '} ${todo.id}. ${todo.text}` `` (done items get the ✓ prefix, pending items get a single space).\n\nExport `export function renderList(todos, { pendingOnly = false } = {})`: return the string produced by filtering out done todos when `pendingOnly` is true and then `todos.map(formatTodo).join('\\n')`, which is `''` for an empty list.",
+          "Create test/todo-store.test.js: node:test file using `import { test } from 'node:test'`, `import assert from 'node:assert/strict'`, `import { mkdtemp, readFile, rm } from 'node:fs/promises'`, and `pathToFileURL` from `node:url`. Build every temp dir with a helper `makeTempDir()` = `(await mkdtemp(pathToFileURL(import.meta.dirname + '/tmp/todo-store-'))).pathname`, register cleanup with `t.after(() => rm(dir, { recursive: true, force: true }))`, and never touch the project-root `.todos.json`.\n\nCover, each with its own temp dir and passing that dir to every function:\n1. `readTodos` on a directory with no `.todos.json` resolves to `[]` (no throw).\n2. `addTodo` returns `{ id: 1, text: 'write docs', done: false }` and `readTodos` then returns that same array.\n3. `addTodo` twice yields ids 1 then 2, each with `done === false`.\n4. after `completeTodo(dir, 1)` the stored todo has `done === true` and the returned value is that todo.\n5. `completeTodo` on an unknown id 999 returns `null` and leaves the stored array unchanged.\n6. `deleteTodo(dir, 1)` returns the deleted todo and leaves only the second todo in the store.\n7. `deleteTodo` on an unknown id 999 returns `null` and leaves the stored array unchanged.\n8. `writeTodos` then `readTodos` round-trips, and reading the raw file with `readFile(join(dir, '.todos.json'), 'utf8')` shows JSON containing `\"done\": false`.\n9. `formatTodo({ id: 1, text: 'buy milk', done: true })` starts with '✓' while the pending form starts with a space and contains '1. buy milk'.\n10. `renderList([{ id: 1, text: 'a', done: false }, { id: 2, text: 'b', done: true }])` contains both '1. a' and '✓ 2. b'; the same call with `{ pendingOnly: true }` contains '1. a' but not 'b' and not '✓'.\n11. `renderList([], { pendingOnly: true })` returns the empty string."
+        ],
+        "readFile": [
+          "package.json",
+          "src/greeting.js",
+          "test/greeting.test.js"
+        ],
+        "writeFile": [
+          "src/todo-store.js",
+          "test/todo-store.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [
+          "test/tmp"
+        ],
+        "validation": [
+          "node --test test/todo-store.test.js"
+        ],
+        "dependsOn": [],
+        "type": "create",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": [],
+        "timeoutSeconds": 120,
+        "successCriteria": [
+          "node --test test/todo-store.test.js exits 0",
+          "No test reads or writes the project-root .todos.json — every case uses a fresh directory under test/tmp/"
+        ],
+        "notes": "Make sure test/tmp/ exists — create it once, it is safe to keep in the tree; each test still creates its own mkdtemp subdirectory under it. Node here is v24, so node:fs/promises and node:url are available, and there are no dependencies to install."
+      },
+      {
+        "id": "todo-cli",
+        "title": "Create the todo CLI (parser, commands, entry point) with tests",
+        "description": "Create src/todo.js: `parseArgs(argv)` performs no file access at all, while `runCommand(argv, io)` returns the exact stdout string for `add <text>`, `list`, `list --pending`, `done <id>` and `remove <id>`. It is imported by src/bin/todo.js, which supplies the real stdout, stderr and exit code. Unknown commands or missing arguments return a usage string that bin/todo.js prints to stderr with exit code 1.",
+        "context": [
+          {
+            "path": "src/todo-store.js",
+            "reason": "provides readTodos/addTodo/completeTodo/deleteTodo/renderList that the CLI calls",
+            "symbols": [
+              "readTodos",
+              "addTodo",
+              "completeTodo",
+              "deleteTodo",
+              "renderList",
+              "CHECK_MARK"
+            ]
+          },
+          {
+            "path": "package.json",
+            "reason": "the new bin script points at src/bin/todo.js and the type module makes it ESM"
+          }
+        ],
+        "edits": [
+          {
+            "change": "ES module. Import `pathToFileURL` from `node:url` and `resolve` from `node:path`, and import `readTodos, addTodo, completeTodo, deleteTodo, renderList` from `./todo-store.js`.\n\nExport `export function defaultDataDir() { return pathToFileURL(process.cwd() + '/').pathname }` — process.cwd() already ends in a slash, and pathToFileURL().pathname is the plain filesystem path, so it behaves correctly on platforms where the path contains characters such as spaces.\n\nExport `export const USAGE` — a multi-line string listing exactly `todo add <text>`, `todo list [--pending]`, `todo done <id>` and `todo remove <id>`, one command per line.\n\nExport `export function parseArgs(argv)`: return `{ command, text, id, pendingOnly, error }`. `command` is the first element or null; `text` is every remaining argument after `add` joined with a single space; `id` is `Number.parseInt` of the argument after `done` or `remove` (NaN when it is missing or not an integer); `pendingOnly` is true only when `argv` includes `--pending`; `error` is a short message set for these cases — command not in the set → 'Unknown command: <command>'; `add` with empty text → 'todo add requires text'; `done`/`remove` with a NaN id → 'todo <command> requires a numeric id'. When `error` is set the other fields are irrelevant.\n\nExport `export async function runCommand(argv, io = {})`: read `const dir = io.dir ?? defaultDataDir()`, call `parseArgs(argv)` and return `USAGE` early when `io.error` is set. Then switch on `io.command`:\n- `add`: `const todo = await addTodo(dir, io.text)`; return `Added ${todo.id}: ${todo.text}`.\n- `list`: `const todos = await readTodos(dir)`; return `renderList(todos, { pendingOnly: io.pendingOnly })` — exactly that string, empty when nothing matches, so `list` prints nothing and exits 0 when there are no todos.\n- `done`: `const todo = await completeTodo(dir, io.id)`; return todo ? `Done ${todo.id}: ${todo.text}` : `No todo with id ${io.id}`.\n- `remove`: `const todo = await deleteTodo(dir, io.id)`; return todo ? `Removed ${todo.id}: ${todo.text}` : `No todo with id ${io.id}`.\nand return `USAGE` if the command is null or unrecognised.\n\nExport `export function resolveDataDir(env = process.env)`: return `env.TODO_DIR ? resolve(env.TODO_DIR) : defaultDataDir()`.",
+            "op": "create",
+            "path": "src/todo.js"
+          },
+          {
+            "change": "Executable entry point. Import `runCommand, resolveDataDir, USAGE` from '../todo.js'. Read `const out = await runCommand(process.argv.slice(2), { dir: resolveDataDir() })`. If the returned string equals `USAGE`, write it plus a newline to `process.stderr` and call `process.exit(1)`; otherwise write the string plus a newline to `process.stdout` and exit 0.",
+            "op": "create",
+            "path": "src/bin/todo.js"
+          },
+          {
+            "change": "node:test file. Import `test` from 'node:test', `assert` from 'node:assert/strict', `mkdtemp`/`rm` from 'node:fs/promises', `pathToFileURL` from 'node:url', and `{ runCommand, parseArgs, USAGE }` from '../src/todo.js'. Helper `makeTempDir()` = `(await mkdtemp(pathToFileURL(import.meta.dirname + '/tmp/todo-cli-'))).pathname`, cleaned up with `t.after(...)`. Every call to runCommand passes `{ dir }` so the real project-root .todos.json is never read or written.\n\nCover:\n1. `runCommand(['add', 'write', 'docs'], { dir })` returns 'Added 1: write docs' and a second `add` returns 'Added 2: ...'.\n2. `runCommand(['list'], { dir })` returns a string containing both '1. write docs' and '2. second', with no '✓' yet.\n3. `runCommand(['done', '1'], { dir })` returns 'Done 1: write docs', after which `runCommand(['list'], { dir })` contains '✓ 1. write docs'.\n4. `runCommand(['list', '--pending'], { dir })` does not contain 'write docs' and does not contain '✓', while still containing the still-pending item.\n5. `runCommand(['remove', '2'], { dir })` returns 'Removed 2: second' and `runCommand(['list'], { dir })` no longer contains 'second'.\n6. `runCommand(['done', '99'], { dir })` returns 'No todo with id 99' and `runCommand(['remove', '99'], { dir })` returns 'No todo with id 99'.\n7. `runCommand(['list'], { dir })` on a fresh temp dir returns the empty string.\n8. `parseArgs` cases with no file access: `parseArgs(['list', '--pending']).pendingOnly === true`, `parseArgs(['add', 'write', 'docs']).text === 'write docs'`, `parseArgs(['done', 'x']).error` is a truthy string, `parseArgs(['bogus']).error` is a truthy string.\n9. `runCommand(['bogus'], { dir })` returns exactly `USAGE` and `runCommand(['add'], { dir })` returns exactly `USAGE`.\n10. `USAGE` mentions `todo add`, `todo list`, `--pending`, `todo done` and `todo remove`.",
+            "op": "create",
+            "path": "test/todo.test.js"
+          }
+        ],
+        "verify": [
+          {
+            "args": [
+              "--test",
+              "test/todo.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "kind": "proves-change",
+            "timeoutSeconds": 60,
+            "baselineExit": 1
+          },
+          {
+            "args": [
+              "--test"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "kind": "regression-guard",
+            "timeoutSeconds": 120,
+            "baselineExit": 0
+          }
+        ],
+        "instructions": [
+          "Create src/todo.js: ES module. Import `pathToFileURL` from `node:url` and `resolve` from `node:path`, and import `readTodos, addTodo, completeTodo, deleteTodo, renderList` from `./todo-store.js`.\n\nExport `export function defaultDataDir() { return pathToFileURL(process.cwd() + '/').pathname }` — process.cwd() already ends in a slash, and pathToFileURL().pathname is the plain filesystem path, so it behaves correctly on platforms where the path contains characters such as spaces.\n\nExport `export const USAGE` — a multi-line string listing exactly `todo add <text>`, `todo list [--pending]`, `todo done <id>` and `todo remove <id>`, one command per line.\n\nExport `export function parseArgs(argv)`: return `{ command, text, id, pendingOnly, error }`. `command` is the first element or null; `text` is every remaining argument after `add` joined with a single space; `id` is `Number.parseInt` of the argument after `done` or `remove` (NaN when it is missing or not an integer); `pendingOnly` is true only when `argv` includes `--pending`; `error` is a short message set for these cases — command not in the set → 'Unknown command: <command>'; `add` with empty text → 'todo add requires text'; `done`/`remove` with a NaN id → 'todo <command> requires a numeric id'. When `error` is set the other fields are irrelevant.\n\nExport `export async function runCommand(argv, io = {})`: read `const dir = io.dir ?? defaultDataDir()`, call `parseArgs(argv)` and return `USAGE` early when `io.error` is set. Then switch on `io.command`:\n- `add`: `const todo = await addTodo(dir, io.text)`; return `Added ${todo.id}: ${todo.text}`.\n- `list`: `const todos = await readTodos(dir)`; return `renderList(todos, { pendingOnly: io.pendingOnly })` — exactly that string, empty when nothing matches, so `list` prints nothing and exits 0 when there are no todos.\n- `done`: `const todo = await completeTodo(dir, io.id)`; return todo ? `Done ${todo.id}: ${todo.text}` : `No todo with id ${io.id}`.\n- `remove`: `const todo = await deleteTodo(dir, io.id)`; return todo ? `Removed ${todo.id}: ${todo.text}` : `No todo with id ${io.id}`.\nand return `USAGE` if the command is null or unrecognised.\n\nExport `export function resolveDataDir(env = process.env)`: return `env.TODO_DIR ? resolve(env.TODO_DIR) : defaultDataDir()`.",
+          "Create src/bin/todo.js: Executable entry point. Import `runCommand, resolveDataDir, USAGE` from '../todo.js'. Read `const out = await runCommand(process.argv.slice(2), { dir: resolveDataDir() })`. If the returned string equals `USAGE`, write it plus a newline to `process.stderr` and call `process.exit(1)`; otherwise write the string plus a newline to `process.stdout` and exit 0.",
+          "Create test/todo.test.js: node:test file. Import `test` from 'node:test', `assert` from 'node:assert/strict', `mkdtemp`/`rm` from 'node:fs/promises', `pathToFileURL` from 'node:url', and `{ runCommand, parseArgs, USAGE }` from '../src/todo.js'. Helper `makeTempDir()` = `(await mkdtemp(pathToFileURL(import.meta.dirname + '/tmp/todo-cli-'))).pathname`, cleaned up with `t.after(...)`. Every call to runCommand passes `{ dir }` so the real project-root .todos.json is never read or written.\n\nCover:\n1. `runCommand(['add', 'write', 'docs'], { dir })` returns 'Added 1: write docs' and a second `add` returns 'Added 2: ...'.\n2. `runCommand(['list'], { dir })` returns a string containing both '1. write docs' and '2. second', with no '✓' yet.\n3. `runCommand(['done', '1'], { dir })` returns 'Done 1: write docs', after which `runCommand(['list'], { dir })` contains '✓ 1. write docs'.\n4. `runCommand(['list', '--pending'], { dir })` does not contain 'write docs' and does not contain '✓', while still containing the still-pending item.\n5. `runCommand(['remove', '2'], { dir })` returns 'Removed 2: second' and `runCommand(['list'], { dir })` no longer contains 'second'.\n6. `runCommand(['done', '99'], { dir })` returns 'No todo with id 99' and `runCommand(['remove', '99'], { dir })` returns 'No todo with id 99'.\n7. `runCommand(['list'], { dir })` on a fresh temp dir returns the empty string.\n8. `parseArgs` cases with no file access: `parseArgs(['list', '--pending']).pendingOnly === true`, `parseArgs(['add', 'write', 'docs']).text === 'write docs'`, `parseArgs(['done', 'x']).error` is a truthy string, `parseArgs(['bogus']).error` is a truthy string.\n9. `runCommand(['bogus'], { dir })` returns exactly `USAGE` and `runCommand(['add'], { dir })` returns exactly `USAGE`.\n10. `USAGE` mentions `todo add`, `todo list`, `--pending`, `todo done` and `todo remove`."
+        ],
+        "readFile": [
+          "src/todo-store.js",
+          "package.json"
+        ],
+        "writeFile": [
+          "src/todo.js",
+          "src/bin/todo.js",
+          "test/todo.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [
+          "test/tmp"
+        ],
+        "validation": [
+          "node --test test/todo.test.js",
+          "node --test"
+        ],
+        "dependsOn": [
+          "todo-store"
+        ],
+        "type": "create",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": [],
+        "timeoutSeconds": 120,
+        "successCriteria": [
+          "node --test test/todo.test.js exits 0",
+          "node --test (full suite) exits 0, so test/greeting.test.js still passes",
+          "All five commands and every parse error path are covered"
+        ],
+        "notes": "`io.dir` is required for every runCommand call in the tests — an omitted dir would default to process.cwd() and touch the project-root .todos.json. Keep parseArgs free of any file access so the parser cases in the test are safe."
+      },
+      {
+        "id": "todo-bin-entry",
+        "title": "Wire the todo binary into package.json",
+        "description": "Register the CLI so `npx todo` / `npm exec todo` and `node src/bin/todo.js` run it, and guard the registration with a test so the bin path cannot drift away from the entry point.",
+        "context": [
+          {
+            "path": "package.json",
+            "reason": "the bin entry and files allowlist are added here"
+          },
+          {
+            "path": "src/bin/todo.js",
+            "reason": "confirms the exact path the bin entry must point at"
+          },
+          {
+            "path": "test/greeting.test.js",
+            "reason": "shows the node:test style the new package test follows"
+          }
+        ],
+        "edits": [
+          {
+            "anchor": "  \"scripts\": {\n    \"test\": \"node --test\"\n  }",
+            "change": "Add two sibling keys after the \"scripts\" object, keeping valid JSON: a `\"bin\": { \"todo\": \"src/bin/todo.js\" }` entry pointing at the entry point, and a `\"files\": [\"src/\", \"README.md\"]` array so the throwaway todo store is not published. Leave the existing \"name\", \"type\" and \"scripts\" untouched.",
+            "op": "modify",
+            "path": "package.json",
+            "anchorOccurrences": 1
+          },
+          {
+            "change": "node:test file with a single test 'package.json registers the todo binary'. Import `test` from 'node:test', `assert` from 'node:assert/strict', `access` and `readFile` from 'node:fs/promises', and `fileURLToPath` from 'node:url'. Read the manifest with `JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))`, then assert `pkg.bin.todo === 'src/bin/todo.js'`, assert `await access(fileURLToPath(new URL('../src/bin/todo.js', import.meta.url)))` does not reject (use `assert.doesNotReject`), and assert `pkg.scripts.test === 'node --test'` so the guard cannot be weakened by renaming the test script.",
+            "op": "create",
+            "path": "test/package.test.js"
+          }
+        ],
+        "verify": [
+          {
+            "args": [
+              "--test",
+              "test/package.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "kind": "proves-change",
+            "timeoutSeconds": 60,
+            "baselineExit": 1
+          },
+          {
+            "args": [
+              "--test"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "kind": "regression-guard",
+            "timeoutSeconds": 120,
+            "baselineExit": 0
+          }
+        ],
+        "instructions": [
+          "In package.json, at the text `  \"scripts\": {\n    \"test\": \"node --test\"\n  }`: Add two sibling keys after the \"scripts\" object, keeping valid JSON: a `\"bin\": { \"todo\": \"src/bin/todo.js\" }` entry pointing at the entry point, and a `\"files\": [\"src/\", \"README.md\"]` array so the throwaway todo store is not published. Leave the existing \"name\", \"type\" and \"scripts\" untouched.",
+          "Create test/package.test.js: node:test file with a single test 'package.json registers the todo binary'. Import `test` from 'node:test', `assert` from 'node:assert/strict', `access` and `readFile` from 'node:fs/promises', and `fileURLToPath` from 'node:url'. Read the manifest with `JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))`, then assert `pkg.bin.todo === 'src/bin/todo.js'`, assert `await access(fileURLToPath(new URL('../src/bin/todo.js', import.meta.url)))` does not reject (use `assert.doesNotReject`), and assert `pkg.scripts.test === 'node --test'` so the guard cannot be weakened by renaming the test script."
+        ],
+        "readFile": [
+          "package.json",
+          "src/bin/todo.js",
+          "test/greeting.test.js"
+        ],
+        "writeFile": [
+          "package.json",
+          "test/package.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [],
+        "validation": [
+          "node --test test/package.test.js",
+          "node --test"
+        ],
+        "dependsOn": [
+          "todo-cli"
+        ],
+        "type": "modify",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": [],
+        "timeoutSeconds": 60,
+        "successCriteria": [
+          "node --test test/package.test.js exits 0: package.json is valid JSON, bin.todo is src/bin/todo.js and that file exists",
+          "node --test (full suite) still exits 0"
+        ],
+        "notes": "npm itself is not executable in this environment, so the bin entry cannot be exercised via `npm exec` here — validity is checked by parsing package.json in the test and by the bin script's own unit tests."
+      },
+      {
+        "id": "todo-readme",
+        "title": "Document the todo command in the README",
+        "description": "Replace the bare one-liner README with usage documentation for the new tool: what it is, the storage file, every command, the --pending flag, the TODO_DIR override, the temporary test dirs note and the test command.",
+        "context": [
+          {
+            "path": "README.md",
+            "reason": "the section is replaced here"
+          },
+          {
+            "path": "src/todo.js",
+            "reason": "so the documented commands, the USAGE text and TODO_DIR match the implementation exactly",
+            "symbols": [
+              "runCommand",
+              "parseArgs",
+              "USAGE",
+              "resolveDataDir"
+            ]
+          }
+        ],
+        "edits": [
+          {
+            "anchor": "## Tests\n\n    npm test",
+            "change": "Keep the `# demo` heading and the intro sentence. Replace the `## Tests` section with a `## todo` section placed before it, containing: a description of the tool; a note that todos are stored in a `.todos.json` file at the current working directory (and in `TODO_DIR` when that variable is set); how to run it (`node src/bin/todo.js <command>` plus `npx todo <command>` thanks to the bin entry); a fenced `sh` block with the commands exactly as `node src/bin/todo.js add \"buy milk\"`, `node src/bin/todo.js list`, `node src/bin/todo.js list --pending`, `node src/bin/todo.js done 1`, `node src/bin/todo.js remove 1`; a sample `list` output block showing a `✓` prefix on the done row and no prefix on the pending row; a sentence that `--pending` hides items already marked done; and a sentence that the tests use temporary directories under `test/tmp/` and never touch the project-root `.todos.json`. Then re-add a `## Tests` section with the indented `npm test` line so the existing content is preserved.",
+            "op": "modify",
+            "path": "README.md",
+            "anchorOccurrences": 1
+          }
+        ],
+        "verify": [
+          {
+            "args": [
+              "-q",
+              "-e",
+              "todo",
+              "-e",
+              "add",
+              "-e",
+              "list",
+              "-e",
+              "--pending",
+              "-e",
+              "done",
+              "-e",
+              "remove",
+              "-e",
+              ".todos.json",
+              "README.md"
+            ],
+            "command": "grep",
+            "cwd": ".",
+            "kind": "proves-change",
+            "timeoutSeconds": 60,
+            "baselineExit": 1
+          },
+          {
+            "args": [
+              "--test"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "kind": "regression-guard",
+            "timeoutSeconds": 120,
+            "baselineExit": 0
+          }
+        ],
+        "instructions": [
+          "In README.md, at the text `## Tests\n\n    npm test`: Keep the `# demo` heading and the intro sentence. Replace the `## Tests` section with a `## todo` section placed before it, containing: a description of the tool; a note that todos are stored in a `.todos.json` file at the current working directory (and in `TODO_DIR` when that variable is set); how to run it (`node src/bin/todo.js <command>` plus `npx todo <command>` thanks to the bin entry); a fenced `sh` block with the commands exactly as `node src/bin/todo.js add \"buy milk\"`, `node src/bin/todo.js list`, `node src/bin/todo.js list --pending`, `node src/bin/todo.js done 1`, `node src/bin/todo.js remove 1`; a sample `list` output block showing a `✓` prefix on the done row and no prefix on the pending row; a sentence that `--pending` hides items already marked done; and a sentence that the tests use temporary directories under `test/tmp/` and never touch the project-root `.todos.json`. Then re-add a `## Tests` section with the indented `npm test` line so the existing content is preserved."
+        ],
+        "readFile": [
+          "README.md",
+          "src/todo.js"
+        ],
+        "writeFile": [
+          "README.md"
+        ],
+        "deleteFile": [],
+        "createDir": [],
+        "validation": [
+          "grep -q -e todo -e add -e list -e --pending -e done -e remove -e .todos.json README.md",
+          "node --test"
+        ],
+        "dependsOn": [
+          "todo-cli",
+          "todo-bin-entry"
+        ],
+        "type": "modify",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": [],
+        "timeoutSeconds": 60,
+        "successCriteria": [
+          "README mentions every command: todo add, todo list, --pending, todo done, todo remove",
+          "README states that todos live in .todos.json and that the tests use temporary directories",
+          "The existing npm test line is still present and node --test exits 0"
+        ]
+      }
+    ],
+    "independentGroups": [
+      [
+        "todo-store"
+      ],
+      [
+        "todo-cli"
+      ],
+      [
+        "todo-bin-entry"
+      ],
+      [
+        "todo-readme"
+      ]
+    ],
+    "estimatedWorkers": 1,
+    "contracts": [
+      {
+        "consumedBy": [
+          "todo-cli"
+        ],
+        "id": "todo-data-shape",
+        "producedBy": "todo-store",
+        "statement": "src/todo-store.js is the only module that touches the filesystem. It stores todos as a JSON array of `{ \"id\": <integer starting at 1, never reused within a file>, \"text\": <string>, \"done\": <boolean> }` objects, written as pretty-printed JSON (2-space indent) with a trailing newline to `<dir>/.todos.json`. A missing file reads as an empty array. Exported API: `CHECK_MARK` ('✓'), `storePath(dir)`, `readTodos(dir)`, `writeTodos(dir, todos)`, `addTodo(dir, text)`, `completeTodo(dir, id)`, `deleteTodo(dir, id)`, `formatTodo(todo)`, `renderList(todos, { pendingOnly })`."
+      },
+      {
+        "consumedBy": [
+          "todo-readme"
+        ],
+        "id": "todo-cli-output",
+        "producedBy": "todo-cli",
+        "statement": "src/todo.js exports `parseArgs(argv)` returning `{ command, text, id, pendingOnly, error }` (error is null when the argv is valid) and `runCommand(argv, io)` where io is `{ dir }`; runCommand returns exactly the string that bin/todo.js prints followed by a newline — no trailing newline inside the returned string. Output strings: add -> `Added <id>: <text>`; list -> the renderList output (empty string when nothing to show); done -> `Done <id>: <text>` or `No todo with id <id>`; remove -> `Removed <id>: <text>` or `No todo with id <id>`; any parse error or unknown command -> the exported `USAGE` constant, which bin/todo.js writes to stderr and exits 1 on. When io.dir is not supplied runCommand defaults to resolveDataDir()."
+      },
+      {
+        "consumedBy": [
+          "todo-readme"
+        ],
+        "id": "todo-data-dir",
+        "producedBy": "todo-cli",
+        "statement": "The directory holding `.todos.json` is the value of the `TODO_DIR` environment variable when it is set and non-empty, otherwise the current working directory. Both the default and the env override are plain filesystem paths, never file:// URLs (temp directories created by the tests are passed to runCommand as such paths)."
+      }
+    ]
+  }
+}

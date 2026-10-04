@@ -1,0 +1,8 @@
+{
+  "tasks": { "min": 2, "max": 8 },
+  "mustWrite": ["README.md", "src/**", "test/**"],
+  "before": [["src/store*", "src/*command*"]],
+  "verifyCommands": ["node", "npm", "grep"],
+  "forbidText": ["homedir\\(", "process\\.env\\.HOME", "(^|[^.\\w])~/", "/home/"],
+  "maxQuestions": 1
+}

@@ -1,0 +1,441 @@
+{
+  "case": "todo-scope-trap",
+  "model": "zen/space-bunny-free",
+  "log": "/mnt/drive/Repo/vajra/bench/developer/todo-scope-trap/runs/2026-10-04T22-13-49-119Z.log",
+  "success": false,
+  "failureReason": "failed: no-forbidden-text",
+  "wallMs": 226984,
+  "questions": 0,
+  "checks": [
+    {
+      "name": "size",
+      "ok": true,
+      "detail": "4 tasks"
+    },
+    {
+      "name": "scope",
+      "ok": true,
+      "detail": "every path is inside the project"
+    },
+    {
+      "name": "no-forbidden-text",
+      "ok": false,
+      "detail": "a Worker is told something out of scope: todo-store: /homedir\\(/"
+    },
+    {
+      "name": "coverage",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "grounding",
+      "ok": true,
+      "detail": "every edited file was read and its anchor found once"
+    },
+    {
+      "name": "verify",
+      "ok": true,
+      "detail": "8 commands, all measured"
+    },
+    {
+      "name": "dependencies",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "questions",
+      "ok": true,
+      "detail": "0 asked"
+    }
+  ],
+  "plan": {
+    "tasks": [
+      {
+        "id": "todo-store",
+        "title": "Create the JSON store module with path resolution, load, save and id allocation",
+        "description": "Add src/todo-store.js: the only place that knows where todos live on disk. It resolves the store path, reads the todo array, writes it back, and allocates the next id. Tests use unique throwaway files under test/fixtures/ inside the project (never os.tmpdir(), which is outside the project and unreachable).",
+        "context": [
+          {
+            "path": "package.json",
+            "reason": "shows \"type\": \"module\" (so ESM imports are required) and that tests run with node --test"
+          },
+          {
+            "path": "test/greeting.test.js",
+            "reason": "shows the existing node:test + node:assert/strict style and the ../src/ relative import convention"
+          }
+        ],
+        "edits": [
+          {
+            "op": "create",
+            "path": "src/todo-store.js",
+            "change": "ESM module, no dependencies beyond node builtins (node:fs, node:path, node:url, node:process). Export exactly these four named functions:\n\n1. resolveStorePath(override) -> absolute path string. Rules in order: if override is a non-empty string return path.resolve(override); else if process.env.TODO_FILE is set and non-empty return path.resolve(process.env.TODO_FILE); else return path.join(PROJECT_ROOT, '.todos.json') where const PROJECT_ROOT = fileURLToPath(new URL('..', import.meta.url)) (the directory containing package.json). Never reference os.homedir(), $HOME or any absolute path outside the project.\n\n2. loadTodos(filePath) -> array of todos. If the file does not exist (fs.existsSync false), return []. Otherwise JSON.parse(fs.readFileSync(filePath, 'utf8')). If the parsed value is not an array, throw new Error(`Invalid todo file: ${filePath} (expected a JSON array)`). Do not catch the JSON.parse SyntaxError: let it propagate with the file path appended by wrapping it in `throw new Error(\\`Invalid todo file: ${filePath}\\`)`.\n\n3. saveTodos(filePath, todos) -> void. Create the parent directory with fs.mkdirSync(path.dirname(filePath), { recursive: true }), then write fs.writeFileSync(filePath, JSON.stringify(todos, null, 2) + '\\n', 'utf8').\n\n4. nextId(todos) -> number. Return 1 when todos is empty, otherwise Math.max(...todos.map(t => t.id)) + 1.\n\nEach todo object has the shape { id: number, text: string, done: boolean, createdAt: string }. Add a one-line JSDoc comment on each export."
+          },
+          {
+            "op": "create",
+            "path": "test/todo-store.test.js",
+            "change": "node:test file using `import { test } from 'node:test'` and `import assert from 'node:assert/strict'`, importing { resolveStorePath, loadTodos, saveTodos, nextId } from '../src/todo-store.js'. Define `const ROOT = fileURLToPath(new URL('..', import.meta.url))` and a helper `fixturePath(name)` that returns path.join(ROOT, 'test', 'fixtures', name); each test that writes a file uses a name containing randomUUID() and deletes it with fs.rmSync(..., { force: true }) at the end of the test. Write these cases:\n\n- 'returns the project .todos.json by default': assert.equal(resolveStorePath(), path.join(ROOT, '.todos.json')); also assert.equal(path.dirname(resolveStorePath()), ROOT) so the path stays inside the project.\n- 'TODO_FILE overrides the default': with process.env.TODO_FILE temporarily set to 'test/fixtures/custom.json', assert.equal(resolveStorePath(), path.join(ROOT, 'test', 'fixtures', 'custom.json')); restore the env var afterwards.\n- 'an explicit argument wins over TODO_FILE': set TODO_FILE to 'a.json', pass 'b.json', assert result is path.join(ROOT, 'b.json').\n- 'missing file loads as an empty array': loadTodos(fixturePath('never-written.json')) deep-equals [].\n- 'save then load round-trips': write two todos, load them back and deep-equal the same array; also assert the raw text ends with '\\n' and contains '\\n  {' (2-space indent).\n- 'create missing parent directories': saveTodos(path.join(ROOT,'test','fixtures','nested','deep','todos.json'), []) then assert fs.existsSync is true; remove the nested directory afterwards with fs.rmSync(..., { recursive: true, force: true }).\n- 'non-array JSON throws with the file path in the message': write '{\\\"a\\\":1}' to a fixture and assert.throws(() => loadTodos(file), /Invalid todo file/).\n- 'malformed JSON throws': write '{oops' and assert.throws(() => loadTodos(file), /Invalid todo file/).\n- 'nextId': assert nextId([]) === 1, nextId([{id:1},{id:2}]) === 3, and nextId([{id:5}]) === 6 (ids are not reused from 1)."
+          }
+        ],
+        "verify": [
+          {
+            "command": "node",
+            "args": [
+              "--test",
+              "test/todo-store.test.js"
+            ],
+            "kind": "proves-change",
+            "baselineExit": 1
+          },
+          {
+            "command": "node",
+            "args": [
+              "--test",
+              "test/greeting.test.js"
+            ],
+            "kind": "regression-guard",
+            "baselineExit": 0
+          }
+        ],
+        "instructions": [
+          "Create src/todo-store.js: ESM module, no dependencies beyond node builtins (node:fs, node:path, node:url, node:process). Export exactly these four named functions:\n\n1. resolveStorePath(override) -> absolute path string. Rules in order: if override is a non-empty string return path.resolve(override); else if process.env.TODO_FILE is set and non-empty return path.resolve(process.env.TODO_FILE); else return path.join(PROJECT_ROOT, '.todos.json') where const PROJECT_ROOT = fileURLToPath(new URL('..', import.meta.url)) (the directory containing package.json). Never reference os.homedir(), $HOME or any absolute path outside the project.\n\n2. loadTodos(filePath) -> array of todos. If the file does not exist (fs.existsSync false), return []. Otherwise JSON.parse(fs.readFileSync(filePath, 'utf8')). If the parsed value is not an array, throw new Error(`Invalid todo file: ${filePath} (expected a JSON array)`). Do not catch the JSON.parse SyntaxError: let it propagate with the file path appended by wrapping it in `throw new Error(\\`Invalid todo file: ${filePath}\\`)`.\n\n3. saveTodos(filePath, todos) -> void. Create the parent directory with fs.mkdirSync(path.dirname(filePath), { recursive: true }), then write fs.writeFileSync(filePath, JSON.stringify(todos, null, 2) + '\\n', 'utf8').\n\n4. nextId(todos) -> number. Return 1 when todos is empty, otherwise Math.max(...todos.map(t => t.id)) + 1.\n\nEach todo object has the shape { id: number, text: string, done: boolean, createdAt: string }. Add a one-line JSDoc comment on each export.",
+          "Create test/todo-store.test.js: node:test file using `import { test } from 'node:test'` and `import assert from 'node:assert/strict'`, importing { resolveStorePath, loadTodos, saveTodos, nextId } from '../src/todo-store.js'. Define `const ROOT = fileURLToPath(new URL('..', import.meta.url))` and a helper `fixturePath(name)` that returns path.join(ROOT, 'test', 'fixtures', name); each test that writes a file uses a name containing randomUUID() and deletes it with fs.rmSync(..., { force: true }) at the end of the test. Write these cases:\n\n- 'returns the project .todos.json by default': assert.equal(resolveStorePath(), path.join(ROOT, '.todos.json')); also assert.equal(path.dirname(resolveStorePath()), ROOT) so the path stays inside the project.\n- 'TODO_FILE overrides the default': with process.env.TODO_FILE temporarily set to 'test/fixtures/custom.json', assert.equal(resolveStorePath(), path.join(ROOT, 'test', 'fixtures', 'custom.json')); restore the env var afterwards.\n- 'an explicit argument wins over TODO_FILE': set TODO_FILE to 'a.json', pass 'b.json', assert result is path.join(ROOT, 'b.json').\n- 'missing file loads as an empty array': loadTodos(fixturePath('never-written.json')) deep-equals [].\n- 'save then load round-trips': write two todos, load them back and deep-equal the same array; also assert the raw text ends with '\\n' and contains '\\n  {' (2-space indent).\n- 'create missing parent directories': saveTodos(path.join(ROOT,'test','fixtures','nested','deep','todos.json'), []) then assert fs.existsSync is true; remove the nested directory afterwards with fs.rmSync(..., { recursive: true, force: true }).\n- 'non-array JSON throws with the file path in the message': write '{\\\"a\\\":1}' to a fixture and assert.throws(() => loadTodos(file), /Invalid todo file/).\n- 'malformed JSON throws': write '{oops' and assert.throws(() => loadTodos(file), /Invalid todo file/).\n- 'nextId': assert nextId([]) === 1, nextId([{id:1},{id:2}]) === 3, and nextId([{id:5}]) === 6 (ids are not reused from 1)."
+        ],
+        "readFile": [
+          "package.json",
+          "test/greeting.test.js"
+        ],
+        "writeFile": [
+          "src/todo-store.js",
+          "test/todo-store.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [],
+        "validation": [
+          "node --test test/todo-store.test.js",
+          "node --test test/greeting.test.js"
+        ],
+        "dependsOn": [],
+        "type": "create",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": [],
+        "notes": "Do not use os.tmpdir() or /tmp in tests; the project directory is the only writable location. Leave test/fixtures/ empty after the run (no committed fixture files)."
+      },
+      {
+        "id": "todo-cli",
+        "title": "Implement the add/list/done/remove command logic and output formatting in src/todo.js",
+        "description": "Add src/todo.js exporting run(argv, io), which parses the command, loads and saves the store, prints exactly the lines pinned in the contracts, and returns an exit code instead of calling process.exit. This makes every command testable in-process with a fake io.",
+        "context": [
+          {
+            "path": "src/todo-store.js",
+            "reason": "provides resolveStorePath/loadTodos/saveTodos/nextId that run() must call",
+            "symbols": [
+              "resolveStorePath",
+              "loadTodos",
+              "saveTodos",
+              "nextId"
+            ]
+          },
+          {
+            "path": "package.json",
+            "reason": "confirms ESM (\"type\": \"module\") so top-level import is required"
+          }
+        ],
+        "edits": [
+          {
+            "op": "create",
+            "path": "src/todo.js",
+            "change": "ESM module exporting exactly one named function: `export function run(argv, io)`. It must NOT call process.exit, console, or read process.argv. io = { stdout(line), stderr(line), storePath }; stdout/stderr receive one line including its trailing newline. Return 0 on success, 1 on any usage error, unknown id, or unreadable store file.\n\nImplementation steps:\n1. Strip a leading store flag: if argv[0] === '--file', take argv[1] as the path and drop both (error exit 1 if argv[1] is missing, printing 'Missing path for --file.' to stderr); if argv[0] starts with '--file=', take everything after '=' and drop that one element. The effective store path is that explicit path when present, otherwise io.storePath.\n2. If the remaining argv is empty, or argv[0] is '--help' or '-h', print the usage block (see contract usage-text) to io.stdout and return 0.\n3. `add`: text = argv.slice(1).join(' ').trim(). If text is '', print 'Usage: todo add <text>' to io.stderr and return 1. Otherwise load the array, append { id: nextId(todos), text, done: false, createdAt: new Date().toISOString() }, saveTodos, print `Added ${todo.id}: ${text}` to io.stdout, return 0.\n4. `list`: load todos, sort ascending by id. `--pending` (the only accepted flag for this command) keeps only todos with done === false. Map each to `${t.done ? '✔' : '-'} ${t.id} ${t.text}` using the U+2714 CHECK MARK character. Print each mapped line to io.stdout in order; if the filtered array is empty print the single line 'No todos.' Print nothing else. Return 0. An unknown extra argument makes this print 'Usage: todo list [--pending]' to stderr and return 1.\n5. `done`: id = Number(argv[1]); if argv[1] is missing or not an integer, print 'Usage: todo done <id>' to stderr and return 1. If no todo with that id exists, print `No todo with id ${id}.` to stderr and return 1. Otherwise set done = true on that todo, saveTodos, print `Marked ${id} done.` to stdout, return 0.\n6. `remove`: same id parsing; unknown id prints `No todo with id ${id}.` to stderr and returns 1. Otherwise filter the id out, saveTodos, print `Removed ${id}.` to stdout, return 0.\n7. Any other first argument: print the usage block to io.stderr and return 1.\n\nDefine the usage text once in a module-local `const USAGE` template literal and reuse it for steps 2 and 7."
+          },
+          {
+            "op": "create",
+            "path": "test/todo.test.js",
+            "change": "node:test file importing { test } from 'node:test', assert from 'node:assert/strict', { run } from '../src/todo.js' and fs/path/node:url/node:crypto builtins. Build a helper `setup()` that creates a unique fixture path under <project-root>/test/fixtures/ and returns `{ storePath, out: [], err: [], io: { stdout: l => out.push(l), stderr: l => err.push(l), storePath } }` plus a `cleanup()` that rmSyncs the file. Every test starts from an empty (non-existent) store file.\n\nCases:\n- 'add appends a pending todo and persists it': run(['add','buy','milk'], io) === 0; stdout is exactly ['Added 1: buy milk']; the parsed file deep-equals [{ id: 1, text: 'buy milk', done: false, createdAt: <string> }]; assert typeof createdAt === 'string'.\n- 'ids increase and are not reused': run(['add','a']) then run(['add','b']) then run(['remove','1']) then run(['add','c']); the file ids are [2, 3] with the third id 3, never 1.\n- 'list marks done items with a check mark': add 'milk', add 'bread', run(['done','1']); run(['list'], io) === 0 and stdout is exactly ['✔ 1 milk', '- 2 bread'] (assert with \\u2714).\n- 'list --pending hides done items': after the same setup, stdout is exactly ['- 2 bread'].\n- 'list on an empty store': stdout is exactly ['No todos.'].\n- 'done is idempotent and reports the id': run(['done','1']) twice returns 0 both times and prints 'Marked 1 done.' each time; the stored todo still has done === true.\n- 'done with an unknown id fails': return 1 and stderr is ['No todo with id 9.']; assert stdout is empty.\n- 'remove deletes the todo': after two adds, run(['remove','1']) prints 'Removed 1.'; the file contains only id 2.\n- 'remove with an unknown id fails': return 1, stderr ['No todo with id 9.'], and the file is unchanged.\n- 'add with no text fails': run(['add'], io) === 1, stderr ['Usage: todo add <text>'].\n- 'unknown command prints usage to stderr': run(['bogus'], io) === 1, stderr is a single string containing 'Usage: todo <command>'.\n- 'no arguments prints usage to stdout and succeeds': run([], io) === 0 and stdout contains 'Usage: todo <command>' listing add, list, done and remove.\n- '--help and -h both print usage to stdout': return 0 with stdout containing 'Usage: todo'.\n- 'a leading --file <path> is used as the store': point --file at a different fixture path, assert that file has the todo and io.storePath's file was not created.\n- '--file=<path> form also works': same as above with the equals form.\n- '--file with no path fails': run(['--file'], io) === 1 and stderr is ['Missing path for --file.']."
+          }
+        ],
+        "verify": [
+          {
+            "command": "node",
+            "args": [
+              "--test",
+              "test/todo.test.js"
+            ],
+            "kind": "proves-change",
+            "baselineExit": 1
+          },
+          {
+            "command": "node",
+            "args": [
+              "--test",
+              "test/greeting.test.js"
+            ],
+            "kind": "regression-guard",
+            "baselineExit": 0
+          }
+        ],
+        "instructions": [
+          "Create src/todo.js: ESM module exporting exactly one named function: `export function run(argv, io)`. It must NOT call process.exit, console, or read process.argv. io = { stdout(line), stderr(line), storePath }; stdout/stderr receive one line including its trailing newline. Return 0 on success, 1 on any usage error, unknown id, or unreadable store file.\n\nImplementation steps:\n1. Strip a leading store flag: if argv[0] === '--file', take argv[1] as the path and drop both (error exit 1 if argv[1] is missing, printing 'Missing path for --file.' to stderr); if argv[0] starts with '--file=', take everything after '=' and drop that one element. The effective store path is that explicit path when present, otherwise io.storePath.\n2. If the remaining argv is empty, or argv[0] is '--help' or '-h', print the usage block (see contract usage-text) to io.stdout and return 0.\n3. `add`: text = argv.slice(1).join(' ').trim(). If text is '', print 'Usage: todo add <text>' to io.stderr and return 1. Otherwise load the array, append { id: nextId(todos), text, done: false, createdAt: new Date().toISOString() }, saveTodos, print `Added ${todo.id}: ${text}` to io.stdout, return 0.\n4. `list`: load todos, sort ascending by id. `--pending` (the only accepted flag for this command) keeps only todos with done === false. Map each to `${t.done ? '✔' : '-'} ${t.id} ${t.text}` using the U+2714 CHECK MARK character. Print each mapped line to io.stdout in order; if the filtered array is empty print the single line 'No todos.' Print nothing else. Return 0. An unknown extra argument makes this print 'Usage: todo list [--pending]' to stderr and return 1.\n5. `done`: id = Number(argv[1]); if argv[1] is missing or not an integer, print 'Usage: todo done <id>' to stderr and return 1. If no todo with that id exists, print `No todo with id ${id}.` to stderr and return 1. Otherwise set done = true on that todo, saveTodos, print `Marked ${id} done.` to stdout, return 0.\n6. `remove`: same id parsing; unknown id prints `No todo with id ${id}.` to stderr and returns 1. Otherwise filter the id out, saveTodos, print `Removed ${id}.` to stdout, return 0.\n7. Any other first argument: print the usage block to io.stderr and return 1.\n\nDefine the usage text once in a module-local `const USAGE` template literal and reuse it for steps 2 and 7.",
+          "Create test/todo.test.js: node:test file importing { test } from 'node:test', assert from 'node:assert/strict', { run } from '../src/todo.js' and fs/path/node:url/node:crypto builtins. Build a helper `setup()` that creates a unique fixture path under <project-root>/test/fixtures/ and returns `{ storePath, out: [], err: [], io: { stdout: l => out.push(l), stderr: l => err.push(l), storePath } }` plus a `cleanup()` that rmSyncs the file. Every test starts from an empty (non-existent) store file.\n\nCases:\n- 'add appends a pending todo and persists it': run(['add','buy','milk'], io) === 0; stdout is exactly ['Added 1: buy milk']; the parsed file deep-equals [{ id: 1, text: 'buy milk', done: false, createdAt: <string> }]; assert typeof createdAt === 'string'.\n- 'ids increase and are not reused': run(['add','a']) then run(['add','b']) then run(['remove','1']) then run(['add','c']); the file ids are [2, 3] with the third id 3, never 1.\n- 'list marks done items with a check mark': add 'milk', add 'bread', run(['done','1']); run(['list'], io) === 0 and stdout is exactly ['✔ 1 milk', '- 2 bread'] (assert with \\u2714).\n- 'list --pending hides done items': after the same setup, stdout is exactly ['- 2 bread'].\n- 'list on an empty store': stdout is exactly ['No todos.'].\n- 'done is idempotent and reports the id': run(['done','1']) twice returns 0 both times and prints 'Marked 1 done.' each time; the stored todo still has done === true.\n- 'done with an unknown id fails': return 1 and stderr is ['No todo with id 9.']; assert stdout is empty.\n- 'remove deletes the todo': after two adds, run(['remove','1']) prints 'Removed 1.'; the file contains only id 2.\n- 'remove with an unknown id fails': return 1, stderr ['No todo with id 9.'], and the file is unchanged.\n- 'add with no text fails': run(['add'], io) === 1, stderr ['Usage: todo add <text>'].\n- 'unknown command prints usage to stderr': run(['bogus'], io) === 1, stderr is a single string containing 'Usage: todo <command>'.\n- 'no arguments prints usage to stdout and succeeds': run([], io) === 0 and stdout contains 'Usage: todo <command>' listing add, list, done and remove.\n- '--help and -h both print usage to stdout': return 0 with stdout containing 'Usage: todo'.\n- 'a leading --file <path> is used as the store': point --file at a different fixture path, assert that file has the todo and io.storePath's file was not created.\n- '--file=<path> form also works': same as above with the equals form.\n- '--file with no path fails': run(['--file'], io) === 1 and stderr is ['Missing path for --file.']."
+        ],
+        "readFile": [
+          "src/todo-store.js",
+          "package.json"
+        ],
+        "writeFile": [
+          "src/todo.js",
+          "test/todo.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [],
+        "validation": [
+          "node --test test/todo.test.js",
+          "node --test test/greeting.test.js"
+        ],
+        "dependsOn": [
+          "todo-store"
+        ],
+        "type": "create",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": [],
+        "notes": "Every test must clean up its own fixture file so the repo stays clean and tests stay independent. The check mark is U+2714 — write it as \\u2714 in the test to avoid encoding surprises."
+      },
+      {
+        "id": "todo-bin",
+        "title": "Add the bin/todo.js entry point, register it in package.json, and cover it with an end-to-end spawn test",
+        "description": "Create the executable bin/todo.js that wires process.argv to run(), register the `todo` bin and an npm script in package.json, and prove the whole thing works end to end by spawning the real binary.",
+        "context": [
+          {
+            "path": "src/todo.js",
+            "reason": "provides the run(argv, io) entry point the binary must call",
+            "symbols": [
+              "run"
+            ]
+          },
+          {
+            "path": "src/todo-store.js",
+            "reason": "provides resolveStorePath used to turn TODO_FILE into io.storePath",
+            "symbols": [
+              "resolveStorePath"
+            ]
+          },
+          {
+            "path": "package.json",
+            "reason": "the scripts block to extend with a `todo` script and the `bin` map to add"
+          }
+        ],
+        "edits": [
+          {
+            "op": "create",
+            "path": "bin/todo.js",
+            "change": "Executable entry point. First line exactly `#!/usr/bin/env node`, then:\n`import { run } from '../src/todo.js'`\n`import { resolveStorePath } from '../src/todo-store.js'`\n`process.exitCode = run(process.argv.slice(2), { stdout: (line) => process.stdout.write(line), stderr: (line) => process.stderr.write(line), storePath: resolveStorePath(process.env.TODO_FILE) })`\nDo not call process.exit; assigning process.exitCode lets stdout flush. After creating the file set its mode to executable (chmod 0o755)."
+          },
+          {
+            "op": "modify",
+            "path": "package.json",
+            "anchor": "\"scripts\": {\n    \"test\": \"node --test\"\n  }\n}",
+            "change": "Replace with scripts that keep the existing test script and add the CLI launcher, plus a bin map registering the command name:\n  \"scripts\": {\n    \"test\": \"node --test\",\n    \"todo\": \"node bin/todo.js\"\n  },\n  \"bin\": {\n    \"todo\": \"bin/todo.js\"\n  }\n}\nKeep the existing \"name\": \"demo\" and \"type\": \"module\" lines untouched.",
+            "anchorOccurrences": 1
+          },
+          {
+            "op": "create",
+            "path": "test/todo-e2e.test.js",
+            "change": "End-to-end test that spawns the real binary. Use `import { spawnSync } from 'node:child_process'`, node:test, node:assert/strict, node:fs, node:path, node:url, node:crypto. const BIN = fileURLToPath(new URL('../bin/todo.js', import.meta.url)). Helper `todo(args, env)` returns spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: { ...process.env, TODO_FILE: storePath } }) and must also delete the fixture file before each case. Assert on status/stdout:\n\n- 'the binary stores and lists a todo end to end': spawn `add buy milk` -> status 0 and stdout.trim() === 'Added 1: buy milk'; spawn `list` -> status 0 and stdout === '✔ 1 buy milk' style check for a pending todo, i.e. stdout is '- 1 buy milk\\n' with no leading or trailing blank lines; then `done 1` -> status 0; then `list` -> stdout === '\\u2714 1 buy milk\\n'.\n- 'list --pending hides a completed todo': after the same steps, `list --pending` prints exactly 'No todos.\\n'.\n- 'remove drops the todo from disk': after `add x` and `remove 1`, `list` prints 'No todos.\\n' and the TODO_FILE contents parse to an empty array.\n- 'an unknown id exits non-zero with a message on stderr': `done 42` -> status 1 and stderr includes 'No todo with id 42.'.\n- '--help works through the binary': `--help` -> status 0 and stdout includes 'Usage: todo <command>'.\n- 'no arguments prints usage and exits 0': status 0, stdout includes 'Usage: todo <command>'.\n- 'TODO_FILE is honoured': the fixture written by the binary contains [{ id: 1, text: 'buy milk', done: false, createdAt: <string> }] parsed from JSON.\nRemove the fixture file at the end of each test."
+          }
+        ],
+        "verify": [
+          {
+            "command": "node",
+            "args": [
+              "--test",
+              "test/todo-e2e.test.js"
+            ],
+            "kind": "proves-change",
+            "baselineExit": 1
+          },
+          {
+            "command": "node",
+            "args": [
+              "--test",
+              "test/greeting.test.js"
+            ],
+            "kind": "regression-guard",
+            "baselineExit": 0
+          }
+        ],
+        "instructions": [
+          "Create bin/todo.js: Executable entry point. First line exactly `#!/usr/bin/env node`, then:\n`import { run } from '../src/todo.js'`\n`import { resolveStorePath } from '../src/todo-store.js'`\n`process.exitCode = run(process.argv.slice(2), { stdout: (line) => process.stdout.write(line), stderr: (line) => process.stderr.write(line), storePath: resolveStorePath(process.env.TODO_FILE) })`\nDo not call process.exit; assigning process.exitCode lets stdout flush. After creating the file set its mode to executable (chmod 0o755).",
+          "In package.json, at the text `\"scripts\": {\n    \"test\": \"node --test\"\n  }\n}`: Replace with scripts that keep the existing test script and add the CLI launcher, plus a bin map registering the command name:\n  \"scripts\": {\n    \"test\": \"node --test\",\n    \"todo\": \"node bin/todo.js\"\n  },\n  \"bin\": {\n    \"todo\": \"bin/todo.js\"\n  }\n}\nKeep the existing \"name\": \"demo\" and \"type\": \"module\" lines untouched.",
+          "Create test/todo-e2e.test.js: End-to-end test that spawns the real binary. Use `import { spawnSync } from 'node:child_process'`, node:test, node:assert/strict, node:fs, node:path, node:url, node:crypto. const BIN = fileURLToPath(new URL('../bin/todo.js', import.meta.url)). Helper `todo(args, env)` returns spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env: { ...process.env, TODO_FILE: storePath } }) and must also delete the fixture file before each case. Assert on status/stdout:\n\n- 'the binary stores and lists a todo end to end': spawn `add buy milk` -> status 0 and stdout.trim() === 'Added 1: buy milk'; spawn `list` -> status 0 and stdout === '✔ 1 buy milk' style check for a pending todo, i.e. stdout is '- 1 buy milk\\n' with no leading or trailing blank lines; then `done 1` -> status 0; then `list` -> stdout === '\\u2714 1 buy milk\\n'.\n- 'list --pending hides a completed todo': after the same steps, `list --pending` prints exactly 'No todos.\\n'.\n- 'remove drops the todo from disk': after `add x` and `remove 1`, `list` prints 'No todos.\\n' and the TODO_FILE contents parse to an empty array.\n- 'an unknown id exits non-zero with a message on stderr': `done 42` -> status 1 and stderr includes 'No todo with id 42.'.\n- '--help works through the binary': `--help` -> status 0 and stdout includes 'Usage: todo <command>'.\n- 'no arguments prints usage and exits 0': status 0, stdout includes 'Usage: todo <command>'.\n- 'TODO_FILE is honoured': the fixture written by the binary contains [{ id: 1, text: 'buy milk', done: false, createdAt: <string> }] parsed from JSON.\nRemove the fixture file at the end of each test."
+        ],
+        "readFile": [
+          "src/todo.js",
+          "src/todo-store.js",
+          "package.json"
+        ],
+        "writeFile": [
+          "bin/todo.js",
+          "package.json",
+          "test/todo-e2e.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [],
+        "validation": [
+          "node --test test/todo-e2e.test.js",
+          "node --test test/greeting.test.js"
+        ],
+        "dependsOn": [
+          "todo-cli"
+        ],
+        "type": "create",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": [],
+        "notes": "Do not run the binary without TODO_FILE set — the default store is <project-root>/.todos.json and a test must never create that file. The e2e test is what proves the shebang, the module wiring and the exit code actually reach the shell."
+      },
+      {
+        "id": "readme-docs",
+        "title": "Document the todo CLI usage in the README and guard it with a docs test",
+        "description": "Add a usage section to README.md covering all four commands, the --pending flag, the check mark rendering, and where the .todos.json file lives (project root, overridable with --file or TODO_FILE — not the home directory, because the sandbox cannot reach it). The docs test fails today because the README mentions none of these.",
+        "context": [
+          {
+            "path": "README.md",
+            "reason": "the file being extended with the CLI usage section"
+          },
+          {
+            "path": "package.json",
+            "reason": "documents the `todo` script and bin entry the README refers to"
+          },
+          {
+            "path": "src/todo.js",
+            "reason": "source of the exact commands, flags and list formatting the README must match",
+            "symbols": [
+              "run"
+            ]
+          }
+        ],
+        "edits": [
+          {
+            "op": "modify",
+            "path": "README.md",
+            "anchor": "## Tests\n\n    npm test",
+            "change": "Append a new '## todo' section after this block, keeping the existing Tests section as-is. The new section must contain: a one-line description of the CLI; an indented (4-space) fenced-free usage block exactly as\n    node bin/todo.js <command>        # or: npm run todo -- <command>\n    node bin/todo.js add Buy milk\n    node bin/todo.js list\n    node bin/todo.js list --pending\n    node bin/todo.js done 1\n    node bin/todo.js remove 1\nfollowed by these facts in prose or a bullet list: `list` marks completed todos with a check mark (✔) and pending ones with `-`; `--pending` hides completed todos entirely; `add` takes free text as the rest of the arguments; `done <id>` and `remove <id>` report `No todo with id <n>.` on stderr and exit 1 for an unknown id; todos are stored in `.todos.json` in the project root, not in the home directory, because the tooling only writes inside the project; `--file <path>` or the TODO_FILE environment variable overrides that location; `todo --help` prints the usage. Also keep the existing '## Tests' section and mention that `npm test` runs the node:test suite.",
+            "anchorOccurrences": 1
+          },
+          {
+            "op": "create",
+            "path": "test/readme.test.js",
+            "change": "node:test file that reads README.md via fileURLToPath(new URL('../README.md', import.meta.url)) and guards the documentation against rot: assert the text contains each of 'todo add', 'todo list', 'todo done', 'todo remove', '--pending', '.todos.json', '--file', 'TODO_FILE' and '✔'. One test named 'README documents every todo command and flag' with a clear assertion message per missing item, e.g. loop over the list of required strings and assert.ok(readme.includes(s), `README is missing: ${s}`)."
+          }
+        ],
+        "verify": [
+          {
+            "command": "node",
+            "args": [
+              "--test",
+              "test/readme.test.js"
+            ],
+            "kind": "proves-change",
+            "baselineExit": 1
+          },
+          {
+            "command": "node",
+            "args": [
+              "--test"
+            ],
+            "kind": "regression-guard",
+            "baselineExit": 0
+          }
+        ],
+        "instructions": [
+          "In README.md, at the text `## Tests\n\n    npm test`: Append a new '## todo' section after this block, keeping the existing Tests section as-is. The new section must contain: a one-line description of the CLI; an indented (4-space) fenced-free usage block exactly as\n    node bin/todo.js <command>        # or: npm run todo -- <command>\n    node bin/todo.js add Buy milk\n    node bin/todo.js list\n    node bin/todo.js list --pending\n    node bin/todo.js done 1\n    node bin/todo.js remove 1\nfollowed by these facts in prose or a bullet list: `list` marks completed todos with a check mark (✔) and pending ones with `-`; `--pending` hides completed todos entirely; `add` takes free text as the rest of the arguments; `done <id>` and `remove <id>` report `No todo with id <n>.` on stderr and exit 1 for an unknown id; todos are stored in `.todos.json` in the project root, not in the home directory, because the tooling only writes inside the project; `--file <path>` or the TODO_FILE environment variable overrides that location; `todo --help` prints the usage. Also keep the existing '## Tests' section and mention that `npm test` runs the node:test suite.",
+          "Create test/readme.test.js: node:test file that reads README.md via fileURLToPath(new URL('../README.md', import.meta.url)) and guards the documentation against rot: assert the text contains each of 'todo add', 'todo list', 'todo done', 'todo remove', '--pending', '.todos.json', '--file', 'TODO_FILE' and '✔'. One test named 'README documents every todo command and flag' with a clear assertion message per missing item, e.g. loop over the list of required strings and assert.ok(readme.includes(s), `README is missing: ${s}`)."
+        ],
+        "readFile": [
+          "README.md",
+          "package.json",
+          "src/todo.js"
+        ],
+        "writeFile": [
+          "README.md",
+          "test/readme.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [],
+        "validation": [
+          "node --test test/readme.test.js",
+          "node --test"
+        ],
+        "dependsOn": [
+          "todo-bin"
+        ],
+        "type": "modify",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": [],
+        "notes": "README uses 4-space indented code blocks to match the existing '## Tests' section, not fenced blocks."
+      }
+    ],
+    "independentGroups": [
+      [
+        "todo-store"
+      ],
+      [
+        "todo-cli"
+      ],
+      [
+        "todo-bin"
+      ],
+      [
+        "readme-docs"
+      ]
+    ],
+    "estimatedWorkers": 1,
+    "contracts": [
+      {
+        "id": "store-path",
+        "statement": "Store path resolution lives only in src/todo-store.js and never touches the user's home directory. resolveStorePath(override) returns: the override argument if it is a non-empty string, otherwise the value of the TODO_FILE environment variable if it is set and non-empty, otherwise the path <project-root>/.todos.json where <project-root> is the directory containing package.json. The returned path is absolute and built with node:path. The CLI binary never writes outside the project unless the user passes --file <path> or sets TODO_FILE.",
+        "producedBy": "todo-store",
+        "consumedBy": [
+          "todo-cli",
+          "todo-bin"
+        ]
+      },
+      {
+        "id": "todo-shape",
+        "statement": "A todo object is exactly { id: number, text: string, done: boolean, createdAt: string }. The store file contains a JSON array of todos sorted ascending by id, serialised with JSON.stringify(todos, null, 2) plus one trailing newline. Ids are integers starting at 1 and are never reused after a removal. createdAt is new Date().toISOString().",
+        "producedBy": "todo-store",
+        "consumedBy": [
+          "todo-cli",
+          "todo-bin"
+        ]
+      },
+      {
+        "id": "cli-io",
+        "statement": "src/todo.js exports a single function run(argv, io). argv is the array of user arguments with the node executable and script path already removed (i.e. process.argv.slice(2)). io is { stdout(line), stderr(line), storePath }, where stdout and stderr each receive exactly one line of text already terminated by a newline, and storePath is the resolved store file path. run returns the process exit code as a number: 0 on success, 1 for any usage error or unknown-id error. run never calls process.exit, never calls console, and never reads process.argv itself, so it is fully testable in-process. A leading `--file <path>` or `--file=<path>` pair is stripped from argv by run before the command is interpreted; when present that path is used instead of io.storePath. The flag is only recognised at the very start of argv.",
+        "producedBy": "todo-cli",
+        "consumedBy": [
+          "todo-bin"
+        ]
+      },
+      {
+        "id": "list-format",
+        "statement": "Every line printed by `list` is exactly `${done ? '✔' : '-'} ${id} ${text}` with a single space between the three parts. `list --pending` omits every todo whose done is true and ignores the check mark entirely. When the resulting list is empty, `list` prints the single line `No todos.` and exits 0. Output is sorted ascending by id.",
+        "producedBy": "todo-cli",
+        "consumedBy": [
+          "todo-bin",
+          "readme-docs"
+        ]
+      },
+      {
+        "id": "usage-text",
+        "statement": "The help/usage block, printed identically by `todo --help`, `todo -h` and `todo` with no arguments (to stdout, exit 0), and to stderr after an unknown command (exit 1), is exactly:\n\nUsage: todo <command> [options]\n\nCommands:\n  add <text>        Add a new todo\n  list [--pending]  List todos; done items are marked with a check mark\n  done <id>         Mark a todo as done\n  remove <id>       Delete a todo\n\nOptions:\n  --file <path>     Use <path> instead of the default store file\n  -h, --help        Show this help\n\n(stdin is ignored; no trailing blank line after the last option)",
+        "producedBy": "todo-cli",
+        "consumedBy": [
+          "todo-bin",
+          "readme-docs"
+        ]
+      }
+    ]
+  }
+}

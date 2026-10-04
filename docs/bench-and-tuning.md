@@ -39,6 +39,7 @@ One line each; the code and its tests are the detail.
 | Whole-attempt timeout that a pause does not run down; aborts reach in-flight model requests | `worker/execute.ts`, `model/chat.ts` |
 | Tool output cap (command tail, file head) and Worker history trim that never drops the task | `worker/output-cap.ts`, `developer/developer.ts` (`compressMessages`, `pinned`) |
 | Run metrics: wall, critical path, idle, paused, peak context, trims | `packages/vajra/src/bench/metrics.ts`, `bench/result.ts` |
+| `vajra bench-plan <case>`: the Developer alone plans a case, and the plan is checked (no Workers) | `packages/vajra/src/bench/plan-run.ts`, `plan-checks.ts`, `bench/developer/` |
 | Four suites (`wide`, `chain`, `fan`, `mixed`) and the sweep script | `bench/suites/`, `bench/tune.mjs`, `bench/sweeps/` |
 
 The context batches, K0–K5, are built. What each one added:

@@ -11,11 +11,11 @@ Vajra runs a plan of tasks on parallel, sandboxed Workers under a Manager. Read 
 | What a Worker sees and does: prompt, context pack, compaction, checkpoints | `packages/vajra/src/worker/` |
 | The model client, the model catalog, token budget, tool dispatch | `packages/vajra/src/model/` |
 | The bench runner, run parameters, metrics | `packages/vajra/src/bench/` |
-| The `vajra` command (`run`, `bench`, `auth`) | `packages/vajra/src/cli/` |
+| The `vajra` command (`run`, `bench`, `bench-plan`, `auth`) | `packages/vajra/src/cli/` |
 | File rules, locks, change history, the confined worker process, the repo index | `packages/sandbox/src/` |
 | Shared types, tool definitions, plan validation | `packages/protocol/src/` |
 | Landlock, process control (Rust) | `packages/native/src/` |
-| Task suites, run parameters, sweeps, results | `bench/` |
+| Task suites, Developer cases, run parameters, sweeps, results | `bench/` |
 
 Each folder under `packages/vajra/src/` has a short `README.md` listing its files.
 
@@ -29,7 +29,7 @@ pnpm test:all      # every package's tests, then the bench tooling tests
 
 Tests import from `dist/`, so **build before testing**. To run one package: `pnpm --filter @codekalakaars/vajra test`. To run one file: `node --test packages/vajra/test/<name>.test.mjs`.
 
-`vajra run` and `vajra bench <suite>` call a real model and cost money. Do not run them, or `bench/tune.mjs`, without being asked.
+`vajra run`, `vajra bench <suite>` and `vajra bench-plan <case>` call a real model and cost money. Do not run them, or `bench/tune.mjs`, without being asked.
 
 ## Rules
 

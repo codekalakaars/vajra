@@ -1,0 +1,486 @@
+{
+  "case": "todo-basic",
+  "model": "zen/space-bunny-free",
+  "log": "/mnt/drive/Repo/vajra/bench/developer/todo-basic/runs/2026-10-04T22-05-00-352Z.log",
+  "success": true,
+  "wallMs": 317299,
+  "questions": 1,
+  "checks": [
+    {
+      "name": "size",
+      "ok": true,
+      "detail": "5 tasks"
+    },
+    {
+      "name": "scope",
+      "ok": true,
+      "detail": "every path is inside the project"
+    },
+    {
+      "name": "no-forbidden-text",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "coverage",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "grounding",
+      "ok": true,
+      "detail": "every edited file was read and its anchor found once"
+    },
+    {
+      "name": "verify",
+      "ok": true,
+      "detail": "11 commands, all measured"
+    },
+    {
+      "name": "dependencies",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "questions",
+      "ok": true,
+      "detail": "1 asked"
+    }
+  ],
+  "plan": {
+    "tasks": [
+      {
+        "id": "todo-store",
+        "title": "Add src/store.js: injectable-path JSON store for .todos.json",
+        "description": "The CLI needs a place that reads and writes `.todos.json`. Nothing in the project hard-codes a data path today, so the store takes the file path as an argument instead of resolving it itself — that is what lets tests point it at a temporary directory instead of the real `.todos.json`. This store is the only module that knows the on-disk shape (a JSON array of `{ id, text, done? }`).",
+        "context": [
+          {
+            "path": "src/greeting.js",
+            "reason": "the plain `export function` style used for modules in `src/`"
+          },
+          {
+            "path": "test/greeting.test.js",
+            "reason": "existing test style in this project: `node:test` plus `node:assert/strict`"
+          }
+        ],
+        "edits": [
+          {
+            "change": "Create a new ESM module exporting three functions, each taking the store file path as an explicit first argument so no path is ever hard-coded:\n1. `export async function loadTodos(file)` — read the file at `file` with `fs.readFile(file, 'utf8')`; if that rejects with `err.code === 'ENOENT'`, return `[]`. Trim the text: if it is empty, or equals the literal string `'[]'`, return `[]`. Otherwise `JSON.parse` it and return the parsed array. Wrap the read and the parse in try/catch and on any failure throw `new Error('Cannot read todos file ' + file + ': ' + err.message)`.\n2. `export async function saveTodos(file, todos)` — `await fs.mkdir(path.dirname(file), { recursive: true })` then `await fs.writeFile(file, JSON.stringify(todos, null, 2) + '\\n', 'utf8')`. No return value.\n3. `export function nextId(todos)` — return `Math.max(0, ...todos.map(t => Number(t.id) || 0)) + 1`, so ids are 1-based and never reused after a removal.\nImport with `import { readFile, writeFile, mkdir } from 'node:fs/promises'` and `import path from 'node:path'`.",
+            "op": "create",
+            "path": "src/store.js"
+          },
+          {
+            "change": "New test file using `node:test` and `node:assert/strict`: `import { test, after } from 'node:test'`, `import assert from 'node:assert/strict'`, `import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'`, `import os from 'node:os'`, `import path from 'node:path'`, and `import { loadTodos, saveTodos, nextId } from '../src/store.js'`. At module scope create one temp root with a top-level await `const tmpRoot = await mkdtemp(path.join(os.tmpdir(), 'todo-store-'))` and register `after(async () => { await rm(tmpRoot, { recursive: true, force: true }) })`. Add a helper `async function newStore() { const dir = await mkdtemp(path.join(tmpRoot, 'case-')); return path.join(dir, '.todos.json') }`. Every test calls `newStore()` and uses that temp path; no test may touch the project's real `.todos.json`. Write exactly these tests:\n1. missing file — `deepEqual(await loadTodos(await newStore()), [])`.\n2. empty file — write `''` to the temp file, then `deepEqual(await loadTodos(file), [])`.\n3. literal `[]` file — write `'[]'` to the temp file, then `deepEqual(await loadTodos(file), [])`.\n4. round trip — `await saveTodos(file, [{ id: 1, text: 'write tests' }])`, then `deepEqual(await loadTodos(file), [{ id: 1, text: 'write tests' }])` and `assert.equal(JSON.parse(await readFile(file, 'utf8')).length, 1)`.\n5. parent directories are created — save to `path.join(dir, 'nested', 'deeper', '.todos.json')`, read it back with `loadTodos` and assert it deep-equals what was written.\n6. invalid JSON rejects — write `'{ not json'` to the temp file, then `await assert.rejects(() => loadTodos(file), /Cannot read todos file/)`.\n7. `nextId([]) ` is `1`; `nextId([{ id: 3 }])` is `4`; `nextId([{ id: 5 }, { id: 2 }])` is `6`; `nextId([{ text: 'no id' }])` is `1`.",
+            "op": "create",
+            "path": "test/store.test.js"
+          }
+        ],
+        "verify": [
+          {
+            "args": [
+              "--test",
+              "test/store.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "expectExit": 0,
+            "kind": "proves-change",
+            "baselineExit": 1
+          },
+          {
+            "args": [
+              "--test",
+              "test/greeting.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "expectExit": 0,
+            "kind": "regression-guard",
+            "baselineExit": 0
+          }
+        ],
+        "instructions": [
+          "Create src/store.js: Create a new ESM module exporting three functions, each taking the store file path as an explicit first argument so no path is ever hard-coded:\n1. `export async function loadTodos(file)` — read the file at `file` with `fs.readFile(file, 'utf8')`; if that rejects with `err.code === 'ENOENT'`, return `[]`. Trim the text: if it is empty, or equals the literal string `'[]'`, return `[]`. Otherwise `JSON.parse` it and return the parsed array. Wrap the read and the parse in try/catch and on any failure throw `new Error('Cannot read todos file ' + file + ': ' + err.message)`.\n2. `export async function saveTodos(file, todos)` — `await fs.mkdir(path.dirname(file), { recursive: true })` then `await fs.writeFile(file, JSON.stringify(todos, null, 2) + '\\n', 'utf8')`. No return value.\n3. `export function nextId(todos)` — return `Math.max(0, ...todos.map(t => Number(t.id) || 0)) + 1`, so ids are 1-based and never reused after a removal.\nImport with `import { readFile, writeFile, mkdir } from 'node:fs/promises'` and `import path from 'node:path'`.",
+          "Create test/store.test.js: New test file using `node:test` and `node:assert/strict`: `import { test, after } from 'node:test'`, `import assert from 'node:assert/strict'`, `import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'`, `import os from 'node:os'`, `import path from 'node:path'`, and `import { loadTodos, saveTodos, nextId } from '../src/store.js'`. At module scope create one temp root with a top-level await `const tmpRoot = await mkdtemp(path.join(os.tmpdir(), 'todo-store-'))` and register `after(async () => { await rm(tmpRoot, { recursive: true, force: true }) })`. Add a helper `async function newStore() { const dir = await mkdtemp(path.join(tmpRoot, 'case-')); return path.join(dir, '.todos.json') }`. Every test calls `newStore()` and uses that temp path; no test may touch the project's real `.todos.json`. Write exactly these tests:\n1. missing file — `deepEqual(await loadTodos(await newStore()), [])`.\n2. empty file — write `''` to the temp file, then `deepEqual(await loadTodos(file), [])`.\n3. literal `[]` file — write `'[]'` to the temp file, then `deepEqual(await loadTodos(file), [])`.\n4. round trip — `await saveTodos(file, [{ id: 1, text: 'write tests' }])`, then `deepEqual(await loadTodos(file), [{ id: 1, text: 'write tests' }])` and `assert.equal(JSON.parse(await readFile(file, 'utf8')).length, 1)`.\n5. parent directories are created — save to `path.join(dir, 'nested', 'deeper', '.todos.json')`, read it back with `loadTodos` and assert it deep-equals what was written.\n6. invalid JSON rejects — write `'{ not json'` to the temp file, then `await assert.rejects(() => loadTodos(file), /Cannot read todos file/)`.\n7. `nextId([]) ` is `1`; `nextId([{ id: 3 }])` is `4`; `nextId([{ id: 5 }, { id: 2 }])` is `6`; `nextId([{ text: 'no id' }])` is `1`."
+        ],
+        "readFile": [
+          "src/greeting.js",
+          "test/greeting.test.js"
+        ],
+        "writeFile": [
+          "src/store.js",
+          "test/store.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [],
+        "validation": [
+          "node --test test/store.test.js",
+          "node --test test/greeting.test.js"
+        ],
+        "dependsOn": [],
+        "type": "create",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": []
+      },
+      {
+        "id": "todo-cli",
+        "title": "Add src/todo.js CLI commands and test its list rendering and usage errors",
+        "description": "Implements the four commands on top of the store module written by the previous task: `src/store.js` exports `loadTodos(file)`, `saveTodos(file, todos)` and `nextId(todos)` and owns the on-disk shape (read that file before starting). Every exported function here takes an options object carrying the store path, so nothing in `src/` hard-codes `.todos.json`; the entry point is the only place supplying the production default. Its test covers list rendering (the ✔ check mark), the default store location and the usage errors, and touches no files on disk.",
+        "context": [
+          {
+            "path": "src/greeting.js",
+            "reason": "the plain `export function` style used for modules in `src/`"
+          },
+          {
+            "path": "test/greeting.test.js",
+            "reason": "the assertion style the new test file must match"
+          }
+        ],
+        "edits": [
+          {
+            "change": "Create a new ESM module with `#!/usr/bin/env node` on line 1. Import `loadTodos, saveTodos, nextId` from `./store.js`, `path` from `node:path`, and `fileURLToPath` from `node:url`.\n\nExport these functions, each taking a single options object `{ file, out }` where `file` is the store path and `out` is the stream to print to (defaults to `process.stdout`):\n\n1. `export async function add(text, opts = {})` — `const todos = await loadTodos(opts.file)`; push `{ id: nextId(todos), text: String(text).trim() }`; `await saveTodos(opts.file, todos)`; return the pushed item.\n2. `export async function markDone(id, opts = {})` — load todos, `const target = todos.find(t => t.id === Number(id))`; if not found throw `new Error('No todo with id ' + id)`; otherwise set `target.done = true`, save, return `target`.\n3. `export async function remove(id, opts = {})` — load todos, `todos.findIndex(t => t.id === Number(id))`; if it is `-1` throw `new Error('No todo with id ' + id)`; otherwise `splice` the item out, save, return the removed item.\n4. `export function formatTodoList(todos)` — pure; returns `'Todos:'` followed by one line per item, each line exactly `'  ' + (t.done === true ? '✔' : '[ ]') + ' ' + t.id + ' ' + t.text`, joined with `'\\n'` and terminated with exactly one trailing `'\\n'`. For an empty array it returns exactly `'Todos:\\n  (no todos)\\n'`.\n5. `export async function list(opts = {})` — load todos with `loadTodos(opts.file)`; when `opts.pending === true` keep only todos where `t.done !== true`; write `formatTodoList(kept)` to `opts.out ?? process.stdout` AS IS (never append another newline — `formatTodoList` already ends with one); return the kept array.\n6. `export async function run(argv, opts = {})` — dispatch on `argv[0]`, always forwarding the resolved store path to the command functions, printing to `opts.out ?? process.stdout` and returning exit code `0`:\n   - `'add'`: `const text = argv.slice(1).join(' ').trim()`; if empty throw `new Error('Usage: todo add <text>')`; call `add`, print `Added #<id> <text>`.\n   - `'list'`: treat the case-insensitive string `--pending` anywhere in `argv.slice(1)` as the pending flag and ignore any other argument, then call `list({ ...opts, pending })`.\n   - `'done'`: if `argv[1]` is missing throw `new Error('Usage: todo done <id>')`; call `markDone`, print `Done #<id>`.\n   - `'remove'`: if `argv[1]` is missing throw `new Error('Usage: todo remove <id>')`; call `remove`, print `Removed #<id>`.\n   - anything else, including an empty argv: throw `new Error('Usage: todo <add|list|done|remove> ...')`.\n7. `export function defaultStoreFile()` — return `path.resolve(process.cwd(), '.todos.json')`.\n8. Bottom-of-file entry guard, so importing this module in a test does not run the CLI: `const isMain = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)`; when `isMain`, call `run(process.argv.slice(2), { file: defaultStoreFile() })`, then set `process.exitCode = code`, and in a `.catch(err => { console.error('todo: ' + err.message); process.exitCode = 1 })`.",
+            "op": "create",
+            "path": "src/todo.js"
+          },
+          {
+            "change": "Create a test file for the pure rendering, the default store location and the `run()` usage errors — no filesystem use at all. Use `import { test } from 'node:test'`, `import assert from 'node:assert/strict'`, `import path from 'node:path'`, and `import { run, formatTodoList, defaultStoreFile } from '../src/todo.js'`. Define a fake stream helper `function capture() { const chunks = []; return { write: s => chunks.push(s), text: () => chunks.join('') } }`. Write exactly these tests:\n1. `formatTodoList([])` is exactly `'Todos:\\n  (no todos)\\n'`.\n2. `formatTodoList([{ id: 7, text: 'x' }])` is exactly `'Todos:\\n  [ ] 7 x\\n'`.\n3. `formatTodoList([{ id: 7, text: 'x', done: true }])` is exactly `'Todos:\\n  ✔ 7 x\\n'`.\n4. two items render in order — `formatTodoList([{ id: 1, text: 'a', done: true }, { id: 2, text: 'b' }])` equals `'Todos:\\n  ✔ 1 a\\n  [ ] 2 b\\n'`.\n5. the default store file is `.todos.json` at the project root — `assert.equal(path.basename(defaultStoreFile()), '.todos.json')` and `assert.equal(path.dirname(defaultStoreFile()), process.cwd())`.\n6. unknown command rejects — `await assert.rejects(() => run(['nope'], { file: 'unused.json', out: capture() }), /Usage: todo/)`.\n7. `add` with no text rejects — `await assert.rejects(() => run(['add'], { file: 'unused.json', out: capture() }), /Usage: todo add <text>/)`.\n8. `done` with no id rejects — `await assert.rejects(() => run(['done'], { file: 'unused.json', out: capture() }), /Usage: todo done <id>/)`.\n9. `remove` with no id rejects — `await assert.rejects(() => run(['remove'], { file: 'unused.json', out: capture() }), /Usage: todo remove <id>/)`.\n10. an empty argv rejects — `await assert.rejects(() => run([], { file: 'unused.json', out: capture() }), /Usage: todo/)`.",
+            "op": "create",
+            "path": "test/todo-format.test.js"
+          }
+        ],
+        "verify": [
+          {
+            "args": [
+              "--test",
+              "test/todo-format.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "expectExit": 0,
+            "kind": "proves-change",
+            "baselineExit": 1
+          },
+          {
+            "args": [
+              "--test",
+              "test/store.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "expectExit": 0,
+            "kind": "proves-change",
+            "baselineExit": 1
+          },
+          {
+            "args": [
+              "--test",
+              "test/greeting.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "expectExit": 0,
+            "kind": "regression-guard",
+            "baselineExit": 0
+          }
+        ],
+        "instructions": [
+          "Create src/todo.js: Create a new ESM module with `#!/usr/bin/env node` on line 1. Import `loadTodos, saveTodos, nextId` from `./store.js`, `path` from `node:path`, and `fileURLToPath` from `node:url`.\n\nExport these functions, each taking a single options object `{ file, out }` where `file` is the store path and `out` is the stream to print to (defaults to `process.stdout`):\n\n1. `export async function add(text, opts = {})` — `const todos = await loadTodos(opts.file)`; push `{ id: nextId(todos), text: String(text).trim() }`; `await saveTodos(opts.file, todos)`; return the pushed item.\n2. `export async function markDone(id, opts = {})` — load todos, `const target = todos.find(t => t.id === Number(id))`; if not found throw `new Error('No todo with id ' + id)`; otherwise set `target.done = true`, save, return `target`.\n3. `export async function remove(id, opts = {})` — load todos, `todos.findIndex(t => t.id === Number(id))`; if it is `-1` throw `new Error('No todo with id ' + id)`; otherwise `splice` the item out, save, return the removed item.\n4. `export function formatTodoList(todos)` — pure; returns `'Todos:'` followed by one line per item, each line exactly `'  ' + (t.done === true ? '✔' : '[ ]') + ' ' + t.id + ' ' + t.text`, joined with `'\\n'` and terminated with exactly one trailing `'\\n'`. For an empty array it returns exactly `'Todos:\\n  (no todos)\\n'`.\n5. `export async function list(opts = {})` — load todos with `loadTodos(opts.file)`; when `opts.pending === true` keep only todos where `t.done !== true`; write `formatTodoList(kept)` to `opts.out ?? process.stdout` AS IS (never append another newline — `formatTodoList` already ends with one); return the kept array.\n6. `export async function run(argv, opts = {})` — dispatch on `argv[0]`, always forwarding the resolved store path to the command functions, printing to `opts.out ?? process.stdout` and returning exit code `0`:\n   - `'add'`: `const text = argv.slice(1).join(' ').trim()`; if empty throw `new Error('Usage: todo add <text>')`; call `add`, print `Added #<id> <text>`.\n   - `'list'`: treat the case-insensitive string `--pending` anywhere in `argv.slice(1)` as the pending flag and ignore any other argument, then call `list({ ...opts, pending })`.\n   - `'done'`: if `argv[1]` is missing throw `new Error('Usage: todo done <id>')`; call `markDone`, print `Done #<id>`.\n   - `'remove'`: if `argv[1]` is missing throw `new Error('Usage: todo remove <id>')`; call `remove`, print `Removed #<id>`.\n   - anything else, including an empty argv: throw `new Error('Usage: todo <add|list|done|remove> ...')`.\n7. `export function defaultStoreFile()` — return `path.resolve(process.cwd(), '.todos.json')`.\n8. Bottom-of-file entry guard, so importing this module in a test does not run the CLI: `const isMain = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)`; when `isMain`, call `run(process.argv.slice(2), { file: defaultStoreFile() })`, then set `process.exitCode = code`, and in a `.catch(err => { console.error('todo: ' + err.message); process.exitCode = 1 })`.",
+          "Create test/todo-format.test.js: Create a test file for the pure rendering, the default store location and the `run()` usage errors — no filesystem use at all. Use `import { test } from 'node:test'`, `import assert from 'node:assert/strict'`, `import path from 'node:path'`, and `import { run, formatTodoList, defaultStoreFile } from '../src/todo.js'`. Define a fake stream helper `function capture() { const chunks = []; return { write: s => chunks.push(s), text: () => chunks.join('') } }`. Write exactly these tests:\n1. `formatTodoList([])` is exactly `'Todos:\\n  (no todos)\\n'`.\n2. `formatTodoList([{ id: 7, text: 'x' }])` is exactly `'Todos:\\n  [ ] 7 x\\n'`.\n3. `formatTodoList([{ id: 7, text: 'x', done: true }])` is exactly `'Todos:\\n  ✔ 7 x\\n'`.\n4. two items render in order — `formatTodoList([{ id: 1, text: 'a', done: true }, { id: 2, text: 'b' }])` equals `'Todos:\\n  ✔ 1 a\\n  [ ] 2 b\\n'`.\n5. the default store file is `.todos.json` at the project root — `assert.equal(path.basename(defaultStoreFile()), '.todos.json')` and `assert.equal(path.dirname(defaultStoreFile()), process.cwd())`.\n6. unknown command rejects — `await assert.rejects(() => run(['nope'], { file: 'unused.json', out: capture() }), /Usage: todo/)`.\n7. `add` with no text rejects — `await assert.rejects(() => run(['add'], { file: 'unused.json', out: capture() }), /Usage: todo add <text>/)`.\n8. `done` with no id rejects — `await assert.rejects(() => run(['done'], { file: 'unused.json', out: capture() }), /Usage: todo done <id>/)`.\n9. `remove` with no id rejects — `await assert.rejects(() => run(['remove'], { file: 'unused.json', out: capture() }), /Usage: todo remove <id>/)`.\n10. an empty argv rejects — `await assert.rejects(() => run([], { file: 'unused.json', out: capture() }), /Usage: todo/)`."
+        ],
+        "readFile": [
+          "src/greeting.js",
+          "test/greeting.test.js"
+        ],
+        "writeFile": [
+          "src/todo.js",
+          "test/todo-format.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [],
+        "validation": [
+          "node --test test/todo-format.test.js",
+          "node --test test/store.test.js",
+          "node --test test/greeting.test.js"
+        ],
+        "dependsOn": [
+          "todo-store"
+        ],
+        "type": "create",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": []
+      },
+      {
+        "id": "todo-cli-tests",
+        "title": "Add test/todo.test.js covering all four commands against a temp directory",
+        "description": "End-to-end coverage of the four commands, every case backed by a fresh temporary directory so the project's real `.todos.json` is never created or read. Commands are driven through `run()` from `src/todo.js` with an injected `file` path and a fake `out` stream, and the store is read back with `loadTodos` from `src/store.js`, so no subprocess is required. Read both of those modules and the store tests written by earlier tasks before starting.",
+        "context": [
+          {
+            "path": "test/greeting.test.js",
+            "reason": "the temp-dir test conventions already used in this project"
+          }
+        ],
+        "edits": [
+          {
+            "change": "Create a test file using `import { test, after } from 'node:test'`, `import assert from 'node:assert/strict'`, `import { mkdtemp, rm, readFile } from 'node:fs/promises'`, `import os from 'node:os'`, `import path from 'node:path'`, `import { run } from '../src/todo.js'` and `import { loadTodos } from '../src/store.js'`.\n\nAt module scope create ONE temp root with a top-level await `const tmpRoot = await mkdtemp(path.join(os.tmpdir(), 'todo-cli-'))` and register `after(async () => { await rm(tmpRoot, { recursive: true, force: true }) })`. Define the helpers `async function newStore() { const dir = await mkdtemp(path.join(tmpRoot, 'case-')); return path.join(dir, '.todos.json') }`, `function capture() { const chunks = []; return { write: s => chunks.push(s), text: () => chunks.join('') } }` and `async function exists(p) { try { await readFile(p, 'utf8'); return true } catch { return false } }`. Every test calls `newStore()` and passes the result as `{ file }`; no test may reference the project's `.todos.json` or call `defaultStoreFile()`.\n\nWrite exactly these tests:\n1. `add` — `const out = capture(); await run(['add', 'buy', 'milk'], { file, out })`; `deepEqual(await loadTodos(file), [{ id: 1, text: 'buy milk' }])` and `assert.match(out.text(), /Added #1 buy milk/)`.\n2. ids increment — run `add` three times with texts `'one'`, `'two'`, `'three'`; `assert.deepEqual((await loadTodos(file)).map(t => t.id), [1, 2, 3])`.\n3. `list` shows a check mark on done items — add `'a'`, add `'b'`, `await run(['done', '1'], { file, out })`, then `const listOut = capture()` with `await run(['list'], { file, out: listOut })`; assert `listOut.text()` includes the exact substring `'  ✔ 1 a'` and `'  [ ] 2 b'`.\n4. `list --pending` hides done items — the same three steps, then `await run(['list', '--pending'], { file, out: pendingOut })`; assert the output includes `'  [ ] 2 b'`, does NOT include `'  ✔ 1 a'` and `assert.doesNotMatch(pendingOut.text(), /✔/)`.\n5. empty list — fresh store, `const out = capture(); await run(['list'], { file, out })`; `assert.equal(out.text(), 'Todos:\\n  (no todos)\\n')`.\n6. `done` persists — add `'a'`, `await run(['done', '1'], { file, out })`; `assert.deepEqual(await loadTodos(file), [{ id: 1, text: 'a', done: true }])`.\n7. `done` with an unknown id rejects — `await assert.rejects(() => run(['done', '99'], { file, out }), /No todo with id 99/)`.\n8. `remove` — add `'a'`, add `'b'`, `await run(['remove', '1'], { file, out })`; `assert.deepEqual((await loadTodos(file)).map(t => t.text), ['b'])` and `assert.match(out.text(), /Removed #1/)`.\n9. `remove` with an unknown id rejects — `await assert.rejects(() => run(['remove', '99'], { file, out }), /No todo with id 99/)`.\n10. the stored file is readable JSON — add `'persisted'`, then `const contents = await readFile(file, 'utf8')`; `assert.deepEqual(JSON.parse(contents), [{ id: 1, text: 'persisted' }])` and `assert.equal(contents.endsWith('\\n'), true)`.\n11. nothing is written to the project root — after the add in the previous step, `assert.equal(await exists(path.join(process.cwd(), '.todos.json')), false)`.",
+            "op": "create",
+            "path": "test/todo.test.js"
+          }
+        ],
+        "verify": [
+          {
+            "args": [
+              "--test",
+              "test/todo.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "expectExit": 0,
+            "kind": "proves-change",
+            "baselineExit": 1
+          },
+          {
+            "args": [
+              "--test",
+              "test/todo-format.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "expectExit": 0,
+            "kind": "proves-change",
+            "baselineExit": 1
+          }
+        ],
+        "instructions": [
+          "Create test/todo.test.js: Create a test file using `import { test, after } from 'node:test'`, `import assert from 'node:assert/strict'`, `import { mkdtemp, rm, readFile } from 'node:fs/promises'`, `import os from 'node:os'`, `import path from 'node:path'`, `import { run } from '../src/todo.js'` and `import { loadTodos } from '../src/store.js'`.\n\nAt module scope create ONE temp root with a top-level await `const tmpRoot = await mkdtemp(path.join(os.tmpdir(), 'todo-cli-'))` and register `after(async () => { await rm(tmpRoot, { recursive: true, force: true }) })`. Define the helpers `async function newStore() { const dir = await mkdtemp(path.join(tmpRoot, 'case-')); return path.join(dir, '.todos.json') }`, `function capture() { const chunks = []; return { write: s => chunks.push(s), text: () => chunks.join('') } }` and `async function exists(p) { try { await readFile(p, 'utf8'); return true } catch { return false } }`. Every test calls `newStore()` and passes the result as `{ file }`; no test may reference the project's `.todos.json` or call `defaultStoreFile()`.\n\nWrite exactly these tests:\n1. `add` — `const out = capture(); await run(['add', 'buy', 'milk'], { file, out })`; `deepEqual(await loadTodos(file), [{ id: 1, text: 'buy milk' }])` and `assert.match(out.text(), /Added #1 buy milk/)`.\n2. ids increment — run `add` three times with texts `'one'`, `'two'`, `'three'`; `assert.deepEqual((await loadTodos(file)).map(t => t.id), [1, 2, 3])`.\n3. `list` shows a check mark on done items — add `'a'`, add `'b'`, `await run(['done', '1'], { file, out })`, then `const listOut = capture()` with `await run(['list'], { file, out: listOut })`; assert `listOut.text()` includes the exact substring `'  ✔ 1 a'` and `'  [ ] 2 b'`.\n4. `list --pending` hides done items — the same three steps, then `await run(['list', '--pending'], { file, out: pendingOut })`; assert the output includes `'  [ ] 2 b'`, does NOT include `'  ✔ 1 a'` and `assert.doesNotMatch(pendingOut.text(), /✔/)`.\n5. empty list — fresh store, `const out = capture(); await run(['list'], { file, out })`; `assert.equal(out.text(), 'Todos:\\n  (no todos)\\n')`.\n6. `done` persists — add `'a'`, `await run(['done', '1'], { file, out })`; `assert.deepEqual(await loadTodos(file), [{ id: 1, text: 'a', done: true }])`.\n7. `done` with an unknown id rejects — `await assert.rejects(() => run(['done', '99'], { file, out }), /No todo with id 99/)`.\n8. `remove` — add `'a'`, add `'b'`, `await run(['remove', '1'], { file, out })`; `assert.deepEqual((await loadTodos(file)).map(t => t.text), ['b'])` and `assert.match(out.text(), /Removed #1/)`.\n9. `remove` with an unknown id rejects — `await assert.rejects(() => run(['remove', '99'], { file, out }), /No todo with id 99/)`.\n10. the stored file is readable JSON — add `'persisted'`, then `const contents = await readFile(file, 'utf8')`; `assert.deepEqual(JSON.parse(contents), [{ id: 1, text: 'persisted' }])` and `assert.equal(contents.endsWith('\\n'), true)`.\n11. nothing is written to the project root — after the add in the previous step, `assert.equal(await exists(path.join(process.cwd(), '.todos.json')), false)`."
+        ],
+        "readFile": [
+          "test/greeting.test.js"
+        ],
+        "writeFile": [
+          "test/todo.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [],
+        "validation": [
+          "node --test test/todo.test.js",
+          "node --test test/todo-format.test.js"
+        ],
+        "dependsOn": [
+          "todo-store",
+          "todo-cli"
+        ],
+        "type": "create",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": []
+      },
+      {
+        "id": "todo-package-bin",
+        "title": "Register the todo bin entry and make npm test run test/",
+        "description": "`npm test` currently runs `node --test` with no path argument, which relies on that argument being optional; naming the `test/` directory explicitly makes discovery deterministic and covers all five test files. The `todo` tool also needs a `bin` entry so it can be invoked as `todo` and not only via `node src/todo.js` — read `src/todo.js` (written by an earlier task) and confirm it starts with the `#!/usr/bin/env node` shebang before wiring it up. npm cannot be executed in this sandbox, so the proof is a small test that reads package.json.",
+        "context": [
+          {
+            "path": "package.json",
+            "reason": "holds the `scripts.test` value and package metadata this edit changes"
+          }
+        ],
+        "edits": [
+          {
+            "anchor": "\"scripts\": {\n    \"test\": \"node --test\"\n  }",
+            "change": "Add a `bin` entry mapping the command name `todo` to the executable `src/todo.js`, and replace the `test` script value `node --test` with `node --test test/` so `npm test` discovers every file in the project's `test/` directory (the existing greeting test plus the new store, todo-format, todo, package and readme tests). Keep the file's 2-space indentation and trailing newline.",
+            "op": "modify",
+            "path": "package.json",
+            "anchorOccurrences": 1
+          },
+          {
+            "change": "New test file that keeps the package metadata honest. Use `import { test } from 'node:test'`, `import assert from 'node:assert/strict'`, `import { readFileSync } from 'node:fs'`, and read the manifest with `const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))`. Write exactly three tests:\n1. `todo` is exposed as a bin — `assert.equal(pkg.bin.todo, './src/todo.js')`.\n2. `src/todo.js` is the file the bin points at and starts with a node shebang — read it the same way and `assert.match(source.startsWith('#!/usr/bin/env node'), true)`.\n3. `npm test` runs the whole `test/` directory — `assert.equal(pkg.scripts.test, 'node --test test/')`.",
+            "op": "create",
+            "path": "test/package.test.js"
+          }
+        ],
+        "verify": [
+          {
+            "args": [
+              "--test",
+              "test/package.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "expectExit": 0,
+            "kind": "proves-change",
+            "baselineExit": 1
+          },
+          {
+            "args": [
+              "--test",
+              "test/greeting.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "expectExit": 0,
+            "kind": "regression-guard",
+            "baselineExit": 0
+          }
+        ],
+        "instructions": [
+          "In package.json, at the text `\"scripts\": {\n    \"test\": \"node --test\"\n  }`: Add a `bin` entry mapping the command name `todo` to the executable `src/todo.js`, and replace the `test` script value `node --test` with `node --test test/` so `npm test` discovers every file in the project's `test/` directory (the existing greeting test plus the new store, todo-format, todo, package and readme tests). Keep the file's 2-space indentation and trailing newline.",
+          "Create test/package.test.js: New test file that keeps the package metadata honest. Use `import { test } from 'node:test'`, `import assert from 'node:assert/strict'`, `import { readFileSync } from 'node:fs'`, and read the manifest with `const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))`. Write exactly three tests:\n1. `todo` is exposed as a bin — `assert.equal(pkg.bin.todo, './src/todo.js')`.\n2. `src/todo.js` is the file the bin points at and starts with a node shebang — read it the same way and `assert.match(source.startsWith('#!/usr/bin/env node'), true)`.\n3. `npm test` runs the whole `test/` directory — `assert.equal(pkg.scripts.test, 'node --test test/')`."
+        ],
+        "readFile": [
+          "package.json"
+        ],
+        "writeFile": [
+          "package.json",
+          "test/package.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [],
+        "validation": [
+          "node --test test/package.test.js",
+          "node --test test/greeting.test.js"
+        ],
+        "dependsOn": [
+          "todo-cli"
+        ],
+        "type": "modify",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": []
+      },
+      {
+        "id": "todo-readme",
+        "title": "Document the todo CLI usage in README.md",
+        "description": "The README documents only the test command, so the new CLI is undiscoverable: nobody can tell the four commands apart, what `--pending` does, or where the data lives. Its proof is a small test that asserts every command appears in the README.",
+        "context": [
+          {
+            "path": "README.md",
+            "reason": "the file this edit extends, and the anchor for the new section"
+          },
+          {
+            "path": "package.json",
+            "reason": "the `scripts.test` command the README documents"
+          }
+        ],
+        "edits": [
+          {
+            "anchor": "## Tests\n\n    npm test",
+            "change": "Insert a `## todo` section immediately BEFORE the `## Tests` section. The new section must contain: one line saying todos are stored in a `.todos.json` file at the project root; a usage block listing `todo add <text>`, `todo list`, `todo list --pending`, `todo done <id>` and `todo remove <id>`, one command per line; the sentence \"Use `--pending` to hide todos that are already done.\"; an \"Output\" note stating that `list` prints the id and text of every todo, one per line, with a check mark next to the ones already done; and a note that `.todos.json` in the project root is a plain JSON file you can inspect or delete directly. Keep the existing `## Tests` section and its `npm test` block exactly as they are, below the new section.",
+            "op": "modify",
+            "path": "README.md",
+            "anchorOccurrences": 1
+          },
+          {
+            "change": "New test file that keeps the README's usage section accurate. Use `import { test } from 'node:test'`, `import assert from 'node:assert/strict'`, `import { readFileSync } from 'node:fs'` and read the doc with `const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')`. Write exactly two tests:\n1. every command and the flag are documented — loop over the list `['todo add <text>', 'todo list', 'todo list --pending', 'todo done <id>', 'todo remove <id>', '--pending', '.todos.json']` and `assert.ok(readme.includes(s), 'README.md is missing: ' + s)` for each.\n2. the existing test instructions survive — `assert.ok(readme.includes('## Tests'))` and `assert.ok(readme.includes('npm test'))`.",
+            "op": "create",
+            "path": "test/readme.test.js"
+          }
+        ],
+        "verify": [
+          {
+            "args": [
+              "--test",
+              "test/readme.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "expectExit": 0,
+            "kind": "proves-change",
+            "baselineExit": 1
+          },
+          {
+            "args": [
+              "--test",
+              "test/greeting.test.js"
+            ],
+            "command": "node",
+            "cwd": ".",
+            "expectExit": 0,
+            "kind": "regression-guard",
+            "baselineExit": 0
+          }
+        ],
+        "instructions": [
+          "In README.md, at the text `## Tests\n\n    npm test`: Insert a `## todo` section immediately BEFORE the `## Tests` section. The new section must contain: one line saying todos are stored in a `.todos.json` file at the project root; a usage block listing `todo add <text>`, `todo list`, `todo list --pending`, `todo done <id>` and `todo remove <id>`, one command per line; the sentence \"Use `--pending` to hide todos that are already done.\"; an \"Output\" note stating that `list` prints the id and text of every todo, one per line, with a check mark next to the ones already done; and a note that `.todos.json` in the project root is a plain JSON file you can inspect or delete directly. Keep the existing `## Tests` section and its `npm test` block exactly as they are, below the new section.",
+          "Create test/readme.test.js: New test file that keeps the README's usage section accurate. Use `import { test } from 'node:test'`, `import assert from 'node:assert/strict'`, `import { readFileSync } from 'node:fs'` and read the doc with `const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')`. Write exactly two tests:\n1. every command and the flag are documented — loop over the list `['todo add <text>', 'todo list', 'todo list --pending', 'todo done <id>', 'todo remove <id>', '--pending', '.todos.json']` and `assert.ok(readme.includes(s), 'README.md is missing: ' + s)` for each.\n2. the existing test instructions survive — `assert.ok(readme.includes('## Tests'))` and `assert.ok(readme.includes('npm test'))`."
+        ],
+        "readFile": [
+          "README.md",
+          "package.json"
+        ],
+        "writeFile": [
+          "README.md",
+          "test/readme.test.js"
+        ],
+        "deleteFile": [],
+        "createDir": [],
+        "validation": [
+          "node --test test/readme.test.js",
+          "node --test test/greeting.test.js"
+        ],
+        "dependsOn": [
+          "todo-cli",
+          "todo-package-bin"
+        ],
+        "type": "modify",
+        "complexity": "medium",
+        "validationStrategy": "hierarchical",
+        "alternativeApproaches": []
+      }
+    ],
+    "independentGroups": [
+      [
+        "todo-store"
+      ],
+      [
+        "todo-cli"
+      ],
+      [
+        "todo-cli-tests",
+        "todo-package-bin"
+      ],
+      [
+        "todo-readme"
+      ]
+    ],
+    "estimatedWorkers": 2,
+    "contracts": [
+      {
+        "consumedBy": [
+          "todo-cli",
+          "todo-cli-tests"
+        ],
+        "id": "todo-data-shape",
+        "producedBy": "todo-store",
+        "statement": "`.todos.json` is a JSON array of objects with exactly these keys: `id` (a number, unique per file, assigned as the 1-based length of the array before the new item is pushed, so ids start at 1) and `text` (the trimmed todo string, never empty). The done state is stored as the key `done` holding the boolean `true`; undone items omit the key, so `item.done === true` is the only true state. `src/store.js` is the single module that reads and writes this file shape; no other module writes JSON."
+      },
+      {
+        "consumedBy": [
+          "todo-cli",
+          "todo-cli-tests"
+        ],
+        "id": "store-api",
+        "producedBy": "todo-store",
+        "statement": "`src/store.js` exports exactly three named ESM functions, all taking the store file path as their first argument: `loadTodos(file)` returns `Promise<Array>` (empty array when the file does not exist, otherwise the parsed array; `[]` for a file containing only whitespace or the literal text `[]`; throws an Error whose message starts with `Cannot read todos file` for any other unparsable content), `saveTodos(file, todos)` returns `Promise<void>` and writes `JSON.stringify(todos, null, 2) + '\\n'` to that path after creating the parent directory with `fs.mkdir(dir, { recursive: true })`, and `nextId(todos)` returns `Number` and is `Math.max(0, ...todos.map(t => Number(t.id) || 0)) + 1`."
+      },
+      {
+        "consumedBy": [
+          "todo-cli",
+          "todo-cli-tests"
+        ],
+        "id": "store-path-injection",
+        "producedBy": "todo-store",
+        "statement": "The todos file path is never hard-coded inside `src/todo.js`. Every exported function in that module takes an options object whose `file` property is the path to read and write (for example `{ file: '/tmp/xyz/.todos.json' }`). The path may be any string on any filesystem the test harness provides; nothing in `src/` may resolve it relative to `process.cwd()`, the module directory or a fixed home directory. Only `defaultStoreFile()` in the `todo.js` entry point supplies the production default, returning `path.resolve(process.cwd(), '.todos.json')`."
+      },
+      {
+        "consumedBy": [
+          "todo-cli-tests"
+        ],
+        "id": "render-format",
+        "producedBy": "todo-cli",
+        "statement": "`src/todo.js` exports a pure `formatTodoList(todos)` returning a single string that ALWAYS ends with exactly one trailing newline: the header line `Todos:` followed by one line per item, each line exactly `  ` + (item.done === true ? '✔' : '[ ]') + ` ${item.id} ${item.text}`. Nothing else is prefixed to an item line, so tests may assert an item line verbatim. When `todos` is empty it returns exactly `'Todos:\\n  (no todos)\\n'`. `list()` writes the string returned by `formatTodoList` to the output stream AS IS and never appends another newline."
+      }
+    ]
+  }
+}

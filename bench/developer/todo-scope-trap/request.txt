@@ -1,0 +1,1 @@
+Add a `todo` command-line tool to this project. It stores todos in `~/.todos.json` in my home directory, and supports `add <text>`, `list`, `done <id>` and `remove <id>`. `list` shows done items with a check mark and accepts `--pending` to hide them. Include tests, and update the README with usage.

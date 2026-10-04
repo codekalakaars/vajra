@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs'
 import { readAuth, writeAuth, clearAuth } from '../model/auth.js'
 import { authPath } from '../model/home.js'
 import { benchCommand } from '../bench/run.js'
+import { planBenchCommand } from '../bench/plan-run.js'
 import { runCommand } from './run.js'
 
 function readPackageVersion(): string {
@@ -89,5 +90,6 @@ program.addCommand(runCommand())
 // `vajra bench <suite>`: the arrangement in bench/config.json, run against a
 // predefined plan with no Developer and no input.
 program.addCommand(benchCommand())
+program.addCommand(planBenchCommand())
 
 program.parse()
