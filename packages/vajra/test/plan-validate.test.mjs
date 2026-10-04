@@ -219,7 +219,41 @@ test('rejects verify commands containing shell syntax', () => {
     ],
     evidence({ 'src/a.ts': SRC }, { 'a#0': 1 }),
   )
-  assert.match(message, /verify\[0\] contains shell syntax/)
+  // It names the command and the character, so a retry fixes the right thing instead of guessing.
+  assert.match(message, /verify\[0\] \('pnpm test && pnpm build'\) contains shell syntax \("&"\)/)
+})
+
+/** The errors for a task that makes `change`, or '' when the plan is accepted. */
+function scoped(change) {
+  const result = validatePlan(
+    [
+      task({
+        edits: [{ path: 'src/a.ts', op: 'modify', anchor: 'const run = () => {}', change }],
+        verify: [provesChange()],
+      }),
+    ],
+    evidence({ 'src/a.ts': SRC }, { 'a#0': 1 }),
+  )
+  return result.ok ? '' : result.errors.join('\n')
+}
+
+test('rejects a task that tells a Worker to use the home directory, and says what to do instead', () => {
+  for (const change of [
+    'store the file at ~/.todos.json',
+    "path.join(os.homedir(), '.todos.json')",
+    'read process.env.HOME to find it',
+    'write to $HOME/.todos.json',
+  ]) {
+    const message = scoped(change)
+    assert.match(message, /tells a Worker to use the home directory/, change)
+    assert.match(message, /project-relative path/, 'the rejection says what to use instead')
+  }
+})
+
+test('a task that forbids the home directory, or uses a project path, is not rejected for it', () => {
+  assert.equal(scoped('Never reference os.homedir() or $HOME. Store it at .todos.json at the project root.'), '')
+  assert.equal(scoped('store the file at .todos.json in the project root'), '')
+  assert.equal(scoped('read ./~notes.txt'), '', 'a tilde inside a name is not the home directory')
 })
 
 test('rejects a verify command that was never baselined', () => {

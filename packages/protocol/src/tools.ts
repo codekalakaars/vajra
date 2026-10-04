@@ -239,57 +239,6 @@ export const createDirTool = defineTool({
   },
 })
 
-/**
- * The Developer's only write surface.
- *
- * Phase One asks for a stub to exist before a test can be written against it,
- * but a plan is not executed until it is confirmed — so without this the
- * Developer could only specify a stub it has never seen, and never run the test
- * it specified against one. Creation is deliberately the whole capability: the
- * path must not exist, so existing code cannot be reached through this tool at
- * all. Changing existing code is expressed in a task, where the Manager
- * inspects the result.
- */
-export const writeStubTool = defineTool({
-  name: 'write_stub',
-  description:
-    'Create a new file that does not exist yet — Phase One scaffolding, so you can ' +
-    'write and run a test against a real module. FAILS if the path already exists: ' +
-    'this tool creates, it never edits. To change existing code, describe the edit ' +
-    'in a task instead.',
-  schema: z.object({ path: z.string().min(1), content: z.string() }),
-  jsonSchema: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'Project-relative path. Must not already exist.' },
-      content: { type: 'string', description: 'Minimal but valid file contents.' },
-    },
-    required: ['path', 'content'],
-    additionalProperties: false,
-  },
-})
-
-/**
- * Undo a stub. Restricted to paths this session's write_stub created, tracked by
- * absolute path — the point is that scaffolding can be retracted while a plan is
- * still being shaped, and nothing else can be.
- */
-export const deleteStubTool = defineTool({
-  name: 'delete_stub',
-  description:
-    'Delete a file that write_stub created earlier in this session. Fails for any ' +
-    'other path: existing code cannot be deleted while planning.',
-  schema: z.object({ path: z.string().min(1) }),
-  jsonSchema: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'Project-relative path of a stub you created.' },
-    },
-    required: ['path'],
-    additionalProperties: false,
-  },
-})
-
 /** A file the worker should read, and the reason it matters. */
 export interface ContextRef {
   path: string
@@ -668,8 +617,6 @@ export const toolDefinitions = {
   edit_file: editFileTool,
   delete_file: deleteFileTool,
   create_dir: createDirTool,
-  write_stub: writeStubTool,
-  delete_stub: deleteStubTool,
   propose_plan: proposePlanTool,
 } as const satisfies Record<string, ToolDefinition>
 
@@ -686,8 +633,6 @@ export const roleTools: Record<string, ToolName[]> = {
     'search_files',
     'search_content',
     'run_baseline',
-    'write_stub',
-    'delete_stub',
     'propose_plan',
   ],
   master: ['read_file', 'list_files', 'search_files', 'run_command'],

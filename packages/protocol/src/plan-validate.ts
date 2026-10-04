@@ -13,6 +13,24 @@ export type PlanValidation = { ok: true } | { ok: false; errors: string[] }
 
 const SHELL_METACHARS = /[&|;<>`$(){}[\]!*?~\n]/
 
+/**
+ * Where a Worker is told to reach outside the project: the home directory, by any
+ * of its usual spellings. Workers and their checks run confined to the project
+ * directory, so a task that depends on the home directory fails when it runs.
+ */
+const OUTSIDE_PROJECT = /os\.homedir\(|process\.env\.HOME\b|\$HOME\b|(?:^|[^.\w])~\//
+
+/**
+ * The text of an instruction that tells a Worker to do something. A sentence that
+ * forbids it ("never use os.homedir()") is the plan obeying the rule, not breaking it.
+ */
+function instructionText(text: string): string {
+  return text
+    .split(/(?<=[.;!?])\s+|\n+/)
+    .filter((sentence) => !/\b(never|not|don't|no)\b/i.test(sentence))
+    .join('\n')
+}
+
 function canonicalPlanPath(path: string, baseDir?: string): string {
   const slashPath = path.replace(/\\/g, '/')
   const driveAbsolute = /^[A-Za-z]:\//.test(slashPath)
@@ -330,6 +348,20 @@ export function validatePlan(
       }
     }
 
+    // --- scope ------------------------------------------------------------
+    const told = [...(task.edits ?? []).map((edit) => edit.change), ...(task.instructions ?? [])]
+      .map(instructionText)
+      .join('\n')
+    const outside = OUTSIDE_PROJECT.exec(told)
+    if (outside) {
+      errors.push(
+        `${where} tells a Worker to use the home directory (${JSON.stringify(outside[0].trim())}). ` +
+          'Workers and their checks run confined to the project directory, so that fails when it runs. ' +
+          'Use a project-relative path (for example .todos.json at the project root), even if the ' +
+          'request names a home path, and say so in the description.',
+      )
+    }
+
     // --- verify -----------------------------------------------------------
     const verify = task.verify ?? []
     if (verify.length === 0) {
@@ -346,9 +378,11 @@ export function validatePlan(
     }
 
     verify.forEach((v, i) => {
-      if (SHELL_METACHARS.test(v.command) || v.args.some((a) => SHELL_METACHARS.test(a))) {
+      const shellChar = [v.command, ...v.args].map((part) => SHELL_METACHARS.exec(part)?.[0]).find((c) => c !== undefined)
+      if (shellChar !== undefined) {
         errors.push(
-          `${where}: verify[${i}] contains shell syntax. Commands run without a shell — ` +
+          `${where}: verify[${i}] ('${v.command} ${v.args.join(' ')}') contains shell syntax ` +
+            `(${JSON.stringify(shellChar)}). Commands run without a shell — ` +
             `split it into separate verify entries.`,
         )
       }

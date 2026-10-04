@@ -189,17 +189,10 @@ Each task lists: **problem**, **evidence**, **where**, **fix**, **test**, **meas
 - **Test:** a fake server entry that writes its `process.env` to a file. Assert there is no `OPENCODE_API_KEY` and no other unlisted variable.
 - **Done when:** the test passes, and the gate is green.
 
-### Task 2: the Developer still mandates "Phase One"
-- **Problem:** the Developer's prompt requires every plan to open with stub tasks, then test tasks, then the work, all wired in sequence with `dependsOn`. That is the design of ADR-0006, which ADR-0012 superseded. It triples the task count and adds planning rounds (`write_stub`, extra `run_baseline`).
-- **Evidence:** the real `vajra run` in section 4 (3 serial tasks for a two-file request, about 8 minutes).
-- **Where:** `packages/vajra/src/developer/prompt.ts`, lines 21, 32, 48 to 72 (the "PLAN STRUCTURE" block and its worked example) and 134 ("SIZING").
-- **What validation actually requires:** `packages/protocol/src/plan-validate.ts:337-375` requires every task to have at least one `kind: "proves-change"` verify command that fails before the change (measured with `run_baseline`) and passes after. It does **not** require stubs. A single task that creates `greet.js` and its test, verified by `node --test tests/greet.test.js`, is valid.
-- **Fix:**
-  - Rewrite the planning section: one task per unit of work; each task makes its change and, where needed, its test; its verify command is that test; tasks touching different files run in parallel.
-  - Keep the `write_stub` tool but make it optional. `test/developer.test.mjs` covers the tool, not the mandate, so it should keep passing.
-- **Test:** `pnpm test:all`. The Developer replay fixture pins tool-call shapes, not prompt text, so it should still pass. If it doesn't, find out why before re-recording anything.
-- **Measure:** one real `vajra run --yes` with the same greet request, on a fresh empty project.
-- **Done when:** the plan has 1 or 2 tasks and the whole run takes far less than 8 minutes. Report the time and the plan.
+### Task 2: the Developer mandated "Phase One" (done in code, not yet measured)
+- **What changed:** the prompt no longer asks for stub, test and implementation tasks. It asks for one task per unit of work with its test inside it. The `write_stub` and `delete_stub` tools are removed from the protocol, the sandbox and the Developer's evidence rules. `propose_plan` now measures any verify command the model did not run and sets each command's `kind` from its exit code (`developer/developer.ts`, `measureUnmeasured` and `settleKinds`).
+- **Still to do:** measure it. Run `vajra bench-plan bench/developer/todo-basic` and `todo-scope-trap` a few times and compare with the earlier results: 10 tasks, 18.6 and 8.8 minutes, about 20 model rounds before the first proposal. Report task count, time, rounds before the first proposal, and rejections. If plans get worse (tasks that prove nothing), find out why before changing the prompt again.
+- **Done when:** the plan for `todo-basic` is 4 to 8 tasks and the run takes much less than the earlier 18.6 minutes.
 
 ### Task 3: Workers can't read what their task depends on
 - **Problem:** a task may read only the files it declares. A dependent task gets "Access denied" on the files its dependency just wrote, and on the project's manifests, and loses a round guessing.

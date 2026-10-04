@@ -1,5 +1,5 @@
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { readdirSync, statSync } from 'node:fs'
 import type { PermissionsConfig } from '@codekalakaars/vajra-protocol'
 import {
   readFile,
@@ -18,7 +18,7 @@ import {
 } from './native.js'
 import { buildSummaryIndex, searchSummary, shouldSkipFile, type SummaryEntry } from './summary.js'
 import { scanProject } from './native.js'
-import { normalizeProjectPath, type TaskFilePermissions } from './task-permissions.js'
+import type { TaskFilePermissions } from './task-permissions.js'
 
 /**
  * A confined agent, as its caller sees it: one method, tool calls in and
@@ -36,23 +36,6 @@ export interface ToolCache {
   read: Map<string, { mtimeMs: number; value: string }>
   generation: number
 }
-/**
- * Absolute path for a project-relative one, refusing anything that escapes.
- *
- * `normalizeProjectPath` deliberately does not throw — several callers want a
- * stable key for an outside path. A tool that writes does not: escaping the
- * project turns a create-only stub tool into an arbitrary-write primitive, so
- * the boundary is enforced where the write happens.
- */
-function resolveInsideProject(projectDir: string, filePath: string): string {
-  const abs = isAbsolute(filePath) ? resolve(filePath) : resolve(projectDir, filePath)
-  const rel = relative(projectDir, abs)
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
-    throw new Error(`Path '${filePath}' resolves outside project directory`)
-  }
-  return abs
-}
-
 /**
  * Absolute path for a project-relative one, without a boundary check.
  *
@@ -178,14 +161,6 @@ export interface ToolHandleOptions {
   /** Called after a successful mutating tool (write/edit/delete/create). */
   onMutate?: () => void
   cache?: ToolCache
-  /**
-   * Absolute paths `write_stub` created, and the only paths `delete_stub` may
-   * remove. Owned by the caller so the set can be dropped at the execution
-   * boundary — once Workers have written, a stub is the implementation and must
-   * not be retractable. Omit it and `delete_stub` can delete nothing, which is
-   * the safe default for any handle that was not given the registry.
-   */
-  stubs?: Set<string>
 }
 
 const MASKED_STUB = '[REDACTED: masked file — contents withheld]'
@@ -516,65 +491,6 @@ export function createToolHandle(
           invalidateRead(abs)
           options.onMutate?.()
           return 'ok'
-        }
-        case 'write_stub': {
-          // The Developer's only write surface. Two hard rules, both checked
-          // here rather than trusted from the prompt: the path must not exist
-          // (so no existing file is reachable), and it must be inside the
-          // project (so the tool is not a write-anywhere primitive).
-          const path = a.path as string
-          if (isMaskedName(basename(path))) {
-            throw new Error(`Access denied: ${path} is a masked file`)
-          }
-          const abs = resolveInsideProject(projectDir, path)
-          if (existsSync(abs)) {
-            throw new Error(
-              `Refusing to overwrite '${path}': it already exists. write_stub only ` +
-                'creates. To change existing code, describe the edit in a task instead.',
-            )
-          }
-          gate(path, 'write')
-          // Phase One creates new files in new directories as a matter of
-          // course, and the Developer has no create_dir — the write has to bring
-          // its own parents, or every stub under a new folder fails on ENOENT.
-          // The absolute path is what goes to the native layer: it resolves a
-          // relative path against the process CWD, not the project, so passing
-          // the model's own spelling through would write to the wrong tree.
-          createDir(dirname(abs))
-          writeFile(abs, a.content as string)
-          options.stubs?.add(abs)
-          invalidateRead(abs)
-          options.onMutate?.()
-          return `Created ${path}.`
-        }
-        case 'delete_stub': {
-          // Only what this session created. The registry is keyed by absolute
-          // path, so an equivalent spelling of the same file still matches and a
-          // different file never does.
-          const path = a.path as string
-          const abs = resolveInsideProject(projectDir, path)
-          // A missing registry is a wiring fault, not a verdict on the file. It
-          // used to be read as "this file was never created", which is how a
-          // Developer that had just written four files was told it had written
-          // none, and left them in the user's tree.
-          if (!options.stubs) {
-            throw new Error(
-              `Cannot delete '${path}': this handle has no stub registry, so nothing can ` +
-                'be proven to be scaffolding. Only a handle built with { stubs } can retract.',
-            )
-          }
-          if (!options.stubs.has(abs)) {
-            throw new Error(
-              `Refusing to delete '${path}': it was not created by write_stub in this ` +
-                'session. Only scaffolding you created may be removed while planning.',
-            )
-          }
-          gate(path, 'delete')
-          deleteFile(abs)
-          options.stubs.delete(abs)
-          invalidateRead(abs)
-          options.onMutate?.()
-          return `Deleted ${path}.`
         }
         case 'list_files':
           return JSON.stringify(

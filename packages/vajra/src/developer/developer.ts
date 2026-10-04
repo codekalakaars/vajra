@@ -1,5 +1,6 @@
 import type {
   DeveloperPlan,
+  PlannedTaskInput,
   ToolName
 } from '@codekalakaars/vajra-protocol'
 import {
@@ -179,7 +180,7 @@ export async function developerConversationTurn(
    * What a tool call proves.
    *
    * The Developer's plan is only as good as what it actually looked at, so a
-   * read, a stub it wrote, a stub it deleted, and a baseline it measured all
+   * read and a baseline it measured both
    * update the ledger the plan validator checks against. This used to be inlined
    * in the tool executor; it lives here so the engine can own the dispatch
    * sequence without owning the role's evidence rules.
@@ -188,21 +189,6 @@ export async function developerConversationTurn(
     if (tool === 'read_file' && typeof result === 'string') {
       const readArgs = args as { path?: unknown }
       if (typeof readArgs.path === 'string') filesRead.set(readArgs.path, result)
-    } else if (tool === 'write_stub') {
-      // A stub the Developer just wrote is evidence, not just a side effect.
-      // Without this the plan could not `modify` its own stub — it would be told
-      // it never read the file — even though the Developer authored every byte of
-      // it. It also means `op: 'create'` on that path is correctly refused,
-      // because the file now genuinely exists.
-      const stubArgs = args as { path?: unknown; content?: unknown }
-      if (typeof stubArgs.path === 'string' && typeof stubArgs.content === 'string') {
-        filesRead.set(stubArgs.path, stubArgs.content)
-      }
-    } else if (tool === 'delete_stub') {
-      // The stub is gone, so it must stop counting as available: a plan that
-      // still cited it would be validated against a file that no longer exists.
-      const stubArgs = args as { path?: unknown }
-      if (typeof stubArgs.path === 'string') filesRead.delete(stubArgs.path)
     } else if (tool === 'run_baseline' && typeof result === 'string') {
       recordBaseline(result, args)
     }
@@ -266,6 +252,16 @@ export async function developerConversationTurn(
   const { filesRead, baselinesByCommand } = evidence
   /** Consecutive rejected plans, so the feedback can escalate. */
   let planRejections = 0
+  /**
+   * `rejectPlan`, and say so: the reasons go back to the model as a tool result,
+   * which nothing outside the conversation sees, so a bench log or a screen
+   * would otherwise show a plan vanishing and the Developer trying again.
+   */
+  const sendBack = (...args: Parameters<typeof rejectPlan>): void => {
+    rejectPlan(...args)
+    const [, , errors, attempt = 1] = args
+    emit({ type: 'warning', agent, text: `plan rejected (attempt ${attempt}): ${errors.join(' | ')}` })
+  }
 
   /** Record the observed exit code of a run_baseline call. Harness rejections
    *  (disallowed command, cwd escape, timeout) arrive as negative exits and are
@@ -288,6 +284,93 @@ export async function developerConversationTurn(
     } catch {
       // Not a C1 payload — nothing to record.
     }
+  }
+
+  /**
+   * Run the verify commands the model did not run itself, as the project stands.
+   *
+   * A baseline is only the exit code before any change, which nothing about the
+   * model's judgement can improve: it used to be one model round per command (or
+   * per pair), and a plan with ten verify commands spent most of its wall time on
+   * rounds that did nothing but report an exit code. A command already measured is
+   * not run again, so a model that measured on purpose, or a rejected plan being
+   * re-proposed, costs nothing here.
+   */
+  /** Verify commands the harness refused to run, by baseline key, with why. */
+  const refused = new Map<string, string>()
+
+  const measureUnmeasured = async (tasks: readonly PlannedTaskInput[]): Promise<void> => {
+    const pending = new Map<string, { command: string; args: string[]; cwd?: string; timeoutMs?: number }>()
+    for (const task of tasks) {
+      for (const v of task.verify ?? []) {
+        const key = baselineKey(v.command, v.args ?? [], v.cwd, projectDir)
+        if (baselinesByCommand.has(key) || pending.has(key)) continue
+        pending.set(key, {
+          command: v.command,
+          args: v.args ?? [],
+          ...(v.cwd ? { cwd: v.cwd } : {}),
+          ...(v.timeoutSeconds ? { timeoutMs: v.timeoutSeconds * 1000 } : {}),
+        })
+      }
+    }
+    if (pending.size === 0) return
+    const startedMeasuring = Date.now()
+    await Promise.all(
+      [...pending.entries()].map(async ([key, args]) => {
+        try {
+          const result = String(await handle.callTool('run_baseline', args))
+          recordBaseline(result, args)
+          // A negative exit is the harness declining, not the command failing: say why, because
+          // "was never run" alone sends the model to run it itself and be refused again.
+          const payload = JSON.parse(result) as { exitCode?: number; stderr?: string }
+          if (typeof payload.exitCode === 'number' && payload.exitCode < 0) {
+            refused.set(key, (payload.stderr ?? '').trim().slice(0, 160) || 'refused')
+          }
+        } catch {
+          // Unmeasured stays unmeasured: the validator names it, as it always did.
+        }
+      }),
+    )
+    emit({
+      type: 'warning',
+      agent,
+      text: `measured ${pending.size} verify command${pending.size === 1 ? '' : 's'} the plan used but had not run (${Date.now() - startedMeasuring}ms)`,
+    })
+  }
+
+  /**
+   * Give every measured verify command the kind its exit code decides.
+   *
+   * Whether a command is a `proves-change` (fails now) or a `regression-guard`
+   * (passes now) is not a judgement: it is what the baseline says, and a model
+   * that labels one the other way only earns a rejection round. A command with no
+   * measurement keeps its label, and the validator still names it. Returns how
+   * many labels were changed.
+   */
+  const settleKinds = (tasks: unknown): number => {
+    let changed = 0
+    if (!Array.isArray(tasks)) return changed
+    for (const task of tasks as Array<{ verify?: unknown }>) {
+      if (!Array.isArray(task?.verify)) continue
+      for (const v of task.verify as Array<{ command?: unknown; args?: unknown; cwd?: unknown; expectExit?: unknown; kind?: unknown }>) {
+        if (typeof v?.command !== 'string') continue
+        const exit = baselinesByCommand.get(
+          baselineKey(
+            v.command,
+            Array.isArray(v.args) ? v.args.map(String) : [],
+            typeof v.cwd === 'string' ? v.cwd : undefined,
+            projectDir,
+          ),
+        )
+        if (exit === undefined) continue
+        const kind = exit === (typeof v.expectExit === 'number' ? v.expectExit : 0) ? 'regression-guard' : 'proves-change'
+        if (v.kind !== kind) {
+          v.kind = kind
+          changed++
+        }
+      }
+    }
+    return changed
   }
 
   // The context the profile's `buildContext` hands back. Built only for a first
@@ -430,7 +513,7 @@ export async function developerConversationTurn(
         const shape = planShape(proposed.data.tasks)
         if (shape.kind === 'mixed') {
           planRejections += 1
-          rejectPlan(messages, toolCall.id, [
+          sendBack(messages, toolCall.id, [
             `Tasks use two different shapes (${shape.offenders}). Every task in a plan ` +
               'must use the same one. Convert the flat tasks to context/edits/verify.',
           ], planRejections)
@@ -439,7 +522,7 @@ export async function developerConversationTurn(
         }
         if (proposed.data.tasks.length > MAX_PLAN_TASKS) {
           planRejections += 1
-          rejectPlan(messages, toolCall.id, [
+          sendBack(messages, toolCall.id, [
             `Plan has ${proposed.data.tasks.length} tasks; the limit is ${MAX_PLAN_TASKS}. ` +
               'Consolidate: one concern per task, and merge edits to the same file into ' +
               'a single task. If the work really is that large, plan the first slice and ' +
@@ -469,15 +552,37 @@ export async function developerConversationTurn(
           )
         }
 
+        await measureUnmeasured(proposed.data.tasks)
+        // Both copies: the validator reads the parsed one, the plan is built from the raw one.
+        const reclassified = settleKinds(proposed.data.tasks)
+        settleKinds((parsed as { tasks?: unknown }).tasks)
+        if (reclassified > 0) {
+          emit({
+            type: 'warning',
+            agent,
+            text: `set the kind of ${reclassified} verify command${reclassified === 1 ? '' : 's'} from its measured exit code`,
+          })
+        }
         const evidence = buildEvidence(filesRead, baselinesByCommand, proposed.data.tasks, projectDir)
         const validation = validatePlan(proposed.data.tasks, evidence, projectDir)
         if (!validation.ok) rejection.push(...validation.errors)
         const contractCheck = validateContracts(proposed.data.tasks, proposed.data.contracts)
         rejection.push(...contractCheck.errors)
 
+        for (const task of proposed.data.tasks) {
+          for (const v of task.verify ?? []) {
+            const why = refused.get(baselineKey(v.command, v.args ?? [], v.cwd, projectDir))
+            if (why === undefined) continue
+            rejection.push(
+              `Task '${task.title}': '${v.command} ${(v.args ?? []).join(' ')}' cannot be run here (${why}). ` +
+                'Use a command that can, such as node with a script or --test, not a package manager.',
+            )
+          }
+        }
+
         if (rejection.length > 0) {
           planRejections += 1
-          rejectPlan(
+          sendBack(
             messages,
             toolCall.id,
             rejection,
@@ -491,7 +596,7 @@ export async function developerConversationTurn(
         const parsedPlan = parseProposePlanArgs(parsed, projectDir)
         if (!parsedPlan.ok) {
           planRejections += 1
-          rejectPlan(messages, toolCall.id, [parsedPlan.error], planRejections)
+          sendBack(messages, toolCall.id, [parsedPlan.error], planRejections)
           emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
           continue
         }
@@ -500,7 +605,7 @@ export async function developerConversationTurn(
         const parallel = planParallel(plan.tasks, projectDir)
         if (parallel.errors.length > 0) {
           planRejections += 1
-          rejectPlan(messages, toolCall.id, parallel.errors, planRejections)
+          sendBack(messages, toolCall.id, parallel.errors, planRejections)
           emitToolEnd(toolCall.id, toolName, false, callStarted, 'rejected')
           continue
         }

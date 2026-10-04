@@ -175,14 +175,13 @@ test('search_content and run_baseline are exposed to the right roles (P3/P6)', (
   assert.ok(!roleTools.worker.includes('run_baseline'))
 })
 
-test('write_stub is the Developer\'s only write surface, and no other role has it', () => {
-  // Phase One needs the Developer to stand a stub up so it can write and run a
-  // test against something real. That must not become a general write path: the
-  // Worker holds write_file, and the Manager holds neither.
+test('the Developer has no write surface, and no other role has a stub tool', () => {
+  // Planning does not change the project: a test is written by the task that
+  // needs it, and a Worker writes it. The Developer reads, measures and proposes.
   for (const tool of ['write_stub', 'delete_stub']) {
-    assert.ok(roleTools.developer.includes(tool), `the Developer needs ${tool}`)
-    assert.ok(!roleTools.worker.includes(tool), `a Worker must not get ${tool}`)
-    assert.ok(!roleTools.master.includes(tool), `the Manager must not get ${tool}`)
+    for (const role of ['developer', 'worker', 'master']) {
+      assert.ok(!roleTools[role].includes(tool), `${role} must not have ${tool}`)
+    }
   }
   // The Developer still has no general mutation tool.
   for (const tool of ['write_file', 'edit_file', 'delete_file', 'create_dir', 'run_command']) {

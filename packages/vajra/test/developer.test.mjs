@@ -444,51 +444,142 @@ test('a rejected plan can be re-proposed in the next turn without re-collecting 
   }
 })
 
-test('a rejection states the exit code already measured, so a kind is a relabel', async () => {
-  // A verify entry's kind is decided by the exit code the Developer already
-  // recorded, and a rejection that omits the number sends it back to
-  // run_baseline to find out what it measured an hour of turns ago. In a real
-  // session that was twenty-six baseline runs across four proposals, twenty-five
-  // of them distinct commands, because every rejection restarted the measuring.
+test('a kind that contradicts the measured exit code is corrected, not rejected', async () => {
+  // Whether a command proves a change or guards against a regression is what its
+  // exit code says, not a judgement. A model that labelled one the other way used
+  // to earn a rejection round for it; now the harness relabels and says so.
   const projectDir = makeProject()
   try {
-    // The same command, labelled as the kind its recorded exit contradicts.
-    const proposal = stubPlanProposal(
+    stubPlanProposal(
       [validStructuredTask({ verify: [{ command: 'node', args: ['--check', 'README.md'], kind: 'regression-guard' }] })],
       VALIDATION_PRELUDE,
     )
-    const { result } = await runTurn({ projectDir })
-    assert.equal(result.type, 'response', 'the mismatched kind is rejected')
-
-    const feedback = feedbackSeenBy(proposal)
-    assert.match(feedback, /already fails/, 'the validator still says what is wrong')
-    // And the rejection carries the measurement, with the kind it implies — so
-    // the next call is the plan with one word changed, not another run.
-    assert.match(
-      feedback,
-      /exit \d+\s+node --check README\.md\s+→ kind proves-change/,
-      `the recorded exit and the kind it implies are both in the rejection: ${JSON.stringify(feedback)}`,
+    const { result, events } = await runTurn({ projectDir })
+    assert.equal(result.type, 'plan', 'the plan is accepted')
+    assert.equal(result.plan.tasks[0].verify[0].kind, 'proves-change', 'the baseline exited 1, so it proves a change')
+    assert.ok(
+      events.some(e => e.type === 'warning' && /set the kind of 1 verify command/.test(e.text)),
+      'the relabel is reported, so a log shows the model was corrected',
     )
-    assert.match(feedback, /do not re-run them/, 'and the rejection says so outright')
   } finally {
     rmSync(projectDir, { recursive: true, force: true })
   }
 })
 
-test('a plan whose verify commands were never measured is told to measure them', async () => {
-  // The other side of the same rule: there is nothing to restate, so the
-  // rejection must not imply there is.
+test('relabelling does not hide a task that proves nothing: all its commands already pass', async () => {
+  const projectDir = makeProject()
+  try {
+    const proposal = stubPlanProposal([validStructuredTask()], VALIDATION_PRELUDE)
+    const { result } = await runTurn({
+      projectDir,
+      handle: {
+        callTool: async tool =>
+          tool === 'run_baseline'
+            ? JSON.stringify({ exitCode: 0, signal: null, stdout: '', stderr: '' })
+            : '# demo\n',
+      },
+    })
+    assert.equal(result.type, 'response')
+    assert.match(feedbackSeenBy(proposal), /only regression-guard checks/)
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true })
+  }
+})
+
+test('a verify command the model never ran is measured when the plan is proposed', async () => {
+  // A baseline is only an exit code before any change, so the harness takes it
+  // rather than spending a model round per command on it.
+  const projectDir = makeProject()
+  try {
+    const ran = []
+    stubPlanProposal([validStructuredTask()], [{ name: 'read_file', args: { path: 'README.md' } }])
+    const { result, events } = await runTurn({
+      projectDir,
+      handle: {
+        callTool: async (tool, args) => {
+          if (tool === 'run_baseline') {
+            ran.push(args)
+            return JSON.stringify({ exitCode: 1, signal: null, stdout: '', stderr: '' })
+          }
+          return '# demo\n'
+        },
+      },
+    })
+    assert.equal(result.type, 'plan', 'a plan whose only gap was a missing baseline is accepted')
+    assert.equal(ran.length, 1)
+    assert.deepEqual(ran[0].args, ['--check', 'README.md'])
+    const note = events.find(e => e.type === 'warning' && /measured 1 verify command/.test(e.text))
+    assert.ok(note, 'the run says it measured, so a log shows where the exit code came from')
+    assert.equal(result.plan.tasks[0].verify[0].baselineExit, 1, 'and the plan carries what was observed')
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true })
+  }
+})
+
+test('a command the model already ran is not run again', async () => {
+  const projectDir = makeProject()
+  try {
+    let runs = 0
+    stubPlanProposal([validStructuredTask()], VALIDATION_PRELUDE)
+    const { result } = await runTurn({
+      projectDir,
+      handle: {
+        callTool: async tool => {
+          if (tool === 'run_baseline') {
+            runs++
+            return JSON.stringify({ exitCode: 1, signal: null, stdout: '', stderr: '' })
+          }
+          return '# demo\n'
+        },
+      },
+    })
+    assert.equal(result.type, 'plan')
+    assert.equal(runs, 1, 'the model ran it, the harness did not')
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true })
+  }
+})
+
+test('a verify command the harness refuses is rejected with the reason, not just "never run"', async () => {
   const projectDir = makeProject()
   try {
     const proposal = stubPlanProposal(
-      [validStructuredTask()],
+      [validStructuredTask({ verify: [{ command: 'npm', args: ['test'], kind: 'proves-change' }] })],
       [{ name: 'read_file', args: { path: 'README.md' } }],
     )
-    const { result } = await runTurn({ projectDir })
-    assert.equal(result.type, 'response', 'a plan with an unmeasured verify is rejected')
+    const { result } = await runTurn({
+      projectDir,
+      handle: {
+        callTool: async tool =>
+          tool === 'run_baseline'
+            ? JSON.stringify({ exitCode: -1, signal: null, stdout: '', stderr: "Failed to execute 'npm': Permission denied" })
+            : '# demo\n',
+      },
+    })
+    assert.equal(result.type, 'response')
     const feedback = feedbackSeenBy(proposal)
-    assert.match(feedback, /was never run/)
-    assert.doesNotMatch(feedback, /do not re-run them/, 'nothing is claimed to be measured')
+    assert.match(feedback, /'npm test' cannot be run here \(Failed to execute 'npm': Permission denied\)/)
+    assert.match(feedback, /not a package manager/)
+  } finally {
+    rmSync(projectDir, { recursive: true, force: true })
+  }
+})
+
+test('a verify command that cannot be run is still rejected, and named', async () => {
+  const projectDir = makeProject()
+  try {
+    const proposal = stubPlanProposal([validStructuredTask()], [{ name: 'read_file', args: { path: 'README.md' } }])
+    const { result } = await runTurn({
+      projectDir,
+      handle: {
+        callTool: async tool => {
+          if (tool === 'run_baseline') throw new Error('not allowed')
+          return '# demo\n'
+        },
+      },
+    })
+    assert.equal(result.type, 'response')
+    assert.match(feedbackSeenBy(proposal), /was never run/)
   } finally {
     rmSync(projectDir, { recursive: true, force: true })
   }
@@ -509,89 +600,6 @@ test('the ledger is dropped when reset, so stale evidence cannot validate a plan
   stubPlanProposal([validStructuredTask()])
   const { result } = await runTurn({ evidence: ledger })
   assert.equal(result.type, 'response')
-})
-
-test('a stub the Developer wrote is evidence it can plan against', async () => {
-  // The point of write_stub: Phase One asks for a stub to exist before a test
-  // can be written against it, but a plan is not executed until it is confirmed.
-  // Without this the Developer could only specify a stub it had never seen, and
-  // never run the test it specified against one. The content it wrote has to
-  // count as something it read, or the plan is told it never opened the file.
-  const STUB = 'export const answer = 0\n'
-  const handle = {
-    callTool: async (tool, args) => {
-      if (tool === 'write_stub') return `Created ${args.path}.`
-      if (tool === 'run_baseline') {
-        return JSON.stringify({ exitCode: 1, signal: null, stdout: '', stderr: '' })
-      }
-      return STUB
-    },
-  }
-
-  stubPlanProposal(
-    [
-      {
-        id: 'impl',
-        title: 'Make answer 42',
-        description: 'why it matters',
-        type: 'modify',
-        dependsOn: [],
-        context: [{ path: 'src/answer.ts', reason: 'the constant this changes' }],
-        // `modify`, not `create`: the file genuinely exists now.
-        edits: [{ op: 'modify', path: 'src/answer.ts', anchor: 'export const answer = 0', change: '42' }],
-        verify: [{ command: 'node', args: ['--test'], kind: 'proves-change' }],
-      },
-    ],
-    [
-      { name: 'write_stub', args: { path: 'src/answer.ts', content: STUB } },
-      { name: 'run_baseline', args: { command: 'node', args: ['--test'] } },
-    ],
-  )
-
-  const { result } = await runTurn({ handle })
-
-  assert.equal(result.type, 'plan', `a plan built on the Developer's own stub must validate: ${JSON.stringify(result)}`)
-  assert.deepEqual(result.plan.tasks[0].writeFile, ['src/answer.ts'])
-})
-
-test('a deleted stub stops counting as available evidence', async () => {
-  // Otherwise a plan could still cite a file that no longer exists, and the
-  // validator would check an anchor against content that is gone.
-  const handle = {
-    callTool: async (tool, args) => {
-      if (tool === 'write_stub') return `Created ${args.path}.`
-      if (tool === 'delete_stub') return `Deleted ${args.path}.`
-      if (tool === 'run_baseline') {
-        return JSON.stringify({ exitCode: 1, signal: null, stdout: '', stderr: '' })
-      }
-      return 'export const answer = 0\n'
-    },
-  }
-
-  const requests = stubPlanProposal(
-    [
-      {
-        id: 'impl',
-        title: 'Make answer 42',
-        description: 'why it matters',
-        type: 'modify',
-        dependsOn: [],
-        context: [{ path: 'src/answer.ts', reason: 'the constant this changes' }],
-        edits: [{ op: 'modify', path: 'src/answer.ts', anchor: 'export const answer = 0', change: '42' }],
-        verify: [{ command: 'node', args: ['--test'], kind: 'proves-change' }],
-      },
-    ],
-    [
-      { name: 'write_stub', args: { path: 'src/answer.ts', content: 'export const answer = 0\n' } },
-      { name: 'delete_stub', args: { path: 'src/answer.ts' } },
-      { name: 'run_baseline', args: { command: 'node', args: ['--test'] } },
-    ],
-  )
-
-  const { result } = await runTurn({ handle })
-
-  assert.equal(result.type, 'response', 'a plan citing a deleted stub is rejected')
-  assert.match(feedbackSeenBy(requests), /never read it/)
 })
 
 test('an anchor outside a narrowed read is refused, because it was never shown', async () => {
