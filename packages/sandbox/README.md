@@ -1,19 +1,26 @@
 # @codekalakaars/vajra-sandbox
 
-Programmatically configurable sandbox policy for Vajra. Restricts what files a worker can access and what tools it can call.
+The policy and the guards a confined shell is built from. The native addon (`packages/native`) does the confining with Landlock; this package decides what to confine and keeps the records around it.
 
-## Install
+**Linux only.** Landlock is a Linux kernel feature; `platform-guard` refuses to start anywhere else.
 
-```bash
-pnpm add @codekalakaars/vajra-sandbox
-```
+## What is in it
 
-## Usage
+| File | What |
+|------|------|
+| `config.ts` | `createSandboxConfig`: an immutable description of what a confined process may touch (file rules, extra read and write paths) |
+| `file-rules.ts` | Glob rules (`*`, `**`, `?`, `!` to revoke) resolved to the per-file permissions the addon enforces |
+| `file-config.ts` | Reading and writing `.vajra-sandbox.json`, flat or as named environments |
+| `platform.ts`, `platform-guard.ts` | The Linux-only check, and an import that stops a command early with the real reason |
+| `native.ts` | The addon wrapper: capabilities, `applySandbox`, secret masking (`.env` and variants), `redact`, running a command with a deadline |
+| `change-history.ts` | The original of each file before it is modified, so changes can be rolled back |
+| `freeze.ts` | Freeze and thaw a process and everything it started (`SIGSTOP` and `SIGCONT` down the tree) |
+| `types.ts` | Permission and file-entry shapes |
 
-### Programmatic API
+## Example
 
 ```typescript
-import { createSandboxConfig, resolveAllowedTools, buildLaunchJob } from '@codekalakaars/vajra-sandbox'
+import { createSandboxConfig, resolveFilePermissions } from '@codekalakaars/vajra-sandbox'
 
 const config = createSandboxConfig({
   projectDir: '/path/to/project',
@@ -22,81 +29,13 @@ const config = createSandboxConfig({
     { pattern: 'src/**', write: true },
     { pattern: '.env', read: false },
   ],
-  allowedTools: ['read_file', 'write_file', 'edit_file'],
 })
 
-const tools = resolveAllowedTools(config, 'worker')
-const job = buildLaunchJob(config, 'session-1')
+const permissions = resolveFilePermissions(config) // what the addon enforces
 ```
 
-### CLI
+## Tests
 
 ```bash
-# Check sandbox capabilities
-vajra status
-
-# Create or view .vajra-sandbox.json
-vajra config
-
-# Test if sandbox works on this platform
-vajra test
-
-# Apply sandbox and run a command inside it
-vajra secure -- npm test
-vajra secure -- node server.js
-```
-
-**Examples:**
-
-```
-$ vajra status
-
-Vajra — capabilities
-
-  Platform:   linux
-  Filesystem: enforced
-  Mechanism:  landlock
-  Details:    Landlock ABI 4: all filesystem restrictions enforced
-
-  ✅ Full sandbox enforcement available.
-```
-
-```
-$ vajra config --project-dir ./my-app
-
-Created: ./my-app/.vajra-sandbox.json
-
-Default configuration:
-  - Read: allowed
-  - Write: denied
-  - Edit: denied
-  - Delete: denied
-
-Edit .vajra-sandbox.json to customize permissions.
-```
-
-```
-$ vajra secure --project-dir ./my-app -- npm test
-
-🔒 Secured: landlock (enforced)
-   Project: ./my-app
-
-   ... tests run here, confined to ./my-app ...
-```
-
-## Architecture
-
-- **config.ts** — Immutable sandbox config builder
-- **file-rules.ts** — Glob-based file permission resolution (`*`, `**`, `?`, `!` negation)
-- **tool-rules.ts** — Tool allowlisting with role-based defaults
-- **sandbox-builder.ts** — Translates config to `LaunchJob` for the worker
-- **file-config.ts** — Load/save `.vajra-sandbox.json` (flat and named environments)
-- **file-locks.ts** — Read-shared/write-exclusive file locking
-- **resources.ts** — Per-worker resource limits (memory, CPU, tool calls)
-- **cli.ts** — `vajra-sandbox` CLI tool
-
-## Testing
-
-```bash
-pnpm test
+pnpm --filter @codekalakaars/vajra-sandbox test   # builds are separate: run pnpm build:all first
 ```

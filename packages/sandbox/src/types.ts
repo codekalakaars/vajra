@@ -1,6 +1,6 @@
 // Shared types for sandbox configuration.
-// These mirror vajra-core's own types but are kept here so the sandbox
-// package has zero dependency on vajra-core.
+// These mirror vajra-native's own types but are kept here so the sandbox
+// package has zero dependency on vajra-native.
 
 export interface FilePermissions {
   read: boolean

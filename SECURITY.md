@@ -2,14 +2,14 @@
 
 ## Scope
 
-Vajra is mid-rewrite. The native core (`vajra-core`) now enforces filesystem
-confinement on Linux (Landlock) and macOS (Seatbelt), and provides output
-redaction. **Windows has no confinement at all** — that is a known and
-documented limitation, not a vulnerability.
+Vajra is mid-rewrite. The native core (`vajra-native`) now enforces filesystem
+confinement on Linux (Landlock), and provides output redaction. **Vajra supports
+Linux only** — on any other platform, including macOS and Windows, the CLI
+refuses to start rather than running unconfined.
 
 In scope, and welcome:
 
-- escaping the filesystem policy on Linux or macOS — reaching a path the policy
+- escaping the filesystem policy on Linux — reaching a path the policy
   should deny
 - a permission config that is accepted but not correctly enforced
 - secret values surviving `redact`
@@ -18,7 +18,8 @@ In scope, and welcome:
 
 Not in scope:
 
-- the absence of confinement on Windows
+- unsupported platforms, including macOS and Windows — there is no build, no CI
+  run and no package published for them, and a start attempt is rejected outright
 - `.env` files being readable inside a sandboxed project — masking is not
   ported yet and the README says so
 

@@ -1,103 +1,45 @@
 # Vajra
 
-Vajra keeps AI CLI agents (opencode, claude, codex, ...) confined to a project
-so they can work on your code without reading your secrets.
+A CLI that confines a shell, so an AI coding agent running inside it cannot go haywire: read your keys, write outside the project, or delete what it was never meant to touch.
 
-## Architecture
+Vajra is being rebuilt from a multi-agent harness down to this one job. What is here is the confinement primitive and the policy around it. **The guarded shell itself is not built yet.**
 
-| Package | Description |
-| --- | --- |
-| `@codekalakaars/vajra-core` | Rust napi-rs addon — file/process/env/path primitives, sandbox enforcement |
-| `@codekalakaars/vajra-sandbox` | Standalone TypeScript sandbox — file locks, permissions, config, CLI |
-| `@codekalakaars/vajra-protocol` | Shared RPC types, tool definitions, push event shapes |
-| `@codekalakaars/vajra-cli` | Shipping product — multi-agent task execution from the terminal |
-| `@codekalakaars/vajra-agent-core` | Shared pure agent helpers (summary/tree/tools) used by the CLI |
+## What exists
 
-## Status
+| Piece | Status |
+|-------|--------|
+| Landlock confinement of file access (read, write, execute, delete, per path), applied to a process and inherited by everything it starts | Built, tested (`packages/native`) |
+| `vajra doctor`: can this machine enforce it? | Built, tested |
+| File policy: glob rules compiled to the permissions the addon enforces, stored in `.vajra-sandbox.json` | Built, tested (`packages/sandbox`) |
+| Secret masking: `.env` files and variants are withheld, and secret values can be redacted from text | Built, tested |
+| Change history: the original of each file before it is modified, for rollback | Built, tested, not wired to anything yet |
+| Freeze and thaw a whole process tree | Built, tested |
+| **`vajra` starting a shell or an agent under that policy** | **Not built** |
+| Network control | Not built. Landlock's network rules are not used |
+| Command allow and deny lists, an audit log of what the agent did | Not built |
 
-| Layer | State |
-| --- | --- |
-| File / process / env / path primitives | Implemented, tested on Linux/macOS/Windows in CI |
-| Env-file parsing, sample generation, redaction | Implemented; project `.env` entries are masked out of the file index |
-| Per-file permission config | Implemented |
-| Sandbox enforcement (CLI `vajra run`) | Confined worker calls `applySandbox` — Linux (Landlock) and macOS (Seatbelt); **none on Windows** |
-| Multi-agent orchestration | Developer/master/worker roles with plan confirmation |
-| TypeScript harness | Implemented |
+Platform: **Linux only**, kernel 5.13+ (Landlock). No `sudo` is needed.
 
-## What the native core provides
-
-Cross-platform primitives, exported to Node with generated TypeScript types
-(see [`index.d.ts`](index.d.ts)):
-
-- **file** — `readFile`, `writeFile`, `editFile`, `deleteFile`, `deleteDir`,
-  `createDir`, `listFiles`, `copyFile`, `renameFile`, plus existence and size
-  predicates
-- **process** — `runCommand` (no shell), `runShell`, `which`
-- **env** — `getEnv`, `envExists`, `getAllEnv`, `getEnvFiltered`, `currentDir`,
-  `homeDir`, `tempDir`
-- **path** — `resolvePath`, `normalizePath`, `realPath`, `joinPaths`,
-  `dirname`, `basename`, `extension`, `ensureExt`
-- **env files** — `parseEnv`, `loadEnvFile`, `renderSampleEnv`,
-  `ensureSampleEnv`
-- **secrets** — `redact`, `minRedactableLength`
-- **permissions** — `defaultPermissions`, `loadPermissions`, `savePermissions`,
-  `permissionsFor`, `scanProject`
-- **sandbox** — `sandboxCapabilities`, `applySandbox`
-
-Operations whose cost scales with the data also have `...Async` variants that
-run off the event loop.
-
-Key behaviors:
-
-- `listFiles` reports symlinks but never follows them, caps depth at 8.
-- `deleteFile` refuses directories. Use `deleteDir(path, true)` for recursive.
-- `editFile` fails on absent or ambiguous match. Pass `replaceAll` when needed.
-- `copyFile` and `renameFile` refuse to replace existing destinations unless
-  `overwrite` is passed.
-- There is no `setEnv`/`removeEnv`. Assign to `process.env` instead.
-- `redact` ignores values shorter than 4 characters.
-- `applySandbox` confines the calling process irreversibly.
-
-## Build
-
-Requires Rust (stable) and Node 22+ with pnpm.
-
-A fresh clone cannot run the CLI until the native binary is built: `*.node` is
-gitignored while the generated `index.js` / `index.d.ts` loader is committed, so
-`@codekalakaars/vajra-core` throws on import until `pnpm build` has produced the
-addon.
+## Try it
 
 ```bash
 pnpm install
-pnpm build        # napi build --platform --release — required first
-pnpm test         # Node smoke tests against the built addon
-cargo test --manifest-path packages/core/Cargo.toml
-cargo clippy --manifest-path packages/core/Cargo.toml --all-targets -- -D warnings
-pnpm cli          # build the CLI and run it (vajra --help)
+pnpm build:all
+node packages/vajra/dist/cli/index.js doctor
 ```
 
-CI runs on ubuntu, macos and windows.
+`doctor` reports the kernel, the confinement mechanism and Landlock's ABI version, and exits 0 only if file access can really be confined.
 
-## Security model
+## Layout
 
-Vajra protects against an agent accidentally or casually reading secrets. It
-does not defend against one that deliberately writes exfiltration code. Network
-access is unrestricted since agents need their LLM APIs.
+| Folder | What |
+|--------|------|
+| `packages/native` | Rust (napi) addon: Landlock, running a command with a deadline, path and env handling, secret redaction |
+| `packages/sandbox` | TypeScript: the policy (rules, config file), the platform check, change history, process-tree freezing |
+| `packages/vajra` | The `vajra` command |
 
-Enforced today on the CLI path (`vajra run`):
+Working rules are in [AGENTS.md](AGENTS.md), how to build and contribute in [CONTRIBUTING.md](CONTRIBUTING.md), and the security policy in [SECURITY.md](SECURITY.md).
 
-- **Filesystem confinement** — Landlock on Linux, Seatbelt on macOS. Tools run
-  in a forked worker that calls `applySandbox` before touching anything.
-- **Output redaction** — `redact` replaces secret values with `[REDACTED:KEY]`.
-- **Secret masking** — project `.env` files are excluded from `listFiles` and
-  the summary index, so their contents are not handed to the model.
+## History
 
-Not enforced yet:
-
-- **Nothing on Windows.** `applySandbox` refuses rather than pretending.
-
-Confinement is process-wide and irreversible.
-
-## License
-
-[Apache 2.0](LICENSE)
+The previous design (a Developer that plans, a Manager that schedules, parallel Workers) is on the branch `feat/cli-agent-v1-config`.

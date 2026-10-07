@@ -1,13 +1,6 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { dirname, resolve, relative } from 'node:path'
 
-export interface FileChange {
-  taskId: string
-  filePath: string
-  originalContent: string | null
-  timestamp: number
-}
-
 export interface TaskChanges {
   taskId: string
   files: Map<string, string | null> // filePath -> originalContent (null = file was created)

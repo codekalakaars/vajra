@@ -1,7 +1,7 @@
 {
   "name": "@codekalakaars/vajra-sandbox",
   "version": "0.0.1",
-  "description": "OS-level sandboxing and file-permission enforcement for Vajra AI agents",
+  "description": "File policy, secret masking and process guards for confining a shell",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -10,31 +10,29 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./platform-guard": {
+      "types": "./dist/platform-guard.d.ts",
+      "default": "./dist/platform-guard.js"
+    }
+  },
   "files": [
     "dist"
   ],
-  "bin": {
-    "vajra-sandbox": "dist/cli.js"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test \"test/*.test.mjs\"",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@codekalakaars/vajra-protocol": "workspace:*"
-  },
-  "peerDependencies": {
-    "@codekalakaars/vajra-core": "workspace:*"
-  },
-  "peerDependenciesMeta": {
-    "@codekalakaars/vajra-core": {
-      "optional": true
-    }
+    "@codekalakaars/vajra-native": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.5.4",
-    "typescript": "^5.5.4",
-    "@codekalakaars/vajra-core": "workspace:*"
+    "typescript": "^5.5.4"
   }
 }

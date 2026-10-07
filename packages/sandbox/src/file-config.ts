@@ -24,7 +24,6 @@ interface PersistedConfig {
     edit?: boolean
     delete?: boolean
   }>
-  allowedTools?: string[]
   allowUnenforced?: boolean
   readExecutePaths?: string[]
   readWritePaths?: string[]
@@ -52,7 +51,6 @@ function parseConfig(
       edit: r.edit,
       delete: r.delete,
     })),
-    allowedTools: raw.allowedTools,
     allowUnenforced: raw.allowUnenforced,
     readExecutePaths: raw.readExecutePaths,
     readWritePaths: raw.readWritePaths,
@@ -110,7 +108,6 @@ interface SerializedConfig {
   version: number
   defaultPermissions: { read: boolean; write: boolean; edit: boolean; delete: boolean }
   fileRules: Array<{ pattern: string; read?: boolean; write?: boolean; edit?: boolean; delete?: boolean }>
-  allowedTools: string[] | null
   allowUnenforced: boolean
   readExecutePaths: string[]
   readWritePaths: string[]
@@ -127,7 +124,6 @@ function serializeConfig(config: SandboxConfig): SerializedConfig {
       ...(r.edit !== undefined && { edit: r.edit }),
       ...(r.delete !== undefined && { delete: r.delete }),
     })),
-    allowedTools: config.allowedTools ? [...config.allowedTools] : null,
     allowUnenforced: config.allowUnenforced,
     readExecutePaths: [...config.readExecutePaths],
     readWritePaths: [...config.readWritePaths],
