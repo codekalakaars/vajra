@@ -1,10 +1,9 @@
-// @codekalakaars/sandbox — programmatically configurable sandbox policy.
+// @codekalakaars/vajra-sandbox: the policy and the guards a confined shell is built from.
 //
-// Provides a TypeScript API for building sandbox configurations that restrict
-// what files a worker can access and what tools it can call. The config is
-// built by the parent process and passed to the sandboxed worker — the worker
-// never modifies it.
-//
+// What is here: the Linux-only platform check, the file policy (glob rules,
+// compiled to the permissions the native addon enforces with Landlock), the
+// `.vajra-sandbox.json` file that stores it, secret masking, change history for
+// rollback, and freezing a process tree. The native addon does the confining.
 
 export { createSandboxConfig, type SandboxConfig, type SandboxEnvironments, type FileRule, type CreateSandboxInput } from './config.js'
 export {
@@ -14,21 +13,10 @@ export {
   assertSupportedPlatform,
   type SupportedPlatform,
 } from './platform.js'
-export { matchesPattern, resolveFilePermission, resolveFilePermissions, filterFileEntries, checkToolPermission } from './file-rules.js'
-export { resolveAllowedTools } from './tool-rules.js'
-export { buildLaunchJob, type LaunchJob } from './sandbox-builder.js'
+export { matchesPattern, resolveFilePermission, resolveFilePermissions, filterFileEntries } from './file-rules.js'
 export { loadSandboxConfig, loadSandboxEnvironments, saveSandboxConfig, saveSandboxEnvironments, DEFAULT_CONFIG_FILE } from './file-config.js'
-export { FileLockManager, type Lock, type LockMode } from './file-locks.js'
-export { type ResourceLimits, type ConcurrencyConfig, DEFAULT_RESOURCE_LIMITS, DEFAULT_CONCURRENCY, resolveResourceLimits, resolveConcurrencyConfig } from './resources.js'
 export { ChangeHistory, type TaskChanges } from './change-history.js'
-export {
-  WorkerPool,
-  type PoolWorker,
-  type PoolStats,
-  type WorkerLease,
-  type WorkerPoolOptions,
-} from './pool.js'
-
-// The confined worker process, and the repository index and tool specs it serves.
-export * from './process/index.js'
-export * from './project/index.js'
+export { descendants, freezeTree, thawTree } from './freeze.js'
+export { sandboxCapabilities, applySandbox, type SandboxCapabilities, type SandboxResult } from './native.js'
+export { isMaskedName, scanProject, defaultPermissions, loadPermissions, permissionsFor, loadEnvFile, redact, runCommandAsyncTimeout, type EnvVar } from './native.js'
+export type { FilePermissions, PermissionsConfig, ProjectFileEntry } from './types.js'

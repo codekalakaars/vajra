@@ -1,9 +1,0 @@
-{
-  "name": "cpu-thresholds",
-  "suites": ["wide", "chain", "fan", "mixed"],
-  "repetitions": 5,
-  "vary": {
-    "cpuPauseAt": [0.8, 0.9, 0.97],
-    "cpuResumeAt": [0.6, 0.75]
-  }
-}

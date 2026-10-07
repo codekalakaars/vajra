@@ -1,8 +1,0 @@
-{
-  "name": "read-locks",
-  "suites": ["wide", "chain", "fan", "mixed"],
-  "repetitions": 5,
-  "vary": {
-    "readLocks": ["exclusive", "shared"]
-  }
-}

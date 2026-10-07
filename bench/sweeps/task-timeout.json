@@ -1,8 +1,0 @@
-{
-  "name": "task-timeout",
-  "suites": ["wide", "chain", "fan", "mixed"],
-  "repetitions": 5,
-  "vary": {
-    "taskTimeoutSec": [120, 300, 600]
-  }
-}

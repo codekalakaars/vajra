@@ -1,7 +1,7 @@
 {
   "name": "@codekalakaars/vajra-sandbox",
   "version": "0.0.1",
-  "description": "OS-level sandboxing and file-permission enforcement for Vajra AI agents",
+  "description": "File policy, secret masking and process guards for confining a shell",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -29,7 +29,6 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@codekalakaars/vajra-protocol": "workspace:*",
     "@codekalakaars/vajra-native": "workspace:*"
   },
   "devDependencies": {

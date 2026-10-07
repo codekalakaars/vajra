@@ -1,8 +1,0 @@
-{
-  "name": "respawn",
-  "suites": ["wide", "chain", "fan", "mixed"],
-  "repetitions": 5,
-  "vary": {
-    "respawnContext": [false, true]
-  }
-}

@@ -1,6 +1,6 @@
 # Contributing to Vajra
 
-Read [AGENTS.md](AGENTS.md) for the map of the code and [docs/architecture.md](docs/architecture.md) for how it fits together.
+Read [AGENTS.md](AGENTS.md) for the map of the code and [README.md](README.md) for what is built.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ Read [AGENTS.md](AGENTS.md) for the map of the code and [docs/architecture.md](d
 ```bash
 pnpm install
 pnpm build:all          # the Rust addon and every TypeScript package
-pnpm test:all           # every package, then the bench tooling
+pnpm test:all           # every package
 
 pnpm test:rust          # cargo test for the addon
 pnpm lint               # cargo clippy, warnings are errors
@@ -25,6 +25,4 @@ Tests import from `dist/`: build first. `pnpm build:all` regenerates `packages/n
 
 - One concern per pull request.
 - `pnpm build:all && pnpm test:all` must pass.
-- Do not change `packages/vajra/test/fixtures/replay/` unless the prompt a Worker or Developer sees is meant to change.
-- A change to a run parameter goes through `bench/config.json` and the sweeps in `bench/sweeps/`; say which sweep justifies it.
-- Record a significant decision as an ADR in `docs/adr/`.
+- Record a significant decision in `docs/`, with why it was made.

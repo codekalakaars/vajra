@@ -1,8 +1,0 @@
-{
-  "name": "preload-reads",
-  "suites": ["wide", "chain", "fan", "mixed"],
-  "repetitions": 5,
-  "vary": {
-    "preloadReads": [false, true]
-  }
-}

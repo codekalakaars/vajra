@@ -1,8 +1,0 @@
-{
-  "name": "context-pack",
-  "suites": ["wide", "chain", "fan", "mixed"],
-  "repetitions": 5,
-  "vary": {
-    "contextPack": [false, true]
-  }
-}

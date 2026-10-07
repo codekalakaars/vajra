@@ -1,8 +1,0 @@
-{
-  "name": "worker-memory",
-  "suites": ["wide", "mixed"],
-  "repetitions": 5,
-  "vary": {
-    "workerMemMb": [128, 256, 512]
-  }
-}

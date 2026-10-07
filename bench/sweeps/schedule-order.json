@@ -1,8 +1,0 @@
-{
-  "name": "schedule-order",
-  "suites": ["wide", "chain", "fan", "mixed"],
-  "repetitions": 5,
-  "vary": {
-    "scheduleOrder": ["plan", "critical-path", "most-dependents"]
-  }
-}

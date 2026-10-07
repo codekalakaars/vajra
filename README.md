@@ -1,42 +1,45 @@
 # Vajra
 
-Vajra runs a plan of tasks on parallel, sandboxed Workers, under a Manager. Each Worker is one model loop that can only touch the files its task names, enforced by the kernel (Landlock), not by the prompt.
+A CLI that confines a shell, so an AI coding agent running inside it cannot go haywire: read your keys, write outside the project, or delete what it was never meant to touch.
 
-```
-you ──task──▶ Developer ──plan──▶ Manager ──task──▶ Worker ──▶ confined process
-```
+Vajra is being rebuilt from a multi-agent harness down to this one job. What is here is the confinement primitive and the policy around it. **The guarded shell itself is not built yet.**
 
-## Status
+## What exists
 
-| Part | State |
-|------|-------|
-| Manager: scheduling by CPU and RAM, pausing, retries, file leases | Built, tested |
-| Worker: context pack, output cap, elision, checkpoints | Built, tested. The pack is on in `bench/config.json` |
-| Sandbox: Landlock confinement, file rules, locks, rollback | Built, tested |
-| `vajra bench <suite>`: run a predefined plan and score it | Built. Four suites in `bench/suites/` |
-| Developer: creates the plan from a conversation | Built, tested. `vajra run` drives it |
-| `vajra run "<what you want>"`: Developer plans, you review, the Manager runs it | Built, tested end to end with a scripted model |
+| Piece | Status |
+|-------|--------|
+| Landlock confinement of file access (read, write, execute, delete, per path), applied to a process and inherited by everything it starts | Built, tested (`packages/native`) |
+| `vajra doctor`: can this machine enforce it? | Built, tested |
+| File policy: glob rules compiled to the permissions the addon enforces, stored in `.vajra-sandbox.json` | Built, tested (`packages/sandbox`) |
+| Secret masking: `.env` files and variants are withheld, and secret values can be redacted from text | Built, tested |
+| Change history: the original of each file before it is modified, for rollback | Built, tested, not wired to anything yet |
+| Freeze and thaw a whole process tree | Built, tested |
+| **`vajra` starting a shell or an agent under that policy** | **Not built** |
+| Network control | Not built. Landlock's network rules are not used |
+| Command allow and deny lists, an audit log of what the agent did | Not built |
 
-Provider: OpenCode Zen only (`zen/*` and `go/*` model ids, one `OPENCODE_API_KEY`). Platform: **Linux only**, kernel 5.13+.
+Platform: **Linux only**, kernel 5.13+ (Landlock). No `sudo` is needed.
 
-## Quick start
+## Try it
 
 ```bash
-pnpm install          # needs Node 22+, pnpm and a stable Rust toolchain
+pnpm install
 pnpm build:all
-pnpm test:all
-
-node packages/vajra/dist/cli/index.js auth login <key>
-node packages/vajra/dist/cli/index.js run -d path/to/project "add a hello module"
-node packages/vajra/dist/cli/index.js bench bench/suites/wide
+node packages/vajra/dist/cli/index.js doctor
 ```
 
-`run` and `bench` call a real model and cost money. `run` asks you to review the plan before anything is written; `--yes` skips that.
+`doctor` reports the kernel, the confinement mechanism and Landlock's ABI version, and exits 0 only if file access can really be confined.
 
-## Where to read next
+## Layout
 
-- [docs/architecture.md](docs/architecture.md): how it fits together
-- [docs/bench-and-tuning.md](docs/bench-and-tuning.md): the parameters and the tuning method
-- [AGENTS.md](AGENTS.md): a map of the code and the rules for working in it
+| Folder | What |
+|--------|------|
+| `packages/native` | Rust (napi) addon: Landlock, running a command with a deadline, path and env handling, secret redaction |
+| `packages/sandbox` | TypeScript: the policy (rules, config file), the platform check, change history, process-tree freezing |
+| `packages/vajra` | The `vajra` command |
 
-Apache-2.0. See [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+Working rules are in [AGENTS.md](AGENTS.md), how to build and contribute in [CONTRIBUTING.md](CONTRIBUTING.md), and the security policy in [SECURITY.md](SECURITY.md).
+
+## History
+
+The previous design (a Developer that plans, a Manager that schedules, parallel Workers) is on the branch `feat/cli-agent-v1-config`.

@@ -1,8 +1,0 @@
-{
-  "name": "worker-reasoning",
-  "suites": ["wide", "chain", "fan", "mixed"],
-  "repetitions": 5,
-  "vary": {
-    "workerReasoning": ["off", "low", "medium", "high"]
-  }
-}
