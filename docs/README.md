@@ -1,5 +1,10 @@
 # Documentation
 
-Nothing beyond the [README](../README.md) yet. When the guarded shell is built, its design goes here, with the decisions that shaped it.
+| Document | What it is |
+|----------|------------|
+| [project-policy.md](project-policy.md) | Reference for `.vajra.json`: the format, what each right means, and why some policies are refused |
+| [virtual-view.md](virtual-view.md) | Open decision: a filtered view of the project for exact per-path rights, with Landlock kept as the outer wall |
 
-Working rules for contributors and agents are in [../AGENTS.md](../AGENTS.md).
+Record a decision here when it shapes how the guard behaves and would not be obvious from the code: what was chosen, what was ruled out, and why.
+
+Working rules for contributors and agents are in [../AGENTS.md](../AGENTS.md). The short version of what is built is in the [README](../README.md).

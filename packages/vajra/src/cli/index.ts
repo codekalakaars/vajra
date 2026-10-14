@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { doctorCommand } from './doctor.js'
 import { runProtectedShell, shellCommand } from './shell.js'
+import { guardCommand } from './guard.js'
 
 function readPackageVersion(): string {
   try {
@@ -26,7 +27,10 @@ program
   .name('vajra')
   .description('Confine a shell so an AI coding agent running inside it cannot go haywire')
   .version(readPackageVersion())
+  // So that `vajra guard sh -c ...` hands `-c` to the command instead of reading it as ours.
+  .enablePositionalOptions()
 
+program.addCommand(guardCommand())
 program.addCommand(doctorCommand())
 program.addCommand(shellCommand())
 
