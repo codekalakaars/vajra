@@ -29,10 +29,10 @@ import type { FilePermissions, PermissionsConfig } from '@codekalakaars/vajra-sa
 export const POLICY_FILE = '.vajra.json'
 
 /** The native walker descends this many levels; a rule deeper than that would be ignored. */
-const MAX_DEPTH = 8
+export const MAX_DEPTH = 8
 
 /** The native walker grants these folders read and run only, and does not look inside them. */
-const NOT_WALKED = new Set(['.git', 'node_modules', 'target'])
+export const NOT_WALKED = new Set(['.git', 'node_modules', 'target'])
 
 const TOP_KEYS = new Set(['version', 'default', 'paths'])
 const RIGHT_KEYS = new Set(['read', 'write', 'delete'])
@@ -70,7 +70,7 @@ const START: FilePermissions = { read: true, write: false, edit: false, delete: 
  * Load the project's policy: the file if there is one, else the read-only default,
  * with any command-line rules added on top. Throws PolicyFileError.
  */
-export function loadProjectPolicy(projectDir: string, changes: PolicyChanges = {}): ProjectPolicy {
+export function loadProjectPolicy(projectDir: string, changes: PolicyChanges = {}, absent: ReadonlySet<string> = new Set()): ProjectPolicy {
   const file = join(projectDir, POLICY_FILE)
   const fromFile = existsSync(file)
   const top = fromFile ? readPolicyFile(file) : { version: 1 }
@@ -92,7 +92,7 @@ export function loadProjectPolicy(projectDir: string, changes: PolicyChanges = {
   add(changes.delete, 'delete', true)
   add(changes.denyRead, 'read', false)
 
-  const { config, lines } = resolvePolicy(projectReal, { ...top, paths })
+  const { config, lines } = resolvePolicy(projectReal, { ...top, paths }, absent)
   const json = JSON.stringify({ version: 1, ...(top.default !== undefined ? { default: top.default } : {}), paths }, null, 2) + '\n'
   return { config, lines, fromFile, json, changed }
 }
@@ -119,7 +119,7 @@ function fromCommandLine(given: string, projectReal: string): string {
 }
 
 /** Check the rules and work out what each path may do. Throws PolicyFileError. */
-function resolvePolicy(projectReal: string, top: Record<string, unknown>): { config: PermissionsConfig; lines: string[] } {
+function resolvePolicy(projectReal: string, top: Record<string, unknown>, absent: ReadonlySet<string>): { config: PermissionsConfig; lines: string[] } {
   if (top.version !== 1) throw new PolicyFileError(`${POLICY_FILE}: "version" must be 1`)
 
   const defaults = rights(top.default ?? {}, 'default')
@@ -134,7 +134,7 @@ function resolvePolicy(projectReal: string, top: Record<string, unknown>): { con
   const rules = new Map<string, { isDir: boolean; given: Rights }>()
   const paths = top.paths === undefined ? {} : plainObject(top.paths, '"paths"')
   for (const [raw, value] of Object.entries(paths)) {
-    const { key, isDir } = normalizeKey(raw, projectReal)
+    const { key, isDir } = normalizeKey(raw, projectReal, absent)
     if (rules.has(key)) throw new PolicyFileError(`${POLICY_FILE}: "${raw}" names a path that is already in the file`)
     rules.set(key, { isDir, given: rights(value, `"${raw}"`) })
   }
@@ -187,7 +187,7 @@ function depth(key: string): number {
   return key.replace(/\/$/, '').split('/').length
 }
 
-function normalizeKey(raw: string, projectReal: string): { key: string; isDir: boolean } {
+function normalizeKey(raw: string, projectReal: string, absent: ReadonlySet<string>): { key: string; isDir: boolean } {
   if (raw.trim() === '') throw new PolicyFileError(`${POLICY_FILE}: a path cannot be empty`)
   if (raw.startsWith('/')) throw new PolicyFileError(`${POLICY_FILE}: "${raw}" must be relative to the project`)
   if (raw.includes('\\')) throw new PolicyFileError(`${POLICY_FILE}: "${raw}" must use / as the separator`)
@@ -214,6 +214,8 @@ function normalizeKey(raw: string, projectReal: string): { key: string; isDir: b
   try {
     stat = statSync(full)
   } catch {
+    // Inside the view, a path with `read: false` is gone on purpose. The outer process checked that it existed.
+    if (absent.has(body)) return { key: wantsDir ? `${body}/` : body, isDir: wantsDir }
     throw new PolicyFileError(`${POLICY_FILE}: "${raw}" does not exist in the project. Rules apply to paths that exist when the command starts`)
   }
   if (realpathSync(full) !== full) {

@@ -1,9 +1,9 @@
 import { Command } from 'commander'
-import { KNOWN_AGENTS, runGuarded } from '../guard/launch.js'
+import { KNOWN_AGENTS, runGuarded } from './launch.js'
 
 const collect = (value: string, previous: string[]): string[] => [...previous, value]
 
-/** `vajra guard [options] [--] [command...]`: run a command, or a shell, confined to a project. */
+/** The guard, as a command tree. Only the tests use it; the `vajra` command starts the shell itself. */
 export function guardCommand(): Command {
   return new Command('guard')
     .description('Run a command, or your shell, confined to a project directory')

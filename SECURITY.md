@@ -3,14 +3,14 @@
 ## Scope
 
 Vajra is a CLI that confines a command, or a shell, to a project directory. The
-core is `vajra guard`, which uses Landlock through the native addon
+core is the `vajra` shell, which uses Landlock through the native addon
 (`vajra-native`) and the policy in `.vajra.json`. **Vajra supports Linux only**:
 on any other platform, including macOS and Windows, the CLI refuses to start
 rather than running unconfined.
 
 In scope, and welcome:
 
-- escaping the filesystem policy of `vajra guard` on Linux — reaching a path the
+- escaping the filesystem policy of `vajra` on Linux — reaching a path the
   policy or the built-in rules should deny
 - a `.vajra.json` that is accepted but not enforced as written
 - secret values surviving `redact`

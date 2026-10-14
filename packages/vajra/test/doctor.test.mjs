@@ -42,3 +42,48 @@ test('`vajra doctor` exits 0 exactly when it says ok', () => {
   const ok = /^ok:/m.test(result.stdout)
   assert.equal(result.status, ok ? 0 : 1)
 })
+
+const { renderChecklist } = await import(pathToFileURL(join(dist, 'cli', 'doctor.js')).href)
+const working = { path: '/usr/bin/bwrap', works: true, detail: 'ok', reason: null }
+const broken = { path: '/usr/bin/bwrap', works: false, detail: 'x', reason: 'bwrap: setting up uid map: Permission denied' }
+const apparmor = { id: 'bubblewrap-apparmor', message: 'AppArmor stops user namespaces', fix: { title: 'Install a profile for bwrap', commands: [] } }
+
+test('checklist: when everything is there it says ok, with a tick for each item and nothing to fix', () => {
+  const out = renderChecklist(caps(), '6.8.0', working, [])
+  assert.equal(out.ready, true)
+  const text = out.lines.join('\n')
+  assert.equal([...text.matchAll(/✔/g)].length, 3)
+  assert.doesNotMatch(text, /✘/)
+  assert.match(out.lines.at(-1), /^ok: /)
+})
+
+test('checklist: a failing item is crossed, shows what bwrap said, and the cause and fix are named', () => {
+  const out = renderChecklist(caps(), '6.8.0', broken, [apparmor])
+  assert.equal(out.ready, false)
+  const text = out.lines.join('\n')
+  assert.match(text, /✘ +Bubblewrap +installed at \/usr\/bin\/bwrap, but it cannot build the view/)
+  assert.match(text, /uid map: Permission denied/)
+  assert.match(text, /^ {2}Cause {3}AppArmor stops user namespaces$/m)
+  assert.match(text, /^ {2}Fix {5}Install a profile for bwrap$/m)
+  assert.match(text, /vajra doctor --fix/)
+  assert.match(out.lines.find(line => line.startsWith('not ok')), /cannot open a shell/)
+})
+
+test('checklist: a problem with nothing to run is told as "To do", and --fix is not suggested for it', () => {
+  const manual = { id: 'landlock', message: 'cannot confine', manual: 'Add landlock to the kernel command line' }
+  const out = renderChecklist(caps({ filesystem: 'unavailable', details: 'Landlock is off' }), '4.19', working, [manual])
+  const text = out.lines.join('\n')
+  assert.match(text, /✘ +Landlock +not enforced/)
+  assert.match(text, /^ {2}To do {3}Add landlock/m)
+  assert.doesNotMatch(text, /doctor --fix/)
+})
+
+test('checklist: a missing bubblewrap is shown as not installed', () => {
+  const out = renderChecklist(caps(), '6.8.0', { path: null, works: false, detail: 'not installed', reason: null }, [])
+  assert.match(out.lines.join('\n'), /✘ +Bubblewrap +not installed/)
+})
+
+test('checklist: color is added only when asked for', () => {
+  assert.doesNotMatch(renderChecklist(caps(), '6.8.0', working, []).lines.join('\n'), /\x1b\[/)
+  assert.match(renderChecklist(caps(), '6.8.0', working, [], true).lines.join('\n'), /\x1b\[32m✔/)
+})

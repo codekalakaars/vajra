@@ -14,7 +14,7 @@ The policy and the guards a confined shell is built from. The native addon (`pac
 | `file-rules.ts` | Glob rules (`*`, `**`, `?`, `!` to revoke) resolved to the per-file permissions the addon enforces |
 | `file-config.ts` | Reading and writing `.vajra-sandbox.json`, flat or as named environments (not read by `vajra guard`) |
 | `platform.ts`, `platform-guard.ts` | The Linux-only check, and an import that stops a command early with the real reason |
-| `native.ts` | The addon wrapper: capabilities, Landlock, FUSE mounting, protected-shell namespace setup, secret masking, and process helpers |
+| `native.ts` | The addon wrapper: capabilities, Landlock, seccomp, secret masking, and process helpers |
 | `change-history.ts` | The original of each file before it is modified, so changes can be rolled back |
 | `freeze.ts` | Freeze and thaw a process and everything it started (`SIGSTOP` and `SIGCONT` down the tree) |
 | `types.ts` | Permission and file-entry shapes |
@@ -76,18 +76,9 @@ stopWatchingConfig()
 If the watched config is missing, invalid, or cannot be reloaded, the VFS
 switches to deny-all until a valid policy is saved.
 
-`VirtualFileSystem` is an API mediation layer for in-process callers. The
-protected CLI shell uses the native FUSE mount instead, so ordinary shell
-programs go through the policy checks too. The shell's private root does not
-contain the backing project path, and Landlock confines the FUSE service to
-that backing tree. Policy changes are read by the mount on each operation;
-revoking access cannot erase bytes a running command has already read.
-
-The protected shell has network access for coding tools. The host browser page
-is bound to loopback and writes `.vajra-sandbox.json`; its API requires a
-session token delivered in the browser URL fragment, which is not sent in HTTP
-requests. Vajra starts the settings server with each protected shell and opens
-it in the host browser. The mount applies new rules immediately.
+`VirtualFileSystem` is an API mediation layer for in-process callers. It is not
+an OS sandbox, and the `vajra` shell does not use it: the shell is confined by
+bubblewrap, Landlock and seccomp (see the repository README).
 
 ## Tests
 

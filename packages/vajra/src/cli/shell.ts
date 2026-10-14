@@ -1,181 +1,178 @@
-import { spawn, spawnSync } from 'node:child_process'
-import { cpSync, copyFileSync, mkdtempSync, mkdirSync, readdirSync, rmSync, lstatSync, statfsSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { Command } from 'commander'
-import { createSandboxConfig, loadSandboxConfig, saveSandboxConfig, type FilePermissions } from '@codekalakaars/vajra-sandbox'
-import { startConfigServer } from './config-server.js'
 import { fileURLToPath } from 'node:url'
+import { resolveAgents } from '../guard/agents.js'
+import { loadProjectPolicy } from '../guard/project-policy.js'
+import { policyText } from '../panel/rights.js'
+import { startPanel } from '../panel/server.js'
+import { SHIM_DIR, writeNotice } from '../session/notice.js'
+import { findAgent, resumeCommand, type RunningAgent } from '../session/resume.js'
+import { bubblewrapArgs, probeBubblewrap } from '../view/launch.js'
+import { planView } from '../view/plan.js'
 
-const VFS_SUPER_MAGIC = 0x65735546
-const DENY: FilePermissions = { read: false, write: false, edit: false, delete: false }
+/**
+ * Open a shell on the current project, confined three ways:
+ *
+ *  - bubblewrap decides what exists: `read: false` paths are not in the view and the
+ *    project is read-only except where `.vajra.json` says otherwise;
+ *  - Landlock, applied inside the view, decides what may be read, written, created and
+ *    removed, and blocks everything outside the project and the system paths;
+ *  - seccomp closes the calls that would get around the other two.
+ *
+ * None of these can change while the shell runs. To change the rules, the control page edits
+ * `.vajra.json` and asks for a restart: the shell is stopped, started again from the new file,
+ * and an agent that was running in it is started again with its own "continue" option.
+ */
 
-function ensureConfigFile(projectRoot: string, environment: string) {
-  const path = join(projectRoot, '.vajra-sandbox.json')
-  try {
-    const info = lstatSync(path)
-    if (info.isSymbolicLink() || !info.isFile()) {
-      throw new Error('Refusing to start: .vajra-sandbox.json must be a regular file, not a symlink')
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    if (environment === 'default') {
-      saveSandboxConfig(projectRoot, createSandboxConfig({ projectDir: projectRoot, defaultPermissions: DENY }))
-    }
+interface Ended {
+  restart: boolean
+  resume: string[] | null
+  code: number
+}
+
+interface Session {
+  pid: number
+  /** The policy text this shell was started from. */
+  applied: string
+  finished: Promise<Ended>
+  requestRestart: () => Promise<void>
+}
+
+const processGone = (pid: number): boolean => !existsSync(`/proc/${pid}`)
+
+async function waitGone(pid: number, ms: number): Promise<boolean> {
+  for (let waited = 0; waited < ms; waited += 100) {
+    if (processGone(pid)) return true
+    await delay(100)
   }
-  if (environment !== 'default' && !loadSandboxConfig(projectRoot, environment)) {
-    throw new Error(`Sandbox environment '${environment}' is not configured in .vajra-sandbox.json`)
-  }
+  return processGone(pid)
 }
 
-function mountReady(path: string): boolean {
-  try { return Number(statfsSync(path).type) === VFS_SUPER_MAGIC }
-  catch { return false }
+/** An agent killed mid-screen can leave the terminal in a full-screen or raw mode. */
+function resetTerminal(): void {
+  if (!process.stdout.isTTY) return
+  process.stdout.write('\x1b[?1049l\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1006l\x1b[0m\r\n')
+  spawnSync('stty', ['sane'], { stdio: 'inherit' })
 }
 
-function stageShellRuntime(rootDir: string, cliDir: string) {
-  const vajraPackage = resolve(cliDir, '..', '..')
-  const sandboxPackage = resolve(dirname(fileURLToPath(import.meta.resolve('@codekalakaars/vajra-sandbox'))), '..')
-  const nativePackage = dirname(fileURLToPath(import.meta.resolve('@codekalakaars/vajra-native')))
-  const appDir = join(rootDir, 'runtime', 'app')
-  const appCliDir = join(appDir, 'cli')
-  const scopedModules = join(appDir, 'node_modules', '@codekalakaars')
-  const sandboxTarget = join(scopedModules, 'vajra-sandbox')
-  const nativeTarget = join(scopedModules, 'vajra-native')
-  mkdirSync(appCliDir, { recursive: true })
-  mkdirSync(sandboxTarget, { recursive: true })
-  mkdirSync(nativeTarget, { recursive: true })
-  copyFileSync(join(vajraPackage, 'dist', 'cli', 'shell-child.js'), join(appCliDir, 'shell-child.js'))
-  cpSync(join(sandboxPackage, 'dist'), join(sandboxTarget, 'dist'), { recursive: true })
-  cpSync(join(sandboxPackage, 'package.json'), join(sandboxTarget, 'package.json'))
-  cpSync(join(nativePackage, 'index.js'), join(nativeTarget, 'index.js'))
-  cpSync(join(nativePackage, 'index.d.ts'), join(nativeTarget, 'index.d.ts'))
-  cpSync(join(nativePackage, 'package.json'), join(nativeTarget, 'package.json'))
-  for (const name of readdirSync(nativePackage).filter((file) => file.endsWith('.node'))) {
-    cpSync(join(nativePackage, name), join(nativeTarget, name))
-  }
-  writeFileSync(join(rootDir, 'runtime', 'node'), '', { mode: 0o755 })
-}
+function startSession(projectRoot: string, bwrap: string, resume: string[] | null): Session {
+  const applied = policyText(projectRoot)
+  // A policy the view cannot express exactly is refused here, before anything starts.
+  const policy = loadProjectPolicy(projectRoot)
+  const view = planView(projectRoot, policy.config)
 
-async function waitForMount(server: ReturnType<typeof spawn>, mountpoint: string): Promise<void> {
-  const deadline = Date.now() + 10_000
-  while (Date.now() < deadline) {
-    if (server.pid === undefined || server.exitCode !== null) throw new Error(`VFS server exited before mounting (status ${server.exitCode ?? 'spawn failed'})`)
-    if (mountReady(mountpoint)) return
-    await delay(50)
-  }
-  throw new Error('Timed out waiting for the protected project mount')
-}
+  const inner = [process.execPath, join(dirname(fileURLToPath(import.meta.url)), 'shell-inner.js'), projectRoot, JSON.stringify(view.hidden), JSON.stringify(resume ?? [])]
+  // A shell gets every agent's profile, so the directories each keeps its login and history in are writable too.
+  // Only those that exist, as in the guard: a path that is not there cannot be mounted.
+  const home = process.env.HOME ?? homedir()
+  const binds = resolveAgents([], undefined, true)
+    .flatMap(profile => profile.write({ home, env: process.env }))
+    .filter(path => existsSync(path))
+    .map(path => realpathSync(path))
 
-async function waitForExit(child: ReturnType<typeof spawn>): Promise<void> {
-  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return
-  await new Promise<void>((resolveExit) => child.once('exit', () => resolveExit()))
-}
+  process.stderr.write(`vajra: shell on ${projectRoot}\n`)
+  if (!policy.fromFile) process.stderr.write('vajra: no .vajra.json here, so the project is read-only. Add rules on the control page, or see docs/project-policy.md\n')
+  if (view.hidden.length > 0) process.stderr.write(`vajra: hidden: ${view.hidden.join(', ')}\n`)
+  if (view.writable.length > 0) process.stderr.write(`vajra: writable: ${view.writable.join(', ')}\n`)
+  if (resume) process.stderr.write(`vajra: resuming ${resume[0]}\n`)
+  process.stderr.write('vajra: the network is not restricted. Type exit to leave.\n')
 
-async function openConfigPage(url: string): Promise<boolean> {
-  for (const [command, args] of [['xdg-open', [url]], ['gio', ['open', url]]] as const) {
-    const opened = await new Promise<boolean>((resolveOpen) => {
-      let settled = false
-      let timeout: NodeJS.Timeout
-      const finish = (result: boolean) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timeout)
-        resolveOpen(result)
-      }
-      const child = spawn(command, args, { detached: true, stdio: 'ignore' })
-      timeout = setTimeout(() => {
-        child.unref()
-        finish(true)
-      }, 2_000)
-      child.once('error', () => finish(false))
-      child.once('spawn', () => child.unref())
-      child.once('close', (code) => finish(code === 0))
+  // The notice to the agent, and the launchers that hand it over. Made for each session, so it names the rules this shell has.
+  const shims = mkdtempSync(join(tmpdir(), 'vajra-shims-'))
+  chmodSync(shims, 0o700)
+  writeNotice(shims, { writable: view.writable, hidden: view.hidden })
+
+  const shell: ChildProcess = spawn(bwrap, bubblewrapArgs({ projectRoot, view, command: inner, binds, readOnlyMounts: [{ source: shims, dest: SHIM_DIR }] }), {
+    stdio: 'inherit',
+    env: { ...process.env, VAJRA: '1', VAJRA_NOTICE_FILE: `${SHIM_DIR}/notice.md`, PATH: `${SHIM_DIR}:${process.env.PATH ?? ''}` },
+  })
+  let restarting = false
+  let agent: RunningAgent | null = null
+
+  const finished = new Promise<Ended>((resolve, reject) => {
+    shell.once('error', reject)
+    shell.once('exit', (code, signal) => {
+      rmSync(shims, { recursive: true, force: true })
+      resolve({ restart: restarting, resume: agent ? resumeCommand(agent.name) : null, code: code ?? (signal ? 128 : 1) })
     })
-    if (opened) return true
+  })
+
+  const requestRestart = async (): Promise<void> => {
+    if (restarting || shell.pid === undefined) return
+    restarting = true
+    agent = findAgent(shell.pid)
+    // Ask the agent first, so it can finish writing its session before everything is stopped.
+    if (agent) {
+      process.kill(agent.pid, 'SIGTERM')
+      await waitGone(agent.pid, 4000)
+    }
+    shell.kill('SIGTERM')
+    if (!(await waitGone(shell.pid, 3000))) shell.kill('SIGKILL')
   }
-  return false
+
+  return { pid: shell.pid ?? 0, applied, finished, requestRestart }
 }
 
-async function runProtectedShell(environment: string) {
-  const projectRoot = resolve(process.cwd())
-  ensureConfigFile(projectRoot, environment)
+/** Ask the desktop to open a page. False when there is no way to, so the address is printed instead. */
+async function openBrowser(url: string): Promise<boolean> {
+  if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY && !process.env.BROWSER) return false
+  return new Promise<boolean>(resolve => {
+    const opener = spawn('xdg-open', [url], { stdio: 'ignore', detached: true })
+    const timer = setTimeout(() => resolve(true), 3000)
+    opener.once('error', () => { clearTimeout(timer); resolve(false) })
+    opener.once('exit', code => { clearTimeout(timer); resolve(code === 0) })
+    opener.unref()
+  })
+}
 
-  const configServer = await startConfigServer(projectRoot, environment)
-  const browserOpened = await openConfigPage(configServer.browserUrl)
-  process.stdout.write(`Vajra settings page: ${configServer.url}\n`)
-  if (!browserOpened) process.stdout.write('Could not open a host browser automatically; open the settings URL above.\n')
-  let sessionRoot: string | undefined
-  let mountpoint: string | undefined
-  let vfsServer: ReturnType<typeof spawn> | undefined
-  let shell: ReturnType<typeof spawn> | undefined
-  let primaryError: unknown
+export async function runProtectedShell(options: { browser?: boolean } = {}): Promise<void> {
+  const projectRoot = realpathSync(process.cwd())
+
+  // An unavailable view is a refusal, never a quieter shell: a shell that looks confined and is not is worse than none.
+  const bubblewrap = probeBubblewrap()
+  if (!bubblewrap.works || !bubblewrap.path) {
+    throw new Error(`${bubblewrap.detail}\nVajra will not open a shell it cannot confine. Run \`vajra doctor --fix\`.`)
+  }
+
+  let current: Session | undefined
+  const panel = await startPanel({
+    projectRoot,
+    appliedPolicy: () => current?.applied ?? '',
+    agent: () => (current ? findAgent(current.pid)?.name ?? null : null),
+    onApply: () => { void current?.requestRestart() },
+  })
+
+  // The terminal sends Ctrl-C to the whole foreground group, so the shell gets it itself.
   const ignoreInterrupt = () => {}
-  const stopShell = () => shell?.kill('SIGTERM')
+  // Never signal pid 0: that is this whole process group.
+  const stop = (signal: NodeJS.Signals) => () => { if (current && current.pid > 0) process.kill(current.pid, signal) }
   process.on('SIGINT', ignoreInterrupt)
-  process.on('SIGTERM', stopShell)
+  process.on('SIGTERM', stop('SIGTERM'))
+  process.on('SIGHUP', stop('SIGHUP'))
+
   try {
-    sessionRoot = mkdtempSync(join(tmpdir(), 'vajra-session-'))
-    mountpoint = join(sessionRoot, 'project')
-    const rootDir = join(sessionRoot, 'root')
-    const cliDir = dirname(fileURLToPath(import.meta.url))
-    mkdirSync(mountpoint)
-    for (const path of ['usr', 'bin', 'sbin', 'lib', 'lib64', 'etc', 'dev', 'proc', 'tmp', 'project', '.old_root']) {
-      mkdirSync(join(rootDir, path), { recursive: true })
+    const opened = options.browser !== false && await openBrowser(panel.browserUrl)
+    process.stderr.write(opened
+      ? 'vajra: control page opened in your browser\n'
+      : `vajra: control page (open it in a browser): ${panel.browserUrl}\n`)
+
+    let resume: string[] | null = null
+    for (;;) {
+      current = startSession(projectRoot, bubblewrap.path, resume)
+      const ended = await current.finished
+      if (!ended.restart) {
+        process.exitCode = ended.code
+        return
+      }
+      resetTerminal()
+      process.stderr.write('vajra: rules changed, restarting the shell\n')
+      resume = ended.resume
     }
-    for (const path of ['null', 'urandom', 'random']) {
-      writeFileSync(join(rootDir, 'dev', path), '', { mode: 0o600 })
-    }
-    stageShellRuntime(rootDir, cliDir)
-    vfsServer = spawn(process.execPath, [join(cliDir, 'vfs-server.js'), projectRoot, mountpoint, join(projectRoot, '.vajra-sandbox.json'), environment], {
-      stdio: ['ignore', 'ignore', 'inherit'],
-    })
-    await waitForMount(vfsServer, mountpoint)
-    process.stdout.write(`Vajra mounted ${projectRoot} with live file rules.\n`)
-    process.stdout.write('Network access is available. Type exit to leave.\n')
-    shell = spawn('unshare', [
-      '--user', '--map-root-user', '--mount', '--pid', '--fork', '--',
-      process.execPath, join(cliDir, 'shell-child.js'), mountpoint, rootDir, process.execPath,
-    ], {
-      stdio: 'inherit',
-    })
-    shell.once('error', (error) => { primaryError = error })
-    await waitForExit(shell)
-    if (primaryError) throw primaryError
-    if (shell.signalCode) throw new Error(`Protected shell exited after signal ${shell.signalCode}`)
-    if (shell.exitCode !== 0) throw new Error(`Protected shell exited with status ${shell.exitCode ?? 'unknown'}`)
-  } catch (error) {
-    primaryError = error
-    throw error
   } finally {
     process.removeListener('SIGINT', ignoreInterrupt)
-    process.removeListener('SIGTERM', stopShell)
-    if (shell && shell.exitCode === null && shell.signalCode === null) {
-      shell.kill('SIGTERM')
-      await waitForExit(shell)
-    }
-    if (mountpoint) spawnSync('fusermount3', ['-u', mountpoint], { stdio: 'ignore' })
-    if (vfsServer && vfsServer.exitCode === null && vfsServer.signalCode === null) {
-      vfsServer.kill('SIGTERM')
-      await waitForExit(vfsServer)
-    }
-    await configServer.close()
-    try { if (sessionRoot) rmSync(sessionRoot, { recursive: true, force: true }) }
-    catch (cleanupError) {
-      if (!primaryError) throw new Error(`Could not clean up the Vajra mount: ${String(cleanupError)}`)
-    }
+    await panel.close()
   }
 }
-
-export function shellCommand(): Command {
-  return new Command('shell')
-    .description('Start a protected shell in a live, policy-filtered project mount')
-    .option('-e, --environment <name>', 'Sandbox environment from .vajra-sandbox.json', 'default')
-    .action(async (options: { environment: string }) => {
-      await runProtectedShell(options.environment)
-    })
-}
-
-export { runProtectedShell }
-

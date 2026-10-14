@@ -24,6 +24,6 @@ export {
   type VirtualFileSystemListener,
   type VirtualFileSystemView,
 } from './virtual-fs.js'
-export { sandboxCapabilities, applySandbox, mountVirtualFilesystem, prepareProtectedShell, type SandboxCapabilities, type SandboxResult } from './native.js'
+export { sandboxCapabilities, applySandbox, applySeccomp, type SandboxCapabilities, type SandboxResult } from './native.js'
 export { isMaskedName, scanProject, defaultPermissions, loadPermissions, permissionsFor, loadEnvFile, redact, runCommandAsyncTimeout, type EnvVar } from './native.js'
 export type { FilePermissions, PermissionsConfig, ProjectFileEntry } from './types.js'

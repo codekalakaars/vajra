@@ -89,10 +89,6 @@ pub fn apply_sandbox(config: SandboxConfig) -> Result<SandboxResult, Error> {
     apply_impl(&config).map_err(Error::from_reason)
 }
 
-pub(crate) fn apply_vfs_server_sandbox(project_dir: &std::path::Path) -> Result<(), String> {
-    linux::apply_root_only(project_dir)
-}
-
 fn apply_impl(config: &SandboxConfig) -> Result<SandboxResult, String> {
     let (mut warnings, degraded) = linux::apply(config)?;
     warnings.extend(degraded);

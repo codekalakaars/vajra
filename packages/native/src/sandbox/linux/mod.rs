@@ -167,37 +167,6 @@ pub fn apply(config: &SandboxConfig) -> Result<(Vec<String>, Option<String>), St
     Ok((notes, degraded_note(abi)))
 }
 
-/// Restrict the FUSE service thread to the backing project tree. It does not
-/// need the shell's system paths, and this boundary makes symlink races fail
-/// closed instead of reaching host files outside the project.
-pub fn apply_root_only(project_dir: &Path) -> Result<(), String> {
-    let abi = detect_abi()?;
-    let supported = supported_bits(abi);
-    if !project_dir.is_dir() {
-        return Err(format!("Project directory '{}' does not exist", project_dir.display()));
-    }
-    let rw_all = (acc::EXECUTE
-        | acc::WRITE_FILE
-        | acc::READ_FILE
-        | acc::READ_DIR
-        | acc::REMOVE_DIR
-        | acc::REMOVE_FILE
-        | acc::MAKE_CHAR
-        | acc::MAKE_DIR
-        | acc::MAKE_REG
-        | acc::MAKE_SOCK
-        | acc::MAKE_FIFO
-        | acc::MAKE_BLOCK
-        | acc::MAKE_SYM
-        | acc::REFER
-        | acc::TRUNCATE)
-        & supported;
-    let ruleset_fd = create_ruleset(rw_all)?;
-    add_path_rule(ruleset_fd, &project_dir.to_string_lossy(), rw_all)?;
-    unsafe { libc::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
-    enforce(ruleset_fd)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

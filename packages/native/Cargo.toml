@@ -19,11 +19,8 @@ napi = { version = "2", features = ["async"] }
 napi-derive = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-fuser = { version = "0.16", default-features = false, features = ["abi-7-31"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-# The guard shows the project through a filesystem it serves itself, so it can say
-# exactly which path is visible and writable. Landlock alone cannot express that.
 
 
 [build-dependencies]

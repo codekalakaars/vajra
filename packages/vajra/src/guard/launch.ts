@@ -4,6 +4,7 @@ import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import {
   applySandbox,
+  applySeccomp,
   createSandboxConfig,
   sandboxCapabilities,
 } from '@codekalakaars/vajra-sandbox'
@@ -11,7 +12,7 @@ import { AGENTS, resolveAgents, UnknownAgentError } from './agents.js'
 import { buildGuardPolicy, type PathProbe } from './policy.js'
 import { loadProjectPolicy, POLICY_FILE, PolicyFileError, type PolicyChanges, type ProjectPolicy } from './project-policy.js'
 
-/** Exit codes of `vajra guard` itself. Anything else is the command's own. */
+/** Exit codes of the guard itself. Anything else is the command's own. */
 export const GUARD_EXIT_SETUP = 125
 
 export const KNOWN_AGENTS = AGENTS.map(agent => agent.name)
@@ -28,6 +29,10 @@ export interface GuardOptions {
   agent?: string
   /** Rules given on the command line: `--write`, `--delete` and `--deny-read`, added to the project's policy for this run. */
   policy?: PolicyChanges
+  /** Project paths the bubblewrap view hid on purpose, so a rule for one of them is not an error. */
+  hiddenByView?: readonly string[]
+  /** Print how to save the rules when there is no `.vajra.json`. The shell says this itself, once, before it starts. */
+  explainPolicyFile?: boolean
   /** Print the policy and stop, without confining anything. */
   dryRun: boolean
   quiet: boolean
@@ -89,31 +94,31 @@ export async function runGuarded(options: GuardOptions): Promise<number> {
   const env = options.env ?? process.env
   const project = probe(resolve(options.projectDir))
   if (!project?.isDir) {
-    write(`vajra guard: project directory does not exist: ${options.projectDir}`)
+    write(`vajra: project directory does not exist: ${options.projectDir}`)
     return GUARD_EXIT_SETUP
   }
 
   let projectPolicy: ProjectPolicy
   try {
-    projectPolicy = loadProjectPolicy(project.real, options.policy)
+    projectPolicy = loadProjectPolicy(project.real, options.policy, new Set(options.hiddenByView ?? []))
   } catch (err) {
     if (!(err instanceof PolicyFileError)) throw err
-    write(`vajra guard: ${err.message}`)
+    write(`vajra: ${err.message}`)
     return GUARD_EXIT_SETUP
   }
 
   const capabilities = sandboxCapabilities()
   if (capabilities.filesystem === 'unsupported') {
-    write(`vajra guard: refusing to run unconfined: ${capabilities.details}`)
+    write(`vajra: refusing to run unconfined: ${capabilities.details}`)
     return GUARD_EXIT_SETUP
   }
-  if (capabilities.filesystem === 'partial') write(`vajra guard: warning: ${capabilities.details}`)
+  if (capabilities.filesystem === 'partial') write(`vajra: warning: ${capabilities.details}`)
 
   const command = options.command.length > 0 ? options.command : [env.SHELL || '/bin/sh']
   const pathValue = env.PATH ?? ''
   const executable = findExecutable(command[0] as string, pathValue)
   if (!executable) {
-    write(`vajra guard: command not found: ${command[0]}`)
+    write(`vajra: command not found: ${command[0]}`)
     return GUARD_EXIT_NOT_FOUND
   }
 
@@ -122,7 +127,7 @@ export async function runGuarded(options: GuardOptions): Promise<number> {
     profiles = resolveAgents(command, options.agent, options.command.length === 0)
   } catch (err) {
     if (!(err instanceof UnknownAgentError)) throw err
-    write(`vajra guard: ${err.message}`)
+    write(`vajra: ${err.message}`)
     return GUARD_EXIT_SETUP
   }
   const home = env.HOME ?? homedir()
@@ -152,16 +157,16 @@ export async function runGuarded(options: GuardOptions): Promise<number> {
       probe,
     })
     if (!options.quiet || options.dryRun) {
-      write(`vajra guard: ${command.join(' ')}`)
+      write(`vajra: ${command.join(' ')}`)
       for (const line of policy.summary) write(`  ${line}`)
       for (const line of projectPolicy.lines) write(`  rights    ${line}`)
     }
     // Printed even when quiet: a project without the file, or with rules that exist only on this command line,
     // needs the person to save them, or the next run will not have them.
-    if (!projectPolicy.fromFile || projectPolicy.changed) {
+    if (options.explainPolicyFile !== false && (!projectPolicy.fromFile || projectPolicy.changed)) {
       write(projectPolicy.changed
-        ? `vajra guard: these rules are only for this run. To keep them, save this as ${POLICY_FILE} in the project:`
-        : `vajra guard: no ${POLICY_FILE} in the project, so it is read-only. To allow writes, pass --write, --delete or --deny-read; to keep the rules, save this as ${POLICY_FILE}:`)
+        ? `vajra: these rules are only for this run. To keep them, save this as ${POLICY_FILE} in the project:`
+        : `vajra: no ${POLICY_FILE} in the project, so it is read-only. To allow writes, pass --write, --delete or --deny-read; to keep the rules, save this as ${POLICY_FILE}:`)
       for (const line of projectPolicy.json.trimEnd().split('\n')) write(`  ${line}`)
     }
     if (options.dryRun) return 0
@@ -183,10 +188,12 @@ export async function runGuarded(options: GuardOptions): Promise<number> {
       permissions: projectPolicy.config,
     })
     if (!applied.enforced) {
-      write('vajra guard: the sandbox was not enforced; refusing to run the command')
+      write('vajra: the sandbox was not enforced; refusing to run the command')
       return GUARD_EXIT_SETUP
     }
-    for (const warning of applied.warnings) write(`vajra guard: warning: ${warning}`)
+    for (const warning of applied.warnings) write(`vajra: warning: ${warning}`)
+    // After Landlock, so the filter closes what Landlock leaves open: ptrace, io_uring, new namespaces.
+    applySeccomp()
 
     return await new Promise<number>(done => {
       const child = spawn(executable, command.slice(1), {
@@ -200,7 +207,7 @@ export async function runGuarded(options: GuardOptions): Promise<number> {
       for (const signal of ignored) process.on(signal, () => {})
       for (const signal of ['SIGTERM', 'SIGHUP'] as const) process.on(signal, () => child.kill(signal))
       child.on('error', err => {
-        write(`vajra guard: could not start ${command[0]}: ${err.message}`)
+        write(`vajra: could not start ${command[0]}: ${err.message}`)
         done(GUARD_EXIT_NOT_EXECUTABLE)
       })
       child.on('exit', (code, signal) => {
@@ -209,7 +216,7 @@ export async function runGuarded(options: GuardOptions): Promise<number> {
       })
     })
   } catch (err) {
-    write(`vajra guard: ${err instanceof Error ? err.message : String(err)}`)
+    write(`vajra: ${err instanceof Error ? err.message : String(err)}`)
     return GUARD_EXIT_SETUP
   } finally {
     cleanup()

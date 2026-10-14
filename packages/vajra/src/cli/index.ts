@@ -8,8 +8,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { doctorCommand } from './doctor.js'
-import { runProtectedShell, shellCommand } from './shell.js'
-import { guardCommand } from './guard.js'
+import { runProtectedShell } from './shell.js'
 
 function readPackageVersion(): string {
   try {
@@ -27,15 +26,12 @@ program
   .name('vajra')
   .description('Confine a shell so an AI coding agent running inside it cannot go haywire')
   .version(readPackageVersion())
-  // So that `vajra guard sh -c ...` hands `-c` to the command instead of reading it as ours.
-  .enablePositionalOptions()
+  .option('--no-browser', 'Do not open the control page in a browser; its address is printed instead')
 
-program.addCommand(guardCommand())
 program.addCommand(doctorCommand())
-program.addCommand(shellCommand())
 
-program.action(async () => {
-  await runProtectedShell('default')
+program.action(async (options: { browser: boolean }) => {
+  await runProtectedShell({ browser: options.browser })
 })
 
 program.parseAsync().catch((error: unknown) => {

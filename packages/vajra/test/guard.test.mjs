@@ -11,8 +11,10 @@ import { join } from 'node:path'
  * cannot confine, because there is nothing to check there.
  */
 
-const cli = join(import.meta.dirname, '..', 'dist', 'cli', 'index.js')
-const enforced = spawnSync('node', [cli, 'doctor'], { encoding: 'utf-8' }).status === 0
+const cli = join(import.meta.dirname, 'support', 'guard-cli.mjs')
+const vajra = join(import.meta.dirname, '..', 'dist', 'cli', 'index.js')
+const { sandboxCapabilities } = await import('@codekalakaars/vajra-sandbox')
+const enforced = sandboxCapabilities().filesystem === 'enforced'
 const skip = enforced ? false : 'this machine cannot confine file access'
 
 /** A project, and a sibling directory that is outside it and holds a secret. */
@@ -244,8 +246,48 @@ test('opencode config is read-only, so an agent cannot rewrite its own settings'
   assert.equal(readFileSync(join(home, '.config/opencode/config.json'), 'utf-8'), '{}\n')
 })
 
-test('--help lists guard and doctor', () => {
-  const out = spawnSync('node', [cli, '--help'], { encoding: 'utf-8' }).stdout
-  assert.match(out, /guard/)
+test('vajra --help lists doctor and no guard or shell command', () => {
+  const out = spawnSync('node', [vajra, '--help'], { encoding: 'utf-8' }).stdout
   assert.match(out, /doctor/)
+  assert.doesNotMatch(out, /^\s+(guard|shell)\b/m)
+})
+
+// The filter is tested through perl's raw syscall(), with the x86_64 call numbers. Each call is
+// one that behaves differently with and without the filter, so a pass means the filter was there.
+const perl = spawnSync('sh', ['-c', 'command -v perl']).status === 0
+const rawCalls = enforced && perl && process.arch === 'x64' ? false : 'needs a confining machine, perl and x86_64'
+const rawCall = (number, args) => `perl -e 'my $r = syscall(${number}, ${args}); print $r < 0 ? $!+0 : "ok"'`
+
+test('seccomp: ptrace is refused, and io_uring and new namespaces with it', { skip: rawCalls }, (t) => {
+  const { project } = world(t)
+  const EPERM = '1'
+  // ptrace of a pid that does not exist is ESRCH when allowed; the filter answers EPERM first.
+  assert.equal(sh(project, rawCall(101, '16, 999999999, 0, 0')).stdout, EPERM, 'ptrace')
+  assert.equal(sh(project, rawCall(425, '0, 0')).stdout, EPERM, 'io_uring_setup')
+  assert.equal(sh(project, rawCall(272, '0')).stdout, EPERM, 'unshare, which is a no-op when allowed')
+  assert.equal(sh(project, rawCall(165, '0, 0, 0, 0, 0')).stdout, EPERM, 'mount')
+})
+
+test('seccomp: the same calls behave differently without the filter', { skip: rawCalls }, () => {
+  // The control for the test above: plain perl, no guard.
+  const plain = (number, args) => spawnSync('sh', ['-c', rawCall(number, args)], { encoding: 'utf-8' }).stdout
+  assert.equal(plain(101, '16, 999999999, 0, 0'), '3', 'ptrace of a missing pid is ESRCH')
+  assert.equal(plain(272, '0'), 'ok', 'unshare(0) succeeds')
+})
+
+test('seccomp: ordinary work still runs under the filter', { skip: enforced ? false : 'cannot confine' }, (t) => {
+  const { project } = world(t)
+  // fork, threads, pipes, node and a compiler-style workload all make syscalls the filter must leave alone.
+  const result = sh(project, 'echo a | cat | wc -c; node -e "setTimeout(() => console.log(process.version.length > 0), 10)"; (sleep 0.1 &) ; wait')
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /2/)
+  assert.match(result.stdout, /true/)
+})
+
+test('seccomp: a command cannot type into the terminal it shares with the person', { skip: rawCalls }, (t) => {
+  const { project } = world(t)
+  // TIOCSTI on stdin, which is a pipe here: ENOTTY (25) when allowed, EPERM (1) from the filter.
+  assert.equal(sh(project, rawCall(16, '0, 0x5412, 0')).stdout, '1')
+  const plain = spawnSync('sh', ['-c', rawCall(16, '0, 0x5412, 0')], { encoding: 'utf-8' })
+  assert.equal(plain.stdout, '25', 'control: without the filter the call reaches the terminal check')
 })

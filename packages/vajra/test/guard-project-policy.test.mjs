@@ -11,8 +11,10 @@ import { join } from 'node:path'
  * kernel cannot express must stop the command from starting, not run looser.
  */
 
-const cli = join(import.meta.dirname, '..', 'dist', 'cli', 'index.js')
-const enforced = spawnSync('node', [cli, 'doctor'], { encoding: 'utf-8' }).status === 0
+const cli = join(import.meta.dirname, 'support', 'guard-cli.mjs')
+const vajra = join(import.meta.dirname, '..', 'dist', 'cli', 'index.js')
+const { sandboxCapabilities } = await import('@codekalakaars/vajra-sandbox')
+const enforced = sandboxCapabilities().filesystem === 'enforced'
 const skip = enforced ? false : 'this machine cannot confine file access'
 
 function world(t) {
