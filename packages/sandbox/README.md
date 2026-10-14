@@ -12,7 +12,7 @@ The policy and the guards a confined shell is built from. The native addon (`pac
 | `file-rules.ts` | Glob rules (`*`, `**`, `?`, `!` to revoke) resolved to the per-file permissions the addon enforces |
 | `file-config.ts` | Reading and writing `.vajra-sandbox.json`, flat or as named environments |
 | `platform.ts`, `platform-guard.ts` | The Linux-only check, and an import that stops a command early with the real reason |
-| `native.ts` | The addon wrapper: capabilities, `applySandbox`, secret masking (`.env` and variants), `redact`, running a command with a deadline |
+| `native.ts` | The addon wrapper: capabilities, Landlock, FUSE mounting, protected-shell namespace setup, secret masking, and process helpers |
 | `change-history.ts` | The original of each file before it is modified, so changes can be rolled back |
 | `freeze.ts` | Freeze and thaw a process and everything it started (`SIGSTOP` and `SIGCONT` down the tree) |
 | `types.ts` | Permission and file-entry shapes |
@@ -33,6 +33,59 @@ const config = createSandboxConfig({
 
 const permissions = resolveFilePermissions(config) // what the addon enforces
 ```
+
+## Live virtual filesystem view
+
+`VirtualFileSystem` gives an agent a mediated view whose default is deny-all.
+Only files matching the configured read patterns appear in listings, and a
+directory appears only when it contains a visible file. Reads and mutations
+check the current policy on every call. The controller can replace the allowlist
+while the agent is running; the next call sees the new policy.
+
+```typescript
+import { createVirtualFileSystem, createSandboxConfig } from '@codekalakaars/vajra-sandbox'
+
+const vfs = createVirtualFileSystem(projectDir, ['src/**', 'README.md'])
+const agentFilesystem = vfs.view
+
+// Optional: changes saved to .vajra-sandbox.json are loaded while it runs.
+const stopWatchingConfig = vfs.watchConfig()
+
+// Give the agent only agentFilesystem, never the host fs module or controller.
+const files = agentFilesystem.list()
+const source = agentFilesystem.readFile('src/index.ts')
+
+// A trusted controller can change visibility immediately.
+vfs.setVisiblePaths(['src/**', 'docs/**'])
+
+// Use updateConfig when the agent also needs write permissions.
+vfs.updateConfig(createSandboxConfig({
+  projectDir,
+  defaultPermissions: { read: false, write: false, edit: false, delete: false },
+  fileRules: [
+    { pattern: 'src/**', read: true, write: true, edit: true },
+    { pattern: 'docs/**', read: true },
+  ],
+}))
+
+stopWatchingConfig()
+```
+
+If the watched config is missing, invalid, or cannot be reloaded, the VFS
+switches to deny-all until a valid policy is saved.
+
+`VirtualFileSystem` is an API mediation layer for in-process callers. The
+protected CLI shell uses the native FUSE mount instead, so ordinary shell
+programs go through the policy checks too. The shell's private root does not
+contain the backing project path, and Landlock confines the FUSE service to
+that backing tree. Policy changes are read by the mount on each operation;
+revoking access cannot erase bytes a running command has already read.
+
+The protected shell has network access for coding tools. The host browser page
+is bound to loopback and writes `.vajra-sandbox.json`; its API requires a
+session token delivered in the browser URL fragment, which is not sent in HTTP
+requests. Vajra starts the settings server with each protected shell and opens
+it in the host browser. The mount applies new rules immediately.
 
 ## Tests
 

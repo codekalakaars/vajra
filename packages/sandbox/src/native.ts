@@ -6,10 +6,14 @@ import {
   runCommandAsyncTimeout as nativeRunCommandAsyncTimeout,
   loadEnvFile as nativeLoadEnvFile,
   redact as nativeRedact,
+  mountVirtualFilesystem as nativeMountVirtualFilesystem,
+  prepareProtectedShell as nativePrepareProtectedShell,
 } from '@codekalakaars/vajra-native'
 
 // Re-exported as they are: the addon's own types describe them exactly.
 export { sandboxCapabilities, applySandbox, type SandboxCapabilities, type SandboxResult } from '@codekalakaars/vajra-native'
+export const mountVirtualFilesystem = nativeMountVirtualFilesystem
+export const prepareProtectedShell = nativePrepareProtectedShell
 import type { PermissionsConfig, ProjectFileEntry } from './types.js'
 
 /** Shape returned by the native `loadEnvFile` / consumed by `redact`. */
