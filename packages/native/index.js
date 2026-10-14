@@ -310,7 +310,7 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { getEnv, envExists, getAllEnv, getEnvFiltered, currentDir, setCurrentDir, homeDir, tempDir, parseEnv, loadEnvFile, renderSampleEnv, ensureSampleEnv, readFileAsync, writeFileAsync, copyFileAsync, listFilesAsync, readFile, writeFile, editFile, deleteFile, deleteDir, createDir, listFiles, fileExists, isFile, isDir, copyFile, renameFile, fileSize, resolvePath, normalizePath, realPath, joinPaths, dirname, basename, extension, isAbsolute, pathExists, parentPath, ensureExt, defaultPermissions, loadPermissions, savePermissions, permissionsFor, scanProject, runCommand, runShell, runCommandAsync, runCommandAsyncTimeout, runShellAsync, which, sandboxCapabilities, applySandbox, redact, minRedactableLength, version } = nativeBinding
+const { getEnv, envExists, getAllEnv, getEnvFiltered, currentDir, setCurrentDir, homeDir, tempDir, parseEnv, loadEnvFile, renderSampleEnv, ensureSampleEnv, readFileAsync, writeFileAsync, copyFileAsync, listFilesAsync, readFile, writeFile, editFile, deleteFile, deleteDir, createDir, listFiles, fileExists, isFile, isDir, copyFile, renameFile, fileSize, resolvePath, normalizePath, realPath, joinPaths, dirname, basename, extension, isAbsolute, pathExists, parentPath, ensureExt, defaultPermissions, loadPermissions, savePermissions, permissionsFor, scanProject, runCommand, runShell, runCommandAsync, runCommandAsyncTimeout, runShellAsync, which, sandboxCapabilities, applySandbox, redact, minRedactableLength, mountVirtualFilesystem, prepareProtectedShell, version } = nativeBinding
 
 module.exports.getEnv = getEnv
 module.exports.envExists = envExists
@@ -367,4 +367,6 @@ module.exports.sandboxCapabilities = sandboxCapabilities
 module.exports.applySandbox = applySandbox
 module.exports.redact = redact
 module.exports.minRedactableLength = minRedactableLength
+module.exports.mountVirtualFilesystem = mountVirtualFilesystem
+module.exports.prepareProtectedShell = prepareProtectedShell
 module.exports.version = version

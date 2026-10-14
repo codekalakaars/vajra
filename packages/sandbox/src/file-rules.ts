@@ -301,13 +301,22 @@ export function filterFileEntries(
   config: SandboxConfig,
 ): ProjectFileEntry[] {
   const compiled = new CompiledRules(config.defaultPermissions, config.fileRules)
-  return entries.filter((entry) => {
-    if (entry.isDir) {
-      // Directories are always included — traversal is needed to reach files.
-      // Actual access is gated by the sandbox at the native level.
-      return true
+  const visibleFiles = new Set(
+    entries
+      .filter((entry) => !entry.isDir && compiled.resolve(entry.path).read)
+      .map((entry) => entry.path),
+  )
+  const visibleDirectories = new Set<string>()
+  for (const file of visibleFiles) {
+    let separator = file.lastIndexOf('/')
+    while (separator >= 0) {
+      const directory = file.slice(0, separator)
+      visibleDirectories.add(directory)
+      separator = directory.lastIndexOf('/')
     }
-    const perm = compiled.resolve(entry.path)
-    return perm.read
-  })
+  }
+
+  return entries.filter((entry) => entry.isDir
+    ? visibleDirectories.has(entry.path)
+    : visibleFiles.has(entry.path))
 }

@@ -8,6 +8,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { doctorCommand } from './doctor.js'
+import { runProtectedShell, shellCommand } from './shell.js'
 
 function readPackageVersion(): string {
   try {
@@ -27,5 +28,13 @@ program
   .version(readPackageVersion())
 
 program.addCommand(doctorCommand())
+program.addCommand(shellCommand())
 
-program.parse()
+program.action(async () => {
+  await runProtectedShell('default')
+})
+
+program.parseAsync().catch((error: unknown) => {
+  process.stderr.write(`vajra: ${error instanceof Error ? error.message : String(error)}\n`)
+  process.exitCode = 1
+})

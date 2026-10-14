@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "defaultPermissions": {
+    "read": false,
+    "write": false,
+    "edit": false,
+    "delete": false
+  },
+  "fileRules": [],
+  "allowUnenforced": false,
+  "readExecutePaths": [],
+  "readWritePaths": []
+}

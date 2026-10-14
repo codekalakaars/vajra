@@ -150,4 +150,10 @@ export declare function redact(text: string, secrets: Array<EnvVar>): string
  * warn that a given variable will not be scrubbed, rather than assuming it was.
  */
 export declare function minRedactableLength(): number
+export declare function mountVirtualFilesystem(projectDir: string, mountpoint: string, policyPath: string, environment?: string | undefined | null): void
+/**
+ * Build the private shell root inside namespaces created by the launcher.
+ * Only system runtime paths and the policy-filtered project mount enter its root.
+ */
+export declare function prepareProtectedShell(rootDir: string, projectMount: string, runtimeBinary: string): void
 export declare function version(): string

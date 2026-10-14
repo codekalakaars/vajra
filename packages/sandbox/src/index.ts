@@ -17,6 +17,13 @@ export { matchesPattern, resolveFilePermission, resolveFilePermissions, filterFi
 export { loadSandboxConfig, loadSandboxEnvironments, saveSandboxConfig, saveSandboxEnvironments, DEFAULT_CONFIG_FILE } from './file-config.js'
 export { ChangeHistory, type TaskChanges } from './change-history.js'
 export { descendants, freezeTree, thawTree } from './freeze.js'
-export { sandboxCapabilities, applySandbox, type SandboxCapabilities, type SandboxResult } from './native.js'
+export {
+  createVirtualFileSystem,
+  VirtualFileSystem,
+  type VirtualFileSystemChange,
+  type VirtualFileSystemListener,
+  type VirtualFileSystemView,
+} from './virtual-fs.js'
+export { sandboxCapabilities, applySandbox, mountVirtualFilesystem, prepareProtectedShell, type SandboxCapabilities, type SandboxResult } from './native.js'
 export { isMaskedName, scanProject, defaultPermissions, loadPermissions, permissionsFor, loadEnvFile, redact, runCommandAsyncTimeout, type EnvVar } from './native.js'
 export type { FilePermissions, PermissionsConfig, ProjectFileEntry } from './types.js'
