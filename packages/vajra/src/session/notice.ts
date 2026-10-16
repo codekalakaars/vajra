@@ -21,6 +21,8 @@ const LIST_LIMIT = 30
 export interface NoticeInput {
   /** Project-relative paths the shell may write. */
   writable: readonly string[]
+  /** Project-relative folders where new files can be made but existing ones cannot be changed; `.` is the project root. */
+  creatable?: readonly string[]
   /** Project-relative paths that do not exist in the shell. */
   hidden: readonly string[]
 }
@@ -43,7 +45,8 @@ export function buildNotice(input: NoticeInput): string {
     'You are running inside a Vajra sandbox. It limits which files you can see and change.',
     '',
     'In this project:',
-    input.writable.length > 0 ? `- You can write: ${list(input.writable)}.` : '- You cannot write anything in the project: it is all read-only.',
+    input.writable.length > 0 ? `- You can write: ${list(input.writable)}.` : (input.creatable ?? []).length > 0 ? '- You cannot change any existing file in the project.' : '- You cannot write anything in the project: it is all read-only.',
+    ...((input.creatable ?? []).length > 0 ? [`- You can create new files and folders directly in: ${list(input.creatable ?? [])}. Files that were already there stay read-only, and you cannot delete or rename.`] : []),
     ...(input.hidden.length > 0 ? [`- These do not exist for you: ${list(input.hidden)}.`] : []),
     '- Everything else is read-only.',
     '',

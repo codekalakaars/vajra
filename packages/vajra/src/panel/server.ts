@@ -109,11 +109,12 @@ export async function startPanel(options: PanelOptions): Promise<Panel> {
       }
       if (req.method === 'GET' && url.pathname === '/api/list') {
         const rel = cleanRelative(url.searchParams.get('path') ?? '')
-        return send(res, 200, { entries: listFolder(options.projectRoot, rel, loadProjectPolicy(options.projectRoot).config) })
+        const loaded = loadProjectPolicy(options.projectRoot)
+        return send(res, 200, { entries: listFolder(options.projectRoot, rel, loaded.config, new Set(loaded.create)), create: rel === '' ? loaded.create.includes('') : undefined, read: rel === '' ? loaded.config.default.read : undefined })
       }
       if (req.method === 'POST' && url.pathname === '/api/rights') {
         const body = await readJson(req)
-        const rights: Rights = { read: flag(body, 'read'), write: flag(body, 'write'), delete: flag(body, 'delete') }
+        const rights: Rights = { read: flag(body, 'read'), write: flag(body, 'write'), delete: flag(body, 'delete'), create: body.create === undefined ? false : flag(body, 'create') }
         saveRights(options.projectRoot, body.path, flag(body, 'isDir'), rights)
         return send(res, 200, { ok: true })
       }

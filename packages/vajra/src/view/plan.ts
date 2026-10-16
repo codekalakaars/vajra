@@ -16,6 +16,12 @@ import type { PermissionsConfig } from '@codekalakaars/vajra-sandbox'
  *    change or remove is still decided by Landlock, which runs inside the view;
  *    the bind only stops the read-only mount from refusing first.
  *
+ *  - A folder with `create` is bound read-write and every name already in it is bound
+ *    back read-only. Landlock cannot say "new names in this one folder, nothing else":
+ *    its grant covers everything beneath, so for these folders the mounts are what keep
+ *    the existing files, `.git` and the policy file from being changed. The shell checks
+ *    that the policy file really is read-only before it applies Landlock.
+ *
  * What a mount cannot do is hide a name inside a folder that is shared with the
  * host and writable: the folder would have to be rebuilt, and a rebuilt folder
  * keeps nothing the command writes to it. Such a policy is refused.
@@ -30,6 +36,8 @@ export interface ViewPlan {
   hidden: string[]
   /** Project-relative paths bound read-write. */
   writable: string[]
+  /** Project-relative folders where new names can be made and the existing ones are read-only; `.` is the project root. */
+  creatable: string[]
 }
 
 interface Entry {
@@ -73,7 +81,8 @@ function ancestors(rel: string): string[] {
   return found
 }
 
-export function planView(projectReal: string, config: PermissionsConfig, fs: ViewFs = nodeFs): ViewPlan {
+/** `create` is as `ProjectPolicy.create` has it: a key ending in `/`, and `''` for the project root. */
+export function planView(projectReal: string, config: PermissionsConfig, create: readonly string[] = [], fs: ViewFs = nodeFs): ViewPlan {
   const files = config.files ?? {}
   const hidden = new Set<string>()
   const writable: string[] = []
@@ -87,8 +96,18 @@ export function planView(projectReal: string, config: PermissionsConfig, fs: Vie
   }
 
   const folderRights = (rel: string) => files[`${rel}/`]
+  const creatable = create.map(key => (key === '' ? '.' : withoutSlash(key)))
+  for (const rel of creatable) {
+    const absolute = rel === '.' ? projectReal : join(projectReal, rel)
+    if (!fs.exists(absolute)) continue
+    const covering = ancestors(rel).find(above => hidden.has(above))
+    if (covering) throw new ViewPolicyError(`"${rel}" is inside "${covering}/", which is hidden. A name cannot be created where the folder does not exist`)
+  }
 
   for (const rel of hidden) {
+    if (creatable.includes(dirname(rel))) {
+      throw new ViewPolicyError(`"${rel}" cannot be hidden inside "${dirname(rel) === '.' ? 'the project root' : `${dirname(rel)}/`}", which allows create. A folder where names can be created is shared with the real project, so every name in it shows. Hide the folder itself, or make it read-only`)
+    }
     for (const above of ancestors(rel)) {
       if (hidden.has(above)) throw new ViewPolicyError(`"${rel}" is inside "${above}/", which is hidden, so its own rule has no effect. Remove the rule for "${rel}"`)
       const rights = folderRights(above)
@@ -104,11 +123,25 @@ export function planView(projectReal: string, config: PermissionsConfig, fs: Vie
 
   const args: string[] = []
 
-  // Shallow folders first: a deeper rebuild must land on top of the one above it.
-  const rebuilt = [...new Set([...hidden].map(rel => dirname(rel)))].sort((a, b) => depth(a) - depth(b))
-  for (const folder of rebuilt) {
+  // Shallow folders first, rebuilds and create folders together: a deeper mount must land on top of the one above
+  // it, and a rebuilt folder has to come before a create folder inside it, or the bind would put the real folder back.
+  const rebuilt = [...new Set([...hidden].map(rel => dirname(rel)))]
+  const steps = [
+    ...rebuilt.map(folder => ({ folder, create: false })),
+    ...creatable.filter(folder => fs.exists(folder === '.' ? projectReal : join(projectReal, folder))).map(folder => ({ folder, create: true })),
+  ].sort((a, b) => depth(a.folder) - depth(b.folder))
+
+  for (const { folder, create: creates } of steps) {
     const absolute = folder === '.' ? projectReal : join(projectReal, folder)
     if (fs.real(absolute) !== absolute) throw new ViewPolicyError(`"${folder}" is reached through a symbolic link; a rule must name a path inside the project`)
+    if (creates) {
+      args.push('--bind', absolute, absolute)
+      // Every name already there goes back read-only. A link is left as it is: replacing or removing one needs delete, which create does not give.
+      for (const entry of fs.list(absolute)) {
+        if (entry.symlinkTo === undefined) args.push('--ro-bind', join(absolute, entry.name), join(absolute, entry.name))
+      }
+      continue
+    }
     args.push('--tmpfs', absolute)
     for (const entry of fs.list(absolute)) {
       const rel = folder === '.' ? entry.name : `${folder}/${entry.name}`
@@ -128,7 +161,7 @@ export function planView(projectReal: string, config: PermissionsConfig, fs: Vie
     args.push('--bind', path, path)
   }
 
-  return { args, hidden: [...hidden].sort(), writable: [...writable].sort() }
+  return { args, hidden: [...hidden].sort(), writable: [...writable].sort(), creatable: creatable.filter(folder => fs.exists(folder === '.' ? projectReal : join(projectReal, folder))).sort() }
 }
 
 function depth(rel: string): number {

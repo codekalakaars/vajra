@@ -19,7 +19,7 @@ export function renderPage(nonce: string): string {
   button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
   button:disabled { opacity: .5; cursor: default; }
   main { padding: 6px 20px 40px; }
-  .head, .row { display: grid; grid-template-columns: 1fr 64px 64px 64px 110px; align-items: center; gap: 6px; padding: 3px 0; }
+  .head, .row { display: grid; grid-template-columns: 1fr 64px 64px 64px 64px 110px; align-items: center; gap: 6px; padding: 3px 0; }
   .head { color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
   .head span:not(:first-child), .row .cell { text-align: center; }
   .name { font-family: ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -34,7 +34,7 @@ export function renderPage(nonce: string): string {
 <header><h1>Vajra</h1><span id="project"></span></header>
 <div id="banner" hidden><span id="message"></span><button id="apply" hidden>Apply and restart shell</button></div>
 <main>
-  <div class="head"><span>Path</span><span>Read</span><span>Write</span><span>Delete</span><span>Source</span></div>
+  <div class="head"><span>Path</span><span>Read</span><span>Write</span><span>Delete</span><span>Create</span><span>Source</span></div>
   <div id="tree"></div>
 </main>
 <script nonce="${nonce}">
@@ -60,7 +60,7 @@ export function renderPage(nonce: string): string {
   function checkbox(entry, right) {
     var cell = document.createElement('span'); cell.className = 'cell';
     var box = document.createElement('input'); box.type = 'checkbox'; box.checked = entry.rights[right];
-    box.disabled = !!entry.locked || (right === 'delete' && !entry.isDir);
+    box.disabled = !!entry.locked || ((right === 'delete' || right === 'create') && !entry.isDir) || (entry.root && right !== 'create');
     box.title = entry.locked || '';
     cell.appendChild(box);
     return { cell: cell, box: box };
@@ -70,25 +70,30 @@ export function renderPage(nonce: string): string {
     var wrap = document.createElement('div');
     var line = document.createElement('div'); line.className = 'row' + (entry.locked ? ' locked' : '');
     var name = document.createElement('span'); name.className = 'name'; name.title = entry.locked || entry.path;
-    var caret = document.createElement('span'); caret.className = 'caret'; caret.textContent = entry.isDir ? (expanded[entry.path] ? '\\u25be' : '\\u25b8') : '';
-    name.appendChild(caret); name.appendChild(document.createTextNode(entry.name + (entry.isDir ? '/' : '')));
-    if (entry.isDir) caret.onclick = name.onclick = function () { expanded[entry.path] = !expanded[entry.path]; refresh(); };
-    var r = checkbox(entry, 'read'), w = checkbox(entry, 'write'), d = checkbox(entry, 'delete');
+    var caret = document.createElement('span'); caret.className = 'caret'; caret.textContent = entry.isDir && !entry.root ? (expanded[entry.path] ? '\\u25be' : '\\u25b8') : '';
+    name.appendChild(caret); name.appendChild(document.createTextNode(entry.root ? '(project root)' : entry.name + (entry.isDir ? '/' : '')));
+    if (entry.isDir && !entry.root) caret.onclick = name.onclick = function () { expanded[entry.path] = !expanded[entry.path]; refresh(); };
+    var r = checkbox(entry, 'read'), w = checkbox(entry, 'write'), d = checkbox(entry, 'delete'), c = checkbox(entry, 'create');
+    // Write already includes create, so the two are not both asked for.
+    function sync() { c.box.disabled = !!entry.locked || !entry.isDir || w.box.checked; if (w.box.checked) c.box.checked = false; }
+    sync();
     var tag = document.createElement('span'); tag.className = 'tag';
-    tag.textContent = entry.rights.read ? entry.source : 'hidden';
+    tag.textContent = entry.root ? 'root' : entry.rights.read ? entry.source : 'hidden';
     if (!entry.rights.read) tag.className += ' hidden-tag';
-    [r, w, d].forEach(function (c) {
-      c.box.onchange = function () {
+    [r, w, d, c].forEach(function (item) {
+      item.box.onchange = function () {
         // Rights depend on each other: a hidden path cannot be written, and a delete or a write needs the one before it.
-        if (!r.box.checked) { w.box.checked = false; d.box.checked = false; }
+        if (!r.box.checked) { w.box.checked = false; d.box.checked = false; c.box.checked = false; }
         if (d.box.checked) { w.box.checked = true; r.box.checked = true; }
         if (w.box.checked) r.box.checked = true;
-        api('/api/rights', { path: entry.path, isDir: entry.isDir, read: r.box.checked, write: w.box.checked, delete: d.box.checked })
+        if (c.box.checked) r.box.checked = true;
+        sync();
+        api('/api/rights', { path: entry.path, isDir: entry.isDir, read: r.box.checked, write: w.box.checked, delete: d.box.checked, create: c.box.checked })
           .then(poll, function (error) { show(error.message, true); })
           .then(refresh);
       };
     });
-    [name, r.cell, w.cell, d.cell, tag].forEach(function (node) { line.appendChild(node); });
+    [name, r.cell, w.cell, d.cell, c.cell, tag].forEach(function (node) { line.appendChild(node); });
     wrap.appendChild(line);
     if (kids) wrap.appendChild(kids);
     return wrap;
@@ -96,6 +101,10 @@ export function renderPage(nonce: string): string {
 
   function folder(path, into) {
     return api('/api/list?path=' + encodeURIComponent(path)).then(function (data) {
+      if (path === '') {
+        // The project root: only create can be given here, so new files can be made directly in the project.
+        into.appendChild(row({ name: '', path: '', isDir: true, root: true, source: 'default', locked: null, rights: { read: data.read, write: false, delete: false, create: data.create } }, null));
+      }
       var pending = data.entries.map(function (entry) {
         if (!entry.isDir || !expanded[entry.path] || entry.locked) return Promise.resolve(row(entry, null));
         var kids = document.createElement('div'); kids.className = 'kids';

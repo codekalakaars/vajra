@@ -27,7 +27,7 @@ const config = files => ({ version: 1, default: rights(true), files })
 test('no rules means no mounts: the read-only base view is all there is', (t) => {
   const root = project(t, ['a.txt', 'src/'])
   const plan = planView(root, config({}))
-  assert.deepEqual(plan, { args: [], hidden: [], writable: [] })
+  assert.deepEqual(plan, { args: [], hidden: [], writable: [], creatable: [] })
 })
 
 test('a hidden file makes its folder an empty read-only filesystem with every other name bound back', (t) => {
@@ -86,7 +86,7 @@ test('a path under a hidden folder cannot also be made writable', (t) => {
 test('a rule for a path that does not exist adds nothing', (t) => {
   const root = project(t, ['a.txt'])
   const plan = planView(root, config({ 'ghost.txt': rights(false), 'gone/': rights(true, true) }))
-  assert.deepEqual(plan, { args: [], hidden: [], writable: [] })
+  assert.deepEqual(plan, { args: [], hidden: [], writable: [], creatable: [] })
 })
 
 test('a symbolic link next to a hidden name stays a link', (t) => {
@@ -116,4 +116,40 @@ test('a rule for a missing path is refused, unless the view hid that path on pur
   assert.equal(policy.config.files['secret.txt'].read, false)
   assert.equal(policy.config.files['vault/'].read, false)
   assert.throws(() => loadProjectPolicy(root, {}, new Set(['secret.txt'])), PolicyFileError, 'one allowed path does not excuse another')
+})
+
+test('a create folder is bound read-write, then every name already in it is bound back read-only', (t) => {
+  const root = project(t, ['keep.txt', '.vajra.json', '.git/HEAD', 'src/a.ts'])
+  symlinkSync('keep.txt', join(root, 'link'))
+  const plan = planView(root, config({}), [''])
+  assert.deepEqual(plan.creatable, ['.'])
+  assert.deepEqual(plan.args.slice(0, 3), ['--bind', root, root])
+  for (const name of ['keep.txt', '.vajra.json', '.git', 'src']) {
+    const at = plan.args.findIndex((arg, i) => arg === '--ro-bind' && plan.args[i + 1] === join(root, name))
+    assert.ok(at > 2, `${name} is pinned read-only after the folder is bound`)
+  }
+  assert.ok(!plan.args.includes(join(root, 'link')), 'a link is left alone: changing it needs delete')
+})
+
+test('create on a subfolder pins only that folder, and a write rule inside it is bound read-write after the pin', (t) => {
+  const root = project(t, ['top.txt', 'src/a.ts', 'src/gen/b.ts'])
+  const plan = planView(root, { ...config({ 'src/gen/': rights(true, true) }) }, ['src/'])
+  assert.deepEqual(plan.creatable, ['src'])
+  assert.ok(!plan.args.includes(join(root, 'top.txt')))
+  const pin = plan.args.findIndex((arg, i) => arg === '--ro-bind' && plan.args[i + 1] === join(root, 'src', 'gen'))
+  const write = plan.args.findIndex((arg, i) => arg === '--bind' && plan.args[i + 1] === join(root, 'src', 'gen'))
+  assert.ok(pin > 0 && write > pin)
+})
+
+test('a name cannot be hidden directly inside a create folder, but a folder further down can be rebuilt', (t) => {
+  const root = project(t, ['src/a.ts', 'src/secret.ts', 'src/deep/x', 'src/deep/y'])
+  assert.throws(() => planView(root, config({ 'src/secret.ts': rights(false) }), ['src/']), err => err instanceof ViewPolicyError && /allows create/.test(err.message))
+  const plan = planView(root, config({ 'src/deep/y': rights(false) }), ['src/'])
+  const create = plan.args.indexOf('--bind')
+  assert.ok(create < plan.args.indexOf('--tmpfs'), 'the folder is bound first, and the rebuild lands on top')
+})
+
+test('create on the root cannot go with a hidden name in the root', (t) => {
+  const root = project(t, ['a.txt', 'secret.txt'])
+  assert.throws(() => planView(root, config({ 'secret.txt': rights(false) }), ['']), ViewPolicyError)
 })

@@ -109,6 +109,14 @@ export async function runGuarded(options: GuardOptions): Promise<number> {
     return GUARD_EXIT_SETUP
   }
 
+  // Landlock gives a create folder write over everything beneath it; what keeps the names that already exist
+  // unchanged is the view, which mounts them read-only. Without it the grant would be real, so refuse. The policy
+  // file is the one name that must never be changeable, so it is the check.
+  if (projectPolicy.create.length > 0 && !options.dryRun && policyFileWritable(project.real)) {
+    write(`vajra: ${POLICY_FILE} has "create" rules, which need the shell's read-only view of the existing files, and this command is not running in it. Start it with \`vajra\``)
+    return GUARD_EXIT_SETUP
+  }
+
   const capabilities = sandboxCapabilities()
   if (capabilities.filesystem === 'unsupported') {
     write(`vajra: refusing to run unconfined: ${capabilities.details}`)
@@ -191,7 +199,7 @@ export async function runGuarded(options: GuardOptions): Promise<number> {
       projectDir: config.projectDir,
       readExecutePaths: [...config.readExecutePaths],
       readWritePaths: [...config.readWritePaths],
-      permissions: projectPolicy.config,
+      permissions: projectPolicy.kernel,
     })
     if (!applied.enforced) {
       write('vajra: the sandbox was not enforced; refusing to run the command')
@@ -226,5 +234,14 @@ export async function runGuarded(options: GuardOptions): Promise<number> {
     return GUARD_EXIT_SETUP
   } finally {
     cleanup()
+  }
+}
+
+function policyFileWritable(projectReal: string): boolean {
+  try {
+    accessSync(join(projectReal, POLICY_FILE), constants.W_OK)
+    return true
+  } catch {
+    return false
   }
 }

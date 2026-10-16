@@ -35,13 +35,23 @@ export const MAX_DEPTH = 8
 export const NOT_WALKED = new Set(['.git', 'node_modules', 'target'])
 
 const TOP_KEYS = new Set(['version', 'default', 'paths'])
-const RIGHT_KEYS = new Set(['read', 'write', 'delete'])
+const RIGHT_KEYS = new Set(['read', 'write', 'delete', 'create'])
 
 export class PolicyFileError extends Error {}
 
 export interface ProjectPolicy {
-  /** The rights handed to the sandbox. */
+  /**
+   * The rights as the file states them. `create` is not in here: it has no Landlock form, so it is the list below.
+   */
   config: PermissionsConfig
+  /**
+   * Folders where the command may make new files and folders but change nothing that exists: a key ending in `/`,
+   * and `''` for the project root. Landlock cannot grant that for one level, so `kernel` grants more and the view
+   * (`view/plan.ts`) pins every existing name read-only; neither is enough alone.
+   */
+  create: string[]
+  /** The rights handed to Landlock: `config`, with write added where `create` is. */
+  kernel: PermissionsConfig
   /** One line per path, for the summary before the command starts. */
   lines: string[]
   /** Whether a `.vajra.json` was found. */
@@ -62,7 +72,7 @@ export interface PolicyChanges {
   denyRead?: readonly string[]
 }
 
-type Rights = { read?: boolean; write?: boolean; delete?: boolean }
+type Rights = { read?: boolean; write?: boolean; delete?: boolean; create?: boolean }
 
 const START: FilePermissions = { read: true, write: false, edit: false, delete: false }
 
@@ -92,9 +102,9 @@ export function loadProjectPolicy(projectDir: string, changes: PolicyChanges = {
   add(changes.delete, 'delete', true)
   add(changes.denyRead, 'read', false)
 
-  const { config, lines } = resolvePolicy(projectReal, { ...top, paths }, absent)
+  const { config, create, kernel, lines } = resolvePolicy(projectReal, { ...top, paths }, absent)
   const json = JSON.stringify({ version: 1, ...(top.default !== undefined ? { default: top.default } : {}), paths }, null, 2) + '\n'
-  return { config, lines, fromFile, json, changed }
+  return { config, create, kernel, lines, fromFile, json, changed }
 }
 
 function readPolicyFile(file: string): Record<string, unknown> {
@@ -119,7 +129,7 @@ function fromCommandLine(given: string, projectReal: string): string {
 }
 
 /** Check the rules and work out what each path may do. Throws PolicyFileError. */
-function resolvePolicy(projectReal: string, top: Record<string, unknown>, absent: ReadonlySet<string>): { config: PermissionsConfig; lines: string[] } {
+function resolvePolicy(projectReal: string, top: Record<string, unknown>, absent: ReadonlySet<string>): { config: PermissionsConfig; create: string[]; kernel: PermissionsConfig; lines: string[] } {
   if (top.version !== 1) throw new PolicyFileError(`${POLICY_FILE}: "version" must be 1`)
 
   const defaults = rights(top.default ?? {}, 'default')
@@ -129,7 +139,9 @@ function resolvePolicy(projectReal: string, top: Record<string, unknown>, absent
   if (defaults.delete === true) {
     throw new PolicyFileError(`${POLICY_FILE}: default "delete" must be false. The policy file has to stay undeletable, and that needs the root to deny delete; give delete to the folders that need it`)
   }
-  const root: FilePermissions = { ...START, ...defaults, edit: false }
+  const { create: createRoot, ...rootRights } = defaults
+  const root: FilePermissions = { ...START, ...rootRights, edit: false }
+  const create: string[] = createRoot === true ? [''] : []
 
   const rules = new Map<string, { isDir: boolean; given: Rights }>()
   const paths = top.paths === undefined ? {} : plainObject(top.paths, '"paths"')
@@ -141,11 +153,14 @@ function resolvePolicy(projectReal: string, top: Record<string, unknown>, absent
 
   // Resolve shallow paths first, so each rule inherits from the folder around it.
   const resolved = new Map<string, FilePermissions>()
-  const lines: string[] = [`default: ${describe(root)}`]
+  const lines: string[] = [`default: ${describe(root)}${createRoot === true ? ' (and create)' : ''}`]
   const ordered = [...rules.keys()].sort((a, b) => depth(a) - depth(b))
   for (const key of ordered) {
     const rule = rules.get(key) as { isDir: boolean; given: Rights }
     const parent = nearest(key, resolved) ?? { name: 'the project', perms: root }
+    if (rule.given.create !== undefined && !rule.isDir) {
+      throw new PolicyFileError(`${POLICY_FILE}: "${key}" is a file, and "create" is for folders. Use "write" to let the command change it`)
+    }
     const perms: FilePermissions = {
       read: rule.given.read ?? parent.perms.read,
       write: rule.given.write ?? parent.perms.write,
@@ -164,13 +179,24 @@ function resolvePolicy(projectReal: string, top: Record<string, unknown>, absent
       throw new PolicyFileError(`${POLICY_FILE}: "${key}" cannot have delete on its own. Removing one file needs delete on its folder, which would also let the command remove every file beside it. Put delete on the folder instead`)
     }
 
+    // Create is not inherited: it is for the names directly in that one folder. Write already includes it.
+    const creates = rule.given.create === true && !perms.write
+    if (creates && !perms.read) {
+      throw new PolicyFileError(`${POLICY_FILE}: "${key}" has "create" and no "read". A folder that is not read is gone from the shell, so there is nothing to create in`)
+    }
+    if (creates) create.push(key)
+
     resolved.set(key, perms)
-    lines.push(`${key}: ${describe(perms)}`)
+    lines.push(`${key}: ${describe(perms)}${creates ? ', create' : ''}`)
   }
 
   const files: Record<string, FilePermissions> = {}
   for (const [key, perms] of resolved) files[key] = perms
-  return { config: { version: 1, default: root, files }, lines }
+  const config: PermissionsConfig = { version: 1, default: root, files }
+  const kernelFiles: Record<string, FilePermissions> = { ...files }
+  for (const key of create) if (key !== '') kernelFiles[key] = { ...(files[key] as FilePermissions), write: true, edit: true }
+  const kernel: PermissionsConfig = { version: 1, default: createRoot === true ? { ...root, write: true, edit: true } : root, files: kernelFiles }
+  return { config, create, kernel, lines }
 }
 
 /** The rights of the nearest folder rule above `key`, if there is one. */
@@ -258,7 +284,7 @@ function object(value: unknown, where: string, allowed: Set<string>): Record<str
   return record
 }
 
-function describe(perms: FilePermissions | Rights): string {
-  const words = ['read', 'write', 'delete'].filter(name => perms[name as keyof Rights] === true)
+function describe(perms: Pick<FilePermissions, 'read' | 'write' | 'delete'>): string {
+  const words = (['read', 'write', 'delete'] as const).filter(name => perms[name] === true)
   return words.length === 0 ? 'none' : words.join(', ')
 }

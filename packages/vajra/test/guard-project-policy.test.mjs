@@ -249,3 +249,36 @@ test('with no file and no rules, the guard says the project is read-only and pri
   assert.match(result.stderr, /no \.vajra\.json in the project, so it is read-only/)
   assert.deepEqual(printedJson(result.stderr), { version: 1, paths: {} })
 })
+
+test('create: the folder takes new names, the policy loads, and a file or an unread folder cannot have it', async t => {
+  const { project } = world(t)
+  const { loadProjectPolicy, PolicyFileError } = await import('../dist/guard/project-policy.js')
+  policy(project, { 'src/': { create: true } })
+  const loaded = loadProjectPolicy(project)
+  assert.deepEqual(loaded.create, ['src/'])
+  assert.equal(loaded.config.files['src/'].write, false, 'the rights as written do not say write')
+  assert.equal(loaded.kernel.files['src/'].write, true, 'but Landlock is given it')
+  assert.equal(loaded.kernel.default.write, false)
+
+  policy(project, { 'a.txt': { create: true } })
+  assert.throws(() => loadProjectPolicy(project), err => err instanceof PolicyFileError && /for folders/.test(err.message))
+  policy(project, { 'src/': { create: true, read: false } })
+  assert.throws(() => loadProjectPolicy(project), PolicyFileError)
+
+  writeFileSync(join(project, '.vajra.json'), JSON.stringify({ version: 1, default: { create: true } }))
+  const root = loadProjectPolicy(project)
+  assert.deepEqual(root.create, [''])
+  assert.equal(root.kernel.default.write, true)
+  assert.equal(root.config.default.write, false)
+  writeFileSync(join(project, '.vajra.json'), JSON.stringify({ version: 1, default: { write: true } }))
+  assert.throws(() => loadProjectPolicy(project), PolicyFileError, 'write at the root is still refused')
+})
+
+test('create: the guard refuses to run outside the shell\'s view, where the policy file could be changed', { skip }, t => {
+  const { project } = world(t)
+  writeFileSync(join(project, '.vajra.json'), JSON.stringify({ version: 1, default: { create: true } }))
+  const result = sh(project, 'echo ran')
+  assert.notEqual(result.status, 0)
+  assert.doesNotMatch(result.stdout, /ran/)
+  assert.match(result.stderr, /create/)
+})

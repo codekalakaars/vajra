@@ -201,3 +201,30 @@ test('vajra: inside the shell the notice is there for the agent to read, and can
   assert.match(result.stdout, /notice-protected/)
   assert.match(result.stdout, /launcher-protected/)
 })
+
+test('vajra: create lets the shell make new files in the root and a folder, and nothing that exists changes', { skip }, (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'vajra-e2e-create-')))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'src'))
+  mkdirSync(join(root, 'docs'))
+  writeFileSync(join(root, 'a.txt'), 'inside\n')
+  writeFileSync(join(root, 'src', 'old.ts'), 'old\n')
+  writeFileSync(join(root, '.vajra.json'), JSON.stringify({ version: 1, default: { create: true }, paths: { 'src/': { create: true } } }))
+
+  const script = [
+    'echo n > new.txt && echo made-root',
+    'mkdir fresh && echo n > fresh/f.txt && echo made-folder',
+    'echo n > src/new.ts && echo made-src',
+    'echo n > docs/new.md 2>/dev/null || echo blocked-docs',
+    'echo x > a.txt 2>/dev/null || echo blocked-a',
+    'echo x > src/old.ts 2>/dev/null || echo blocked-old',
+    'echo x > .vajra.json 2>/dev/null || echo blocked-policy',
+    'rm -f a.txt 2>/dev/null; test -e a.txt && echo kept-a',
+    'echo x >> .git 2>/dev/null || echo blocked-git',
+    'exit',
+  ].join('\n') + '\n'
+  const result = spawnSync('node', [join(dist, 'cli', 'index.js'), '--no-browser'], { cwd: root, input: script, encoding: 'utf-8', env: { ...process.env, SHELL: '/bin/bash' } })
+  for (const line of ['made-root', 'made-folder', 'made-src', 'blocked-docs', 'blocked-a', 'blocked-old', 'blocked-policy', 'kept-a']) assert.match(result.stdout, new RegExp(line), `${line}\n${result.stdout}${result.stderr}`)
+  assert.equal(spawnSync('cat', [join(root, 'new.txt')], { encoding: 'utf-8' }).stdout, 'n\n', 'the new file reached the real project')
+  assert.equal(spawnSync('cat', [join(root, 'a.txt')], { encoding: 'utf-8' }).stdout, 'inside\n')
+})

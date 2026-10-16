@@ -19,7 +19,7 @@ function project(t, files, policy) {
   if (policy) writeFileSync(join(root, '.vajra.json'), JSON.stringify(policy))
   return root
 }
-const all = (read, write = false, del = false) => ({ read, write, delete: del })
+const all = (read, write = false, del = false, create = false) => ({ read, write, delete: del, create })
 
 test('a path with no rule gets the rights of the nearest folder above it, else the default', (t) => {
   const root = project(t, ['src/deep/a.ts', 'top.txt'], { version: 1, paths: { 'src/': { write: true } } })
@@ -106,8 +106,34 @@ test('an unusable policy on disk is reported as such, not as a crash', (t) => {
   assert.throws(() => saveRights(root, 'a.txt', false, all(true, true)), err => err instanceof RightsError && /not usable/.test(err.message))
 })
 
-test('the root cannot be edited here', (t) => {
-  assert.throws(() => saveRights(project(t, []), '', true, all(true)), RightsError)
+test('the root can be given create and nothing else', (t) => {
+  assert.throws(() => saveRights(project(t, []), '', true, all(true, true)), RightsError)
+  assert.throws(() => saveRights(project(t, []), '', true, all(true, false, true)), RightsError)
+  const root = project(t, ['a.txt'])
+  saveRights(root, '', true, all(true, false, false, true))
+  assert.deepEqual(JSON.parse(readFileSync(join(root, '.vajra.json'), 'utf-8')), { version: 1, paths: {}, default: { create: true } })
+  assert.deepEqual(loadProjectPolicy(root).create, [''])
+  saveRights(root, '', true, all(true))
+  assert.deepEqual(JSON.parse(readFileSync(join(root, '.vajra.json'), 'utf-8')), { version: 1, paths: {} })
+})
+
+test('create on a folder is written, shows in the listing, and is not inherited by what is inside', (t) => {
+  const root = project(t, ['src/deep/a.ts', 'src/b.ts'])
+  saveRights(root, 'src', true, all(true, false, false, true))
+  assert.deepEqual(JSON.parse(readFileSync(join(root, '.vajra.json'), 'utf-8')).paths, { 'src/': { create: true } })
+  const loaded = loadProjectPolicy(root)
+  assert.deepEqual(loaded.create, ['src/'])
+  const entries = listFolder(root, '', loaded.config, new Set(loaded.create))
+  assert.deepEqual(entries.find(e => e.name === 'src').rights, all(true, false, false, true))
+  const inside = listFolder(root, 'src', loaded.config, new Set(loaded.create))
+  assert.equal(inside.find(e => e.name === 'deep').rights.create, false)
+  assert.throws(() => saveRights(root, 'src/b.ts', false, all(true, false, false, true)), RightsError)
+})
+
+test('write already includes create, so asking for both writes only write', (t) => {
+  const root = project(t, ['src/a.ts'])
+  saveRights(root, 'src', true, all(true, true, false, true))
+  assert.deepEqual(JSON.parse(readFileSync(join(root, '.vajra.json'), 'utf-8')).paths, { 'src/': { write: true } })
 })
 
 test('hiding a name inside a folder that can only be deleted from is refused by the view, with its own reason', (t) => {

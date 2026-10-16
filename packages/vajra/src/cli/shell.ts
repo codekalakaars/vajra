@@ -55,14 +55,17 @@ async function waitGone(pid: number, ms: number): Promise<boolean> {
 function resetTerminal(): void {
   if (!process.stdout.isTTY) return
   process.stdout.write('\x1b[?1049l\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1006l\x1b[0m\r\n')
-  spawnSync('stty', ['sane'], { stdio: 'inherit' })
+  // The shell that just ended was the terminal's foreground group, so this process is now in the background, and
+  // changing the terminal from there stops it (the shell reports "Stopped") or fails with an I/O error. A program that
+  // ignores SIGTTOU is allowed, and `stty` inherits that.
+  spawnSync('sh', ['-c', "trap '' TTOU TTIN; exec stty sane"], { stdio: 'inherit' })
 }
 
 function startSession(projectRoot: string, bwrap: string, resume: string[] | null): Session {
   const applied = policyText(projectRoot)
   // A policy the view cannot express exactly is refused here, before anything starts.
   const policy = loadProjectPolicy(projectRoot)
-  const view = planView(projectRoot, policy.config)
+  const view = planView(projectRoot, policy.config, policy.create)
 
   const inner = [process.execPath, join(dirname(fileURLToPath(import.meta.url)), 'shell-inner.js'), projectRoot, JSON.stringify(view.hidden), JSON.stringify(resume ?? [])]
   // A shell gets every agent's profile, so the directories each keeps its login and history in are writable too.
@@ -77,13 +80,14 @@ function startSession(projectRoot: string, bwrap: string, resume: string[] | nul
   if (!policy.fromFile) process.stderr.write('vajra: no .vajra.json here, so the project is read-only. Add rules on the control page, or see docs/project-policy.md\n')
   if (view.hidden.length > 0) process.stderr.write(`vajra: hidden: ${view.hidden.join(', ')}\n`)
   if (view.writable.length > 0) process.stderr.write(`vajra: writable: ${view.writable.join(', ')}\n`)
+  if (view.creatable.length > 0) process.stderr.write(`vajra: new files allowed in: ${view.creatable.join(', ')}\n`)
   if (resume) process.stderr.write(`vajra: resuming ${resume[0]}\n`)
   process.stderr.write('vajra: the network is not restricted. Type exit to leave.\n')
 
   // The notice to the agent, and the launchers that hand it over. Made for each session, so it names the rules this shell has.
   const shims = mkdtempSync(join(tmpdir(), 'vajra-shims-'))
   chmodSync(shims, 0o700)
-  writeNotice(shims, { writable: view.writable, hidden: view.hidden })
+  writeNotice(shims, { writable: view.writable, creatable: view.creatable, hidden: view.hidden })
 
   const shell: ChildProcess = spawn(bwrap, bubblewrapArgs({ projectRoot, view, command: inner, binds, readOnlyMounts: [{ source: shims, dest: SHIM_DIR }] }), {
     stdio: 'inherit',

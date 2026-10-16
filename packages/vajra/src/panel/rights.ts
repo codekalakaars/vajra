@@ -14,7 +14,12 @@ export interface Rights {
   read: boolean
   write: boolean
   delete: boolean
+  /** Make new files and folders in this folder, without changing the names already there. Not inherited. */
+  create: boolean
 }
+
+/** The folders that have `create`, as `ProjectPolicy.create` lists them: `a/b/` for a folder and `''` for the project root. */
+export type CreateSet = ReadonlySet<string>
 
 export type Source = 'rule' | 'inherited' | 'default'
 
@@ -31,7 +36,7 @@ export interface Entry {
 
 export class RightsError extends Error {}
 
-const pick = (value: { read: boolean; write: boolean; delete: boolean }): Rights => ({ read: value.read, write: value.write, delete: value.delete })
+const pick = (value: { read: boolean; write: boolean; delete: boolean }, create = false): Rights => ({ read: value.read, write: value.write, delete: value.delete, create })
 
 /** The rights a path gets from the folder around it, ignoring any rule of its own. */
 export function inheritedRights(config: PermissionsConfig, rel: string): { rights: Rights; source: Source } {
@@ -44,9 +49,11 @@ export function inheritedRights(config: PermissionsConfig, rel: string): { right
 }
 
 /** The rights a path has now, and where they come from. */
-export function rightsFor(config: PermissionsConfig, rel: string, isDir: boolean): { rights: Rights; source: Source } {
-  const own = config.files?.[isDir ? `${rel}/` : rel]
-  return own ? { rights: pick(own), source: 'rule' } : inheritedRights(config, rel)
+export function rightsFor(config: PermissionsConfig, rel: string, isDir: boolean, create: CreateSet = new Set()): { rights: Rights; source: Source } {
+  const key = isDir ? `${rel}/` : rel
+  const own = config.files?.[key]
+  if (!own) return inheritedRights(config, rel)
+  return { rights: pick(own, create.has(key)), source: 'rule' }
 }
 
 /**
@@ -58,6 +65,9 @@ export function withRights(paths: Record<string, unknown>, config: PermissionsCo
   const inherited = inheritedRights(config, rel).rights
   const rule: Partial<Rights> = {}
   for (const right of ['read', 'write', 'delete'] as const) if (desired[right] !== inherited[right]) rule[right] = desired[right]
+  if (!isDir && desired.create) throw new RightsError('create is for folders; to let the command change a file, give the file write')
+  // Write already includes create, and create is not inherited, so it is written whenever it is asked for without write.
+  if (isDir && desired.create && !desired.write) rule.create = true
   const key = isDir ? `${rel}/` : rel
   const next = { ...paths }
   if (Object.keys(rule).length === 0) delete next[key]
@@ -78,7 +88,7 @@ export function cleanRelative(raw: unknown): string {
 const depth = (rel: string): number => (rel === '' ? 0 : rel.split('/').length)
 
 /** The entries of one folder, folders first, with their rights and whether they can be changed. */
-export function listFolder(projectRoot: string, rel: string, config: PermissionsConfig): Entry[] {
+export function listFolder(projectRoot: string, rel: string, config: PermissionsConfig, create: CreateSet = new Set()): Entry[] {
   const folder = rel === '' ? projectRoot : join(projectRoot, rel)
   if (lstatSync(folder).isSymbolicLink() || !lstatSync(folder).isDirectory()) throw new RightsError(`${rel} is not a folder`)
   const entries: Entry[] = []
@@ -86,7 +96,7 @@ export function listFolder(projectRoot: string, rel: string, config: Permissions
     const path = rel === '' ? name : `${rel}/${name}`
     const info = lstatSync(join(projectRoot, path))
     const isDir = info.isDirectory()
-    const { rights, source } = rightsFor(config, path, isDir)
+    const { rights, source } = rightsFor(config, path, isDir, create)
     let locked: string | null = null
     if (name === POLICY_FILE && rel === '') locked = 'the policy file is always read-only for the shell'
     else if (info.isSymbolicLink()) locked = 'a symbolic link cannot have a rule; change the file it points to'
@@ -114,7 +124,8 @@ export function policyText(projectRoot: string): string {
 /** Why the policy on disk cannot be used, or null when the shell could start from it. */
 export function policyProblem(projectRoot: string): string | null {
   try {
-    planView(projectRoot, loadProjectPolicy(projectRoot).config)
+    const loaded = loadProjectPolicy(projectRoot)
+    planView(projectRoot, loaded.config, loaded.create)
     return null
   } catch (error) {
     if (error instanceof PolicyFileError || error instanceof ViewPolicyError) return error.message
@@ -128,20 +139,37 @@ export function policyProblem(projectRoot: string): string | null {
  */
 export function saveRights(projectRoot: string, rawPath: unknown, isDir: boolean, desired: Rights): void {
   const rel = cleanRelative(rawPath)
-  if (rel === '') throw new RightsError('the project as a whole is set by "default" in the file, not here')
   const file = join(projectRoot, POLICY_FILE)
   const before = existsSync(file) ? readFileSync(file, 'utf-8') : null
   // Loaded first: it reports a file that is not valid JSON, or not a policy, in words, before anything is parsed here.
   let config: PermissionsConfig
+  let create: CreateSet
   try {
-    config = loadProjectPolicy(projectRoot).config
+    const loaded = loadProjectPolicy(projectRoot)
+    config = loaded.config
+    create = new Set(loaded.create)
   } catch (error) {
     if (error instanceof PolicyFileError) throw new RightsError(`the current policy is not usable, so it cannot be edited here: ${error.message}`)
     throw error
   }
   const top = readPolicyObject(file)
   const paths = top.paths === undefined ? {} : (top.paths as Record<string, unknown>)
-  const next = { ...top, version: 1, paths: withRights(paths, config, rel, isDir, desired) }
+  let next: Record<string, unknown>
+  if (rel === '') {
+    // The project as a whole: read, write and delete are fixed by "default" in the file, and the root cannot be
+    // written or deleted from at all. Create is the one right that can be given here.
+    if (desired.read !== config.default.read || desired.write || desired.delete) {
+      throw new RightsError('the project as a whole can only be given create here. Its other rights are "default" in the file, and the root cannot be written or deleted from')
+    }
+    const given = { ...((top.default ?? {}) as Record<string, unknown>) }
+    if (desired.create) given.create = true
+    else delete given.create
+    next = { ...top, version: 1, paths }
+    if (Object.keys(given).length > 0) next.default = given
+    else delete next.default
+  } else {
+    next = { ...top, version: 1, paths: withRights(paths, config, rel, isDir, desired) }
+  }
 
   const temp = `${file}.tmp-${process.pid}`
   writeFileSync(temp, JSON.stringify(next, null, 2) + '\n')

@@ -12,7 +12,8 @@
     "src/":        { "write": true },
     "migrations/": { "write": true, "delete": true },
     "secrets/":    { "read": false },
-    "README.md":   { "write": true }
+    "README.md":   { "write": true },
+    "docs/":       { "create": true }
   }
 }
 ```
@@ -20,7 +21,7 @@
 - `version` must be `1`.
 - `default` sets the rights for the whole project. Omitted fields are `read: true`, `write: false`, `delete: false`. Without a file, the default applies.
 - `paths` maps project-relative paths to rights. A key ending in `/` is a folder and covers everything beneath it. A key with no trailing slash is a file. The key must match what is on disk, and must exist when the command starts.
-- Each entry can set `read`, `write` and `delete`. A field it leaves out takes the value from the folder around it, or from `default`.
+- Each entry can set `read`, `write`, `delete` and `create`. `create` is for folders, and `default` can have it too, for the project root. A field it leaves out takes the value from the folder around it, or from `default`.
 - The longest matching key wins: a file rule beats the folder around it, and a deeper folder beats a shallower one.
 - Unknown keys are an error. So is any value that is not `true` or `false`.
 
@@ -45,15 +46,18 @@ Options are for one run. When they are not already in `.vajra.json` (or there is
 | `read` | List the folder, and open what is in it | Open the file |
 | `write` | Create files and folders in it, and change the files already there | Change the file |
 | `delete` | Remove what is directly in it. The folder itself is not removed | Not allowed on its own (see below) |
+| `create` | Make new files and folders directly in it. What is already there stays read-only, and nothing can be removed or renamed. Not inherited by the folders inside. Write already includes it | Not for files |
+
+`create` is what to give a folder (or the project root, with `"default": { "create": true }`) when the agent should add files and not touch the ones that exist. A new file can be changed for as long as the shell runs; after a restart it is an existing file and read-only, unless a `write` rule covers it.
 
 ## Why the policy is limited
 
 The kernel enforces this with Landlock. Landlock grants add up: a right granted on a folder applies to everything beneath it, and a rule further down cannot take it back. The native layer walks the project when the command starts and gives each path its rights. That gives four limits, and the guard refuses to start rather than run looser than the file says.
 
-1. **No `write` or `delete` at the root.** The policy file must stay read-only and undeletable, and the only way to protect a file inside a folder that allows writes is to take the right away from that file, which the kernel cannot do. So the root cannot allow them, and the command cannot create new files directly in the project root. Give write to the folders and files that need it.
+1. **No `write` or `delete` at the root, but `create` is allowed.** The policy file must stay read-only and undeletable, and the only way to protect a file inside a folder that allows writes is to take the right away from that file, which the kernel cannot do. So the root cannot allow them. Give write to the folders and files that need it. `create` at the root is possible because the shell's view (`view/plan.ts`) mounts every name already in the root read-only, the policy file included, and `vajra` checks that the policy file is read-only before it applies Landlock. This is the one right that Landlock does not enforce alone: its grant covers everything beneath, and the mounts are what limit it to the new names. A `create` rule makes the guard refuse to run outside the shell's view.
 2. **No taking a right away below a folder that has it.** `src/` writable with `src/gen/` not is refused. Give write to the paths that need it instead.
 3. **No `delete` on a single file.** Removing a file needs delete on its folder, and that would also remove every file beside it. Put `delete` on the folder.
-4. **No `"hidden": true`, and no hidden name inside a writable folder.** In `vajra`, `"read": false` removes the path from the shell's view, so the name is not listed either. A mount cannot hide one name in a folder that is shared with the real project and writable, so that policy is refused: hide the folder itself, or make it read-only.
+4. **No `"hidden": true`, and no hidden name inside a writable or create folder.** In `vajra`, `"read": false` removes the path from the shell's view, so the name is not listed either. A mount cannot hide one name in a folder that is shared with the real project and writable, so that policy is refused: hide the folder itself, or make it read-only.
 
 Two more are checked for the same reason:
 
