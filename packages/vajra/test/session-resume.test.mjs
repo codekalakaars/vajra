@@ -13,11 +13,14 @@ test('each agent resumes with its own option', () => {
   assert.deepEqual(resumeCommand('claude'), ['claude', '--continue'])
   assert.deepEqual(resumeCommand('opencode'), ['opencode', '--continue'])
   assert.deepEqual(resumeCommand('codex'), ['codex', 'resume', '--last'])
+  assert.deepEqual(resumeCommand('pi'), ['pi', '--continue'])
 })
 
 test('an agent is recognised by its program name, or by the script a runtime was given', () => {
   assert.equal(agentOf(['/home/a/.local/bin/claude', '--model', 'x']), 'claude')
   assert.equal(agentOf(['opencode']), 'opencode')
+  // pi sets its process title to just its name, so that is all the process list shows.
+  assert.equal(agentOf(['pi']), 'pi')
   assert.equal(agentOf(['node', '/usr/lib/node_modules/@openai/codex/bin/codex.js', 'x']), 'codex')
   assert.equal(agentOf(['bun', '/x/opencode.mjs']), 'opencode')
   assert.equal(agentOf(['bash']), null)

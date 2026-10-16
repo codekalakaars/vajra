@@ -19,8 +19,8 @@ export interface RunningAgent {
 const RESUME: Record<AgentName, string[]> = {
   claude: ['claude', '--continue'],
   opencode: ['opencode', '--continue'],
-  // Untested: Codex was not installed where this was written, so this is from its documentation.
   codex: ['codex', 'resume', '--last'],
+  pi: ['pi', '--continue'],
 }
 
 export function resumeCommand(agent: AgentName): string[] {

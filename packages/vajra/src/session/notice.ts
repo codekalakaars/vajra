@@ -77,7 +77,7 @@ const HEADER = '#!/bin/sh\n# Written by vajra for this session. It starts the re
 
 /**
  * What each launcher does to hand the notice to its agent. Only agents whose way of taking instructions was
- * checked are here. Codex is not: it was not installed where this was written, so adding it would be a guess.
+ * checked against the agent itself are here, and each line says how.
  */
 const LAUNCHERS: Record<string, string> = {
   // Claude Code appends text to its system prompt.
@@ -91,7 +91,18 @@ fi
 exec "$real" "$@"\n`,
 }
 
+// Codex takes a config override on the command line, and `developer_instructions` is placed in the prompt the model sees
+// (checked with `codex debug prompt-input`). The value is a TOML string, written when the notice is, so the launcher only reads it.
+LAUNCHERS.codex = `${HEADER}${finder('codex')}exec "$real" -c "developer_instructions=$(cat "$here/codex-instructions")" "$@"\n`
+// pi appends text to its system prompt, as Claude Code does (`pi --help`).
+LAUNCHERS.pi = `${HEADER}${finder('pi')}exec "$real" --append-system-prompt "$(cat "$here/notice.md")" "$@"\n`
+
 export const LAUNCHED_AGENTS = Object.keys(LAUNCHERS)
+
+/** The notice as a TOML basic string, which is what Codex's `-c` takes. JSON's escapes are TOML's, except that TOML also wants DEL escaped. */
+export function tomlString(text: string): string {
+  return JSON.stringify(text).replace(/\x7f/g, '\\u007f')
+}
 
 /**
  * Commands an agent reaches for when a write is refused. None of them can work inside the sandbox, but what
@@ -121,7 +132,9 @@ const BLOCKED_MESSAGE = [
 
 /** Write the notice and the launchers into `dir`, which is mounted at SHIM_DIR inside the shell. */
 export function writeNotice(dir: string, input: NoticeInput): void {
-  writeFileSync(join(dir, 'notice.md'), buildNotice(input), { mode: 0o444 })
+  const notice = buildNotice(input)
+  writeFileSync(join(dir, 'notice.md'), notice, { mode: 0o444 })
+  writeFileSync(join(dir, 'codex-instructions'), tomlString(notice), { mode: 0o444 })
   writeFileSync(join(dir, 'blocked.txt'), BLOCKED_MESSAGE, { mode: 0o444 })
   const scripts = { ...LAUNCHERS, ...Object.fromEntries(BLOCKED_COMMANDS.map(command => [command, blocker(command)])) }
   for (const [name, script] of Object.entries(scripts)) {

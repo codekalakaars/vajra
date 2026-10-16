@@ -80,18 +80,23 @@ test('writable places outside the project are mounted read-write, before the pro
   assert.ok(at < args.indexOf('--remount-ro'), 'before the project view')
 })
 
-test('vajra: an agent can write its own state directory, and no other place in the home directory', { skip }, (t) => {
+test('vajra: every agent can write its own state directory, and no other place in the home directory', { skip }, (t) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'vajra-e2e-home-')))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const project = join(root, 'project')
   const home = join(root, 'home')
   mkdirSync(project)
-  mkdirSync(join(home, '.local/share/opencode'), { recursive: true })
+  for (const dir of ['.local/share/opencode', '.pi/agent', '.codex', '.claude']) mkdirSync(join(home, dir), { recursive: true })
   mkdirSync(join(home, '.ssh'), { recursive: true })
   writeFileSync(join(home, '.ssh/id'), 'key\n')
 
   const script = [
     'echo log > ~/.local/share/opencode/opencode.log && echo wrote-state',
+    'echo k > ~/.pi/agent/auth.json && echo pi-wrote',
+    'echo k > ~/.claude/state && echo claude-wrote',
+    // Codex makes symlinks to itself in its own tmp directory every time it starts.
+    'mkdir -p ~/.codex/tmp/arg0 && ln -s /bin/true ~/.codex/tmp/arg0/apply_patch && echo codex-linked',
+    'ln -s /bin/true ~/.pi/escape 2>/dev/null && echo pi-escaped || echo pi-parent-closed',
     'echo x > ~/.local/share/other 2>/dev/null || echo blocked-other',
     'cat ~/.ssh/id 2>/dev/null || echo blocked-ssh',
     'exit',
@@ -99,6 +104,7 @@ test('vajra: an agent can write its own state directory, and no other place in t
   const result = spawnSync('node', [join(dist, 'cli', 'index.js'), '--no-browser'], { cwd: project, input: script, encoding: 'utf-8', env: { ...process.env, HOME: home, SHELL: '/bin/bash', XDG_DATA_HOME: '', XDG_STATE_HOME: '', XDG_CACHE_HOME: '' } })
 
   assert.match(result.stdout, /wrote-state/)
+  for (const line of [/pi-wrote/, /claude-wrote/, /codex-linked/, /pi-parent-closed/]) assert.match(result.stdout, line)
   assert.match(result.stdout, /blocked-other/)
   assert.match(result.stdout, /blocked-ssh/)
   assert.equal(spawnSync('cat', [join(home, '.local/share/opencode/opencode.log')], { encoding: 'utf-8' }).stdout, 'log\n', 'the write reached the real directory')

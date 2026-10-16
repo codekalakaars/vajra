@@ -22,9 +22,9 @@ test('an agent is picked by the name the person typed, whatever directory it is 
 })
 
 test('a shell gets every profile, so an agent can be started from inside it', () => {
-  assert.deepEqual(names(resolveAgents(['sh'], undefined, false)), ['claude', 'opencode', 'codex'])
-  assert.deepEqual(names(resolveAgents(['/usr/bin/zsh'], undefined, false)), ['claude', 'opencode', 'codex'])
-  assert.deepEqual(names(resolveAgents(['/bin/whatever'], undefined, true)), ['claude', 'opencode', 'codex'], 'no command given: the interactive shell')
+  assert.deepEqual(names(resolveAgents(['sh'], undefined, false)), ['claude', 'opencode', 'codex', 'pi'])
+  assert.deepEqual(names(resolveAgents(['/usr/bin/zsh'], undefined, false)), ['claude', 'opencode', 'codex', 'pi'])
+  assert.deepEqual(names(resolveAgents(['/bin/whatever'], undefined, true)), ['claude', 'opencode', 'codex', 'pi'], 'no command given: the interactive shell')
 })
 
 test('an unknown program gets no profile', () => {
@@ -36,7 +36,7 @@ test('--agent narrows a shell to one profile, none turns profiles off, and a wro
   assert.deepEqual(names(resolveAgents([], 'codex', true)), ['codex'])
   assert.deepEqual(resolveAgents(['claude'], 'none', false), [])
   assert.deepEqual(resolveAgents([], 'none', true), [])
-  assert.throws(() => resolveAgents(['sh'], 'gemini', false), error => error instanceof UnknownAgentError && /claude, opencode, codex or none/.test(error.message))
+  assert.throws(() => resolveAgents(['sh'], 'gemini', false), error => error instanceof UnknownAgentError && /claude, opencode, codex, pi or none/.test(error.message))
 })
 
 test('claude: its config directory and file, and the cache it writes; nothing shared', () => {
@@ -102,4 +102,18 @@ test('every profile of a shell is granted, and the summary warns that they can r
   assert.match(text, /agent\s+claude: \/home\/ada\/\.claude \(write\)/)
   assert.match(text, /agent\s+opencode: \/home\/ada\/\.local\/share\/opencode \(write\)/)
   assert.match(text, /agents\s+every known agent's own directories/)
+})
+
+test('pi: only its agent directory is writable, and its two override variables are followed', () => {
+  assert.deepEqual(at('pi').write, ['/home/ada/.pi/agent'])
+  assert.deepEqual(at('pi').read, [])
+  // PI_CODING_AGENT_DIR moves everything, so the home directory is then not granted. A relative value is ignored.
+  assert.deepEqual(at('pi', { PI_CODING_AGENT_DIR: '/data/pi' }).write, ['/data/pi'])
+  assert.deepEqual(at('pi', { PI_CODING_AGENT_DIR: 'relative' }).write, ['/home/ada/.pi/agent'])
+  assert.deepEqual(at('pi', { PI_CODING_AGENT_SESSION_DIR: '/data/sessions' }).write.sort(), ['/data/sessions', '/home/ada/.pi/agent'])
+  assert.ok(!at('pi').write.includes('/home/ada/.pi'), 'not the parent, which is not pi\'s alone')
+})
+
+test('pi is picked by name', () => {
+  assert.deepEqual(names(resolveAgents(['pi', '--continue'], undefined, false)), ['pi'])
 })

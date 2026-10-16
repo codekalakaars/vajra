@@ -21,7 +21,7 @@ export interface AgentProfile {
   note?: string
 }
 
-export type AgentName = 'claude' | 'opencode' | 'codex'
+export type AgentName = 'claude' | 'opencode' | 'codex' | 'pi'
 
 export interface AgentEnv {
   home: string
@@ -65,7 +65,18 @@ export const AGENTS: readonly AgentProfile[] = [
     commands: ['codex'],
     write: e => [e.env.CODEX_HOME && e.env.CODEX_HOME.startsWith('/') ? e.env.CODEX_HOME : join(e.home, '.codex')],
     read: () => [],
-    note: 'untested: Codex was not installed where this profile was written, so the paths come from its documentation. It also applies a sandbox of its own, which stacks inside this one',
+    note: 'it also applies a sandbox of its own, which stacks inside this one',
+  },
+  {
+    name: 'pi',
+    commands: ['pi'],
+    // Run with an empty home: pi writes only under its agent directory (sessions, auth.json, models-store.json).
+    // PI_CODING_AGENT_DIR moves all of it, and PI_CODING_AGENT_SESSION_DIR moves just the sessions.
+    write: e => {
+      const absolute = (value: string | undefined) => (value && value.startsWith('/') ? [value] : [])
+      return [...(absolute(e.env.PI_CODING_AGENT_DIR).length > 0 ? absolute(e.env.PI_CODING_AGENT_DIR) : [join(e.home, '.pi', 'agent')]), ...absolute(e.env.PI_CODING_AGENT_SESSION_DIR)]
+    },
+    read: () => [],
   },
 ]
 

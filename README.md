@@ -46,7 +46,8 @@ A change does not touch the running shell. The page then offers **Apply and rest
 |-------|--------------------|
 | `claude` | `claude --continue` |
 | `opencode` | `opencode --continue` |
-| `codex` | `codex resume --last` (untested: Codex was not installed where this was written) |
+| `codex` | `codex resume --last` |
+| `pi` | `pi --continue` |
 
 Only the agent's name and that option carry over, not the flags it was first started with. Anything else that was running in the shell is stopped.
 
@@ -109,9 +110,10 @@ A shell is also where a project gets read-only by default: without a `.vajra.jso
 |-------|----------|-------|
 | `claude` | `~/.claude`, `~/.claude.json`, `~/.cache/claude-cli-nodejs`; follows `CLAUDE_CONFIG_DIR` | Tested with a real `claude` in an isolated home. Its install directory stays read-only, so it cannot rewrite itself. It wants a lock file and a temp file for `~/.claude.json` in your home directory, which stays closed, so it updates the file in place without the lock: run one session at a time. |
 | `opencode` | data, state and cache under `~/.local/share`, `~/.local/state`, `~/.cache`; follows `XDG_*` | Tested with the real `opencode` and its real sessions. Its config directory is **read-only**, so it cannot edit its own settings or add plugins. |
-| `codex` | `~/.codex`; follows `CODEX_HOME` | **Untested**: Codex was not installed where this was written, so the paths come from its documentation. It applies a sandbox of its own, which stacks inside this one. |
+| `codex` | `~/.codex`; follows `CODEX_HOME` | Checked with the real `codex` 0.162 (run with a scratch home, not logged in): it starts, makes the symlinks to itself that it needs in `~/.codex/tmp`, and gets the sandbox notice. It applies a sandbox of its own, which stacks inside this one. |
+| `pi` | `~/.pi/agent`; follows `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR` | Checked with the real `pi` (the `@earendil-works/pi-coding-agent` package, run with a scratch home, not logged in): it writes only under its agent directory. |
 
-**Telling the agent it is sandboxed.** The kernel's wording for a refused write, "Read-only file system" or "Permission denied", says nothing about a policy, and an agent that takes it for a broken disk goes looking for a way past (remounting, `sudo`, a writable copy in `/tmp`). So each shell carries a notice for the agent: what it can write, what is hidden, that a refusal is the policy and not a fault, that it must not try to get around it, and that it should stop and tell you which path it needed so you can allow it on the control page. It is handed over by a small launcher for `claude` (`--append-system-prompt`) and `opencode` (its `instructions` config) that sits first on `PATH` inside the shell, and it is rebuilt for each restart so it names the current rules. `sudo`, `su`, `doas`, `mount` (when it would change something), `umount`, `fusermount`, `unshare`, `nsenter` and `chroot` answer with the same message and exit 1. Codex has no launcher yet, because its way of taking instructions was not checked.
+**Telling the agent it is sandboxed.** The kernel's wording for a refused write, "Read-only file system" or "Permission denied", says nothing about a policy, and an agent that takes it for a broken disk goes looking for a way past (remounting, `sudo`, a writable copy in `/tmp`). So each shell carries a notice for the agent: what it can write, what is hidden, that a refusal is the policy and not a fault, that it must not try to get around it, and that it should stop and tell you which path it needed so you can allow it on the control page. It is handed over by a small launcher for each agent that sits first on `PATH` inside the shell: `claude` and `pi` get `--append-system-prompt`, `opencode` gets its `instructions` config, and `codex` gets `-c developer_instructions=...`. Each way was checked against the agent itself, and it is rebuilt for each restart so it names the current rules. `sudo`, `su`, `doas`, `mount` (when it would change something), `umount`, `fusermount`, `unshare`, `nsenter` and `chroot` answer with the same message and exit 1.
 
 This is advice to the agent, not enforcement: the sandbox is what stops it, and an agent that runs `/usr/bin/sudo` by full path gets the kernel's own refusal.
 

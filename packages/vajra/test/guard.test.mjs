@@ -291,3 +291,15 @@ test('seccomp: a command cannot type into the terminal it shares with the person
   const plain = spawnSync('sh', ['-c', rawCall(16, '0, 0x5412, 0')], { encoding: 'utf-8' })
   assert.equal(plain.stdout, '25', 'control: without the filter the call reaches the terminal check')
 })
+
+test('a symbolic link can be made in a writable place, and it opens nothing the link\'s target does not already allow', (t) => {
+  const { project, outside } = world(t)
+  const place = join(outside, 'state')
+  mkdirSync(place)
+  // The place is granted for writing, as an agent's own state directory is. The secret beside it is not.
+  const made = sh(project, `ln -s ${join(outside, 'secret.txt')} ${place}/link && echo made-link; cat ${place}/link 2>&1 | head -1; ln -s ${join(project, 'a.txt')} ${place}/inside && cat ${place}/inside`, ['--allow-write', place])
+  assert.match(made.stdout, /made-link/, 'the link can be made')
+  assert.match(made.stdout, /Permission denied/, 'but following it to the ungranted secret is refused')
+  assert.doesNotMatch(made.stdout, /^outside$/m, 'the secret was not read through the link')
+  assert.match(made.stdout, /inside/, 'a link to something that is allowed works')
+})

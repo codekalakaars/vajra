@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const { buildNotice, writeNotice, LAUNCHED_AGENTS, BLOCKED_COMMANDS, SHIM_DIR } = await import(pathToFileURL(join(import.meta.dirname, '..', 'dist', 'session', 'notice.js')).href)
+const { buildNotice, writeNotice, tomlString, LAUNCHED_AGENTS, BLOCKED_COMMANDS, SHIM_DIR } = await import(pathToFileURL(join(import.meta.dirname, '..', 'dist', 'session', 'notice.js')).href)
 
 test('the notice says what can be written and what is hidden, and that a refusal is the policy', () => {
   const text = buildNotice({ writable: ['src', 'notes.md'], hidden: ['secret.txt'] })
@@ -59,7 +59,7 @@ function launchers(t, realProgram) {
 
 test('the files are written read-only, with a launcher for each agent that was checked', (t) => {
   const { shims } = launchers(t)
-  assert.deepEqual(LAUNCHED_AGENTS.sort(), ['claude', 'opencode'])
+  assert.deepEqual(LAUNCHED_AGENTS.sort(), ['claude', 'codex', 'opencode', 'pi'])
   assert.equal(statSync(join(shims, 'notice.md')).mode & 0o222, 0, 'the notice cannot be written')
   for (const name of LAUNCHED_AGENTS) assert.equal(statSync(join(shims, name)).mode & 0o111, 0o111, `${name} is executable`)
   assert.equal(SHIM_DIR, '/tmp/vajra-shims')
@@ -112,4 +112,61 @@ test('mount that only lists is passed on, and mount that changes something is re
   assert.match(refused.stderr, /not available in this sandbox/)
   assert.doesNotMatch(refused.stdout, /CONFIG:/, 'the real mount never ran')
   assert.ok(real)
+})
+
+// The launcher sits first on PATH, in front of the agent. The guard looks for an agent's install directory on PATH to
+// grant it, and must look past the launcher, or the real program (which lives in that directory) cannot be run.
+const { sandboxCapabilities } = await import('@codekalakaars/vajra-sandbox')
+import { symlinkSync, realpathSync } from 'node:fs'
+
+test('an agent behind a launcher can still be run, because its install directory is found past the launcher', { skip: sandboxCapabilities().filesystem === 'enforced' ? false : 'cannot confine' }, (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'vajra-launcher-')))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const [install, tools, launchersDir, project, home] = ['install', 'tools', 'launchers', 'project', 'home'].map(name => join(root, name))
+  for (const dir of [install, tools, launchersDir, project, home]) mkdirSync(dir)
+  // As with Claude Code: the program on PATH is a symlink into an install directory that is not itself on PATH.
+  // The PATH directory is not called `bin`, which the guard treats as sitting beside the files it loads and so grants its parent.
+  writeFileSync(join(install, 'claude-2.1'), '#!/bin/sh\necho REAL-CLAUDE-RAN\n')
+  chmodSync(join(install, 'claude-2.1'), 0o755)
+  symlinkSync(join(install, 'claude-2.1'), join(tools, 'claude'))
+  writeNotice(launchersDir, { writable: [], hidden: [] })
+
+  const run = (extra) => spawnSync('node', [join(import.meta.dirname, 'support', 'run-guarded.mjs'), JSON.stringify({
+    projectDir: project,
+    command: ['sh', '-c', 'claude'],
+    env: { PATH: `${launchersDir}:${tools}:/usr/bin:/bin`, HOME: home },
+    ...extra,
+  })], { encoding: 'utf-8' })
+
+  const fixed = run({ launcherDirs: [launchersDir] })
+  assert.match(fixed.stdout, /REAL-CLAUDE-RAN/, fixed.stderr)
+  // The control: without telling the guard about the launcher it takes the launcher for the agent, and the real one is refused.
+  const broken = run({})
+  assert.doesNotMatch(broken.stdout, /REAL-CLAUDE-RAN/)
+  assert.match(broken.stderr, /Permission denied/)
+})
+
+test('the pi launcher starts the real pi with the notice appended to its system prompt', (t) => {
+  const { run } = launchers(t, 'pi')
+  const out = run('pi', ['--continue']).stdout.split('\n')
+  assert.equal(out[0], 'ARG:--append-system-prompt')
+  assert.ok(out[1].startsWith('ARG:VAJRA SANDBOX NOTICE'))
+  assert.ok(out.includes('ARG:--continue'))
+})
+
+test('the codex launcher passes the notice as a config override, before the subcommand, as one TOML string', (t) => {
+  const { run, shims } = launchers(t, 'codex')
+  const out = run('codex', ['resume', '--last']).stdout.split('\n')
+  assert.equal(out[0], 'ARG:-c')
+  assert.ok(out[1].startsWith('ARG:developer_instructions="VAJRA SANDBOX NOTICE'), 'a TOML basic string')
+  assert.deepEqual(out.slice(2, 4), ['ARG:resume', 'ARG:--last'], 'its own arguments follow')
+  // What follows the = parses back to the notice, so nothing was lost or changed by the escaping.
+  const value = out[1].slice('ARG:developer_instructions='.length)
+  assert.equal(JSON.parse(value), readFileSync(join(shims, 'notice.md'), 'utf-8'))
+})
+
+test('the notice is escaped for TOML: quotes, backslashes, newlines and DEL', () => {
+  assert.equal(tomlString('a"b\\c\nd'), '"a\\"b\\\\c\\nd"')
+  assert.equal(tomlString('x\x7fy'), '"x\\u007fy"', 'TOML wants DEL escaped; JSON does not')
+  assert.ok(!tomlString('line one\nline two').includes('\n'), 'it stays on one line, so it is one shell word')
 })

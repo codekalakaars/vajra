@@ -31,6 +31,8 @@ export interface GuardOptions {
   policy?: PolicyChanges
   /** Project paths the bubblewrap view hid on purpose, so a rule for one of them is not an error. */
   hiddenByView?: readonly string[]
+  /** Directories on PATH that hold launchers which start the real program, such as the notice launchers. The real program's install directory is looked for past them. */
+  launcherDirs?: readonly string[]
   /** Print how to save the rules when there is no `.vajra.json`. The shell says this itself, once, before it starts. */
   explainPolicyFile?: boolean
   /** Print the policy and stop, without confining anything. */
@@ -116,6 +118,10 @@ export async function runGuarded(options: GuardOptions): Promise<number> {
 
   const command = options.command.length > 0 ? options.command : [env.SHELL || '/bin/sh']
   const pathValue = env.PATH ?? ''
+  // A launcher in front of an agent would otherwise be taken for the agent, and its install directory, where
+  // the real program and the files it loads live, would never be granted.
+  const launchers = new Set(options.launcherDirs ?? [])
+  const realPathValue = pathValue.split(delimiter).filter(dir => !launchers.has(dir)).join(delimiter)
   const executable = findExecutable(command[0] as string, pathValue)
   if (!executable) {
     write(`vajra: command not found: ${command[0]}`)
@@ -147,9 +153,9 @@ export async function runGuarded(options: GuardOptions): Promise<number> {
       agents: profiles.map(profile => ({ name: profile.name, read: profile.read({ home, env }), write: profile.write({ home, env }), ...(profile.note ? { note: profile.note } : {}) })),
       path: pathValue,
       tmpDir,
-      commandDir: dirname(realpathSync(executable)),
+      commandDir: dirname(realpathSync(findExecutable(command[0] as string, realPathValue) ?? executable)),
       agentCommandDirs: profiles.flatMap(profile => profile.commands)
-        .map(name => findExecutable(name, pathValue))
+        .map(name => findExecutable(name, realPathValue))
         .filter((found): found is string => found !== null)
         .map(found => dirname(realpathSync(found))),
       allowRead: options.allowRead,

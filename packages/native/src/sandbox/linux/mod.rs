@@ -86,6 +86,9 @@ pub fn apply(config: &SandboxConfig) -> Result<(Vec<String>, Option<String>), St
 
     let rx = acc::EXECUTE | acc::READ_FILE | acc::READ_DIR;
     let ro = acc::READ_FILE | acc::READ_DIR;
+    // MAKE_SYM is here because Codex makes symlinks to itself (`apply_patch` and others) in its own tmp directory
+    // each time it starts, and refuses to carry on without them. It is not a way out: Landlock checks the
+    // target of a link when it is opened, so a link to a path that is not granted is still refused.
     let rw = (acc::READ_FILE
         | acc::WRITE_FILE
         | acc::READ_DIR
@@ -93,6 +96,7 @@ pub fn apply(config: &SandboxConfig) -> Result<(Vec<String>, Option<String>), St
         | acc::REMOVE_FILE
         | acc::MAKE_DIR
         | acc::MAKE_REG
+        | acc::MAKE_SYM
         | acc::TRUNCATE)
         & supported;
 

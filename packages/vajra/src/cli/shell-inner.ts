@@ -2,6 +2,7 @@
 import '@codekalakaars/vajra-sandbox/platform-guard'
 import { basename } from 'node:path'
 import { runGuarded } from '../guard/launch.js'
+import { SHIM_DIR } from '../session/notice.js'
 import { startWith } from '../session/resume.js'
 
 // Runs inside the bubblewrap view. It applies Landlock and the seccomp filter and then
@@ -34,6 +35,7 @@ process.exitCode = await runGuarded({
   allowWrite: [],
   hiddenByView: Array.isArray(hiddenByView) ? hiddenByView.filter((path): path is string => typeof path === 'string') : [],
   explainPolicyFile: false,
+  launcherDirs: [SHIM_DIR],
   dryRun: false,
   quiet: true,
   env: { ...process.env, PS1: 'vajra:\\w\\$ ' },
