@@ -7,14 +7,16 @@ Working today: `vajra`, which opens a shell confined to the current project, and
 ## Use it
 
 ```bash
-pnpm install && pnpm build:all
+pnpm install:global        # builds, then installs the `vajra` command to ~/.local/bin (no root)
 
-# open a confined shell on the current project, then start an agent from it
-node packages/vajra/dist/cli/index.js                       # then: claude, opencode or codex
+# in any project: open a confined shell, then start an agent from it
+cd ~/my-project && vajra   # then: claude, opencode, codex or pi
 
 # can this machine enforce it?
-node packages/vajra/dist/cli/index.js doctor
+vajra doctor
 ```
+
+`pnpm install:global` (`scripts/install-global.sh`) installs a launcher that runs this checkout's build, so `pnpm build:all` updates it. `--prefix DIR` installs elsewhere, and `pnpm uninstall:global` removes it. It will not overwrite a `vajra` it did not create. It needs Node 22+, pnpm and a Rust toolchain.
 
 Inside `vajra`, what the command can read, write and delete in the project is set by a `.vajra.json` file, described below. Without one the project is read-only. Outside the project, only these are allowed:
 
@@ -83,7 +85,8 @@ Put this file at the project root to say what the command may read, write and de
     "src/":        { "write": true },
     "migrations/": { "write": true, "delete": true },
     "secrets/":    { "read": false },
-    "README.md":   { "write": true }
+    "README.md":   { "write": true },
+    "docs/":       { "create": true }
   }
 }
 ```
@@ -96,7 +99,7 @@ You can also set rules from the command line, for one run: `--write <path>`, `--
 
 Without a file the project is read-only, and the guard says so and prints the file to start from.
 
-The command cannot write or delete the policy file itself. Some policies cannot be enforced exactly, because the kernel only adds rights below a folder. The guard refuses to start for those and says why. The main ones: no `write` or `delete` at the root (so no new files directly in the project root), no `delete` on a single file, and no `"hidden": true` (use `"read": false`, which also removes the name from the view). The full format, every refusal and the reasons are in [docs/project-policy.md](docs/project-policy.md). `vajra doctor` says whether the rights can be enforced here.
+The command cannot write or delete the policy file itself. Some policies cannot be enforced exactly, because the kernel only adds rights below a folder. The guard refuses to start for those and says why. The main ones: no `write` or `delete` at the root (use `"default": { "create": true }` to let the shell make new files in the root without changing the ones there, or `"create": true` on a folder; the control page has a Create column), no `delete` on a single file, and no `"hidden": true` (use `"read": false`, which also removes the name from the view). The full format, every refusal and the reasons are in [docs/project-policy.md](docs/project-policy.md). `vajra doctor` says whether the rights can be enforced here.
 
 ### Coding agents
 
