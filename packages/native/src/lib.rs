@@ -19,6 +19,7 @@ mod path;
 mod permissions;
 mod process;
 mod sandbox;
+mod seccomp;
 mod secret;
 
 #[macro_use]

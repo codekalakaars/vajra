@@ -1,7 +1,6 @@
 # OS
 .DS_Store
 Thumbs.db
-.fuse_hidden*
 
 # IDE
 .vscode/

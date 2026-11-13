@@ -21,7 +21,9 @@
     "cli": "pnpm --filter @codekalakaars/vajra build && node packages/vajra/dist/cli/index.js",
     "dev:all": "pnpm -r --parallel dev",
     "build:all": "turbo run build",
-    "test:all": "turbo run test"
+    "test:all": "turbo run test",
+    "install:global": "scripts/install-global.sh",
+    "uninstall:global": "scripts/install-global.sh --uninstall"
   },
   "devDependencies": {
     "@codekalakaars/vajra-native": "workspace:*",

@@ -143,6 +143,8 @@ export interface SandboxResult {
 }
 export declare function sandboxCapabilities(): SandboxCapabilities
 export declare function applySandbox(config: SandboxConfig): SandboxResult
+/** Apply the filter to this process and everything it starts. It cannot be removed. */
+export declare function applySeccomp(): void
 /** Replace every occurrence of each secret value with `[REDACTED:<KEY>]`. */
 export declare function redact(text: string, secrets: Array<EnvVar>): string
 /**

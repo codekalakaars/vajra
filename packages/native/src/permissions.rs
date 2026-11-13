@@ -87,8 +87,24 @@ pub fn save_permissions(project_dir: String, config: PermissionsConfig) -> Resul
         .map_err(|e| Error::from_reason(format!("Failed to write '{}': {}", path.display(), e)))
 }
 
+/// The rights for one project-relative path. An exact key wins. Otherwise the
+/// longest directory key (one ending in `/`) that contains the path decides, so a
+/// rule for `secrets/` covers everything beneath it. Anything unmatched gets the
+/// default.
 pub fn effective(config: &PermissionsConfig, path: &str) -> FilePermissions {
-    config.files.get(path).cloned().unwrap_or_else(|| config.default.clone())
+    if let Some(exact) = config.files.get(path) {
+        return exact.clone();
+    }
+    config
+        .files
+        .iter()
+        .filter(|(key, _)| {
+            key.ends_with('/')
+                && (path == key.trim_end_matches('/') || path.starts_with(key.as_str()))
+        })
+        .max_by_key(|(key, _)| key.len())
+        .map(|(_, perms)| perms.clone())
+        .unwrap_or_else(|| config.default.clone())
 }
 
 #[napi]
@@ -171,6 +187,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_directory_key_covers_its_contents_and_the_longest_key_wins() {
+        let rw = FilePermissions { read: true, write: true, edit: true, delete: false };
+        let none = FilePermissions { read: false, write: false, edit: false, delete: false };
+        let mut config = default_config();
+        config.files.insert("src/".into(), rw.clone());
+        config.files.insert("src/secret/".into(), none.clone());
+        config.files.insert("src/secret/open.txt".into(), rw.clone());
+
+        assert!(effective(&config, "src").write);
+        assert!(effective(&config, "src/lib/a.rs").write);
+        assert!(!effective(&config, "src/secret").read);
+        assert!(!effective(&config, "src/secret/deep/x").read);
+        // An exact file key beats the directory that contains it.
+        assert!(effective(&config, "src/secret/open.txt").read);
+        // Not a prefix of the name: `src/` does not cover `srcs/`.
+        assert!(!effective(&config, "srcs/a.rs").write);
     }
 
     #[test]

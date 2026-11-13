@@ -235,7 +235,7 @@ describe('resolveFilePermissions', () => {
 // ---------------------------------------------------------------------------
 
 describe('filterFileEntries', () => {
-  it('includes directories always', () => {
+  it('hides directories that have no readable descendants', () => {
     const config = createSandboxConfig({
       projectDir: '/test',
       defaultPermissions: { read: false, write: false, edit: false, delete: false },
@@ -245,8 +245,7 @@ describe('filterFileEntries', () => {
       { name: 'index.ts', path: 'src/index.ts', isDir: false, isMasked: false },
     ]
     const filtered = filterFileEntries(entries, config)
-    assert.equal(filtered.length, 1)
-    assert.equal(filtered[0].name, 'src')
+    assert.equal(filtered.length, 0)
   })
 
   it('filters files by read permission', () => {
