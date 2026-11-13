@@ -125,15 +125,14 @@ fn denied() -> Vec<libc::c_long> {
 
 /// The filter program. Checks, in order: the architecture, the x32 bit, each denied call, the terminal ioctl, `clone3`, then `clone`'s flags.
 pub fn build_filter() -> Vec<SockFilter> {
-    let mut program: Vec<SockFilter> = Vec::new();
-
     // A call made through another architecture's table (the 32-bit entry on x86_64) would
     // dodge every number below, so such a process is stopped rather than filtered.
-    program.push(insn(BPF_LD_W_ABS, 0, 0, OFFSET_ARCH));
-    program.push(insn(BPF_JEQ_K, 1, 0, AUDIT_ARCH));
-    program.push(insn(BPF_RET_K, 0, 0, SECCOMP_RET_KILL_PROCESS));
-
-    program.push(insn(BPF_LD_W_ABS, 0, 0, OFFSET_NR));
+    let mut program: Vec<SockFilter> = vec![
+        insn(BPF_LD_W_ABS, 0, 0, OFFSET_ARCH),
+        insn(BPF_JEQ_K, 1, 0, AUDIT_ARCH),
+        insn(BPF_RET_K, 0, 0, SECCOMP_RET_KILL_PROCESS),
+        insn(BPF_LD_W_ABS, 0, 0, OFFSET_NR),
+    ];
     #[cfg(target_arch = "x86_64")]
     {
         // The x32 ABI shares the architecture value and sets this bit in the number.
