@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -41,14 +41,24 @@ test('a shell is told to run the agent and then stay, and an unknown shell is no
   assert.equal(startWith('/usr/bin/fish', [], ['claude']), null)
 })
 
+// A process the process list shows as the agent: node given a script named after it, which is
+// how a real agent's launcher appears. A copied binary will not do: Ubuntu 26 ships coreutils as
+// one multi-call program that picks its utility from argv[0], so a copy named "claude" refuses to
+// start instead of running.
+function agentScript(dir, name) {
+  const file = join(dir, `${name}.js`)
+  writeFileSync(file, 'setTimeout(() => {}, 30000)\n')
+  return `${quoteArg(process.execPath)} ${quoteArg(file)}`
+}
+
+function quoteArg(word) {
+  return `'${word.replace(/'/g, `'\\''`)}'`
+}
+
 test('the agent running under a process is found in the real process tree, and nothing else', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'vajra-resume-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  // A program whose name is "claude": a copy of sleep, so the process list shows it as an agent would.
-  const fake = join(dir, 'claude')
-  copyFileSync('/usr/bin/sleep', fake)
-  chmodSync(fake, 0o755)
-  const parent = spawn('sh', ['-c', `${fake} 30 & wait`], { stdio: 'ignore' })
+  const parent = spawn('sh', ['-c', `${agentScript(dir, 'claude')} & wait`], { stdio: 'ignore' })
   t.after(() => parent.kill('SIGKILL'))
   await delay(400)
   const found = findAgent(parent.pid)
@@ -64,11 +74,7 @@ test('the agent running under a process is found in the real process tree, and n
 test('with two agents below, the newest is chosen when none is in the terminal foreground', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'vajra-resume-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  for (const name of ['claude', 'opencode']) {
-    copyFileSync('/usr/bin/sleep', join(dir, name))
-    chmodSync(join(dir, name), 0o755)
-  }
-  const parent = spawn('sh', ['-c', `${join(dir, 'claude')} 30 & sleep 0.3; ${join(dir, 'opencode')} 30 & wait`], { stdio: 'ignore' })
+  const parent = spawn('sh', ['-c', `${agentScript(dir, 'claude')} & sleep 0.3; ${agentScript(dir, 'opencode')} & wait`], { stdio: 'ignore' })
   t.after(() => parent.kill('SIGKILL'))
   await delay(900)
   const found = findAgent(parent.pid)
